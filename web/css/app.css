@@ -62,7 +62,7 @@ button, input, select { font: inherit; color: inherit; }
 .btn-danger { background: #fbe9e4; color: var(--bad); }
 .btn-sm { min-height: 36px; padding: 6px 12px; font-size: 14px; border-radius: 9px; }
 .btn.wide { width: 100%; margin-top: 16px; }
-.linkbtn { background: none; border: 0; color: var(--primary-2); padding: 4px; cursor: pointer; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.linkbtn { background: none; border: 0; color: var(--primary-2); padding: 8px 4px; min-height: 40px; cursor: pointer; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
 
 /* ---------- шапка ---------- */
 .topbar { position: sticky; top: 0; z-index: 1000; height: calc(var(--top-h) + env(safe-area-inset-top, 0px));
