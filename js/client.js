@@ -54,6 +54,8 @@
   // ---------- профиль ----------
   const saveFarm = farm => req("PUT", "/api/me/farm", farm).then(u => (user = u));
   const deleteAccount = () => req("DELETE", "/api/me").then(() => { setToken(null); user = null; });
+  const addPasture = p => req("POST", "/api/me/pastures", p).then(u => (user = u));
+  const deletePasture = id => req("DELETE", "/api/me/pastures/" + encodeURIComponent(id)).then(u => (user = u));
 
   // ---------- сценарии: сервер для вошедших, браузер для гостя ----------
   const GUEST_SC = "jaiylym:guest:scenarios", GUEST_HIST = "jaiylym:guest:history";
@@ -90,7 +92,7 @@
   window.Client = {
     API, ApiError, ls,
     get user() { return user; }, get loggedIn() { return !!token; },
-    startLogin, pollLogin, logout, me, saveFarm, deleteAccount,
+    startLogin, pollLogin, logout, me, saveFarm, deleteAccount, addPasture, deletePasture,
     listScenarios, saveScenario, deleteScenario, listHistory, addHistory,
     coordAddVillage, coordRemoveVillage, coordFarms, villageData,
   };
