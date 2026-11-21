@@ -110,9 +110,10 @@
   function ensureMap() {
     if (S.map || S.noLeaflet) return;
     if (!window.L) { S.noLeaflet = true; $("#map").hidden = true; $("#schemeMap").hidden = false; return; }
-    S.map = L.map("map", { zoomControl: true, attributionControl: true }).setView([DEFAULT.village.lat, DEFAULT.village.lon], 12);
+    S.map = L.map("map", { zoomControl: true, attributionControl: true, maxZoom: 19 }).setView([DEFAULT.village.lat, DEFAULT.village.lon], 12);
+    // снимки Esri есть до 17 уровня; дальше карта увеличивает их, чтобы можно было точнее ставить точки
     const tiles = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-      maxZoom: 17, attribution: "Esri World Imagery · Sentinel-2 ESA Copernicus · © OpenStreetMap",
+      maxNativeZoom: 17, maxZoom: 19, attribution: "Esri World Imagery · Sentinel-2 ESA Copernicus · © OpenStreetMap",
     }).addTo(S.map);
     let tileErrors = 0;
     tiles.on("tileerror", () => { if (++tileErrors === 6 && !navigator.onLine) toast(t("map.fallback"), true); });
@@ -141,8 +142,11 @@
     S.ndviLayer = L.imageOverlay(S.png, [[s, w], [n, e]], { opacity: 0.85 });
     L.circleMarker([S.D.village.lat, S.D.village.lon], { radius: 6, color: "#fff", weight: 2, fillColor: "#1b2a21", fillOpacity: 1 })
       .bindTooltip(esc(S.D.village.name)).addTo(S.group);
+    // для отображения — плавные дуги (48 точек); расчёт по-прежнему идёт по пикселям, а не по контуру
+    const smooth = Object.fromEntries(PL.makePlots(S.D.village.lat, S.D.village.lon, 48).map(q => [q.id, q.geometry]));
     for (const p of S.plots) {
-      const poly = L.polygon(p.geometry.coordinates[0].map(([x, y]) => [y, x]), { weight: 1.5, color: "#fff", fillOpacity: 0.45 }).addTo(S.group);
+      const geom = smooth[p.id] || p.geometry;
+      const poly = L.polygon(geom.coordinates[0].map(([x, y]) => [y, x]), { weight: 1.5, color: "#fff", fillOpacity: 0.45, smoothFactor: 0.5 }).addTo(S.group);
       poly.bindTooltip("", { permanent: true, direction: "center", className: "plabel" });
       poly.on("click", () => { if (!S.picking && !S.draw) openPlot(p.id); });
       S.layers[p.id] = poly;
@@ -260,19 +264,20 @@
       <div id="pRows" style="margin-top:10px">${pastureRows(st, st.area_ha, st.water_on_map)}</div>
       <label class="check" style="margin-top:10px"><input type="checkbox" id="pWater" ${st.water_on_map ? "checked" : ""}> ${t("past.water")} ${src("input")}</label>
       <p class="fine" style="margin-top:8px">${t("past.boundaryNote")}</p>
-      <div id="pLogin"></div>
+      ${C.loggedIn ? "" : `<p class="note warn">${t("past.guestNote")}</p>`}
       <p style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:14px">
         <button class="btn btn-ghost" id="pCancel">${t("common.cancel")}</button>
-        <button class="btn btn-primary" id="pSave">${ic("save")} ${t("past.save")}</button></p>`;
+        ${C.loggedIn ? `<button class="btn btn-primary" id="pSave">${ic("save")} ${t("past.save")}</button>`
+          : `<button class="btn btn-tg" id="pSave">${ic("send")} ${t("past.loginSave")}</button>`}</p>`;
     document.body.appendChild(d);
     const close = () => { d.close(); };
     d.addEventListener("close", () => { preview.remove(); d.remove(); });
     $("#pWater", d).onchange = e => { $("#pRows", d).innerHTML = pastureRows(st, st.area_ha, e.target.checked); };
     $("#pCancel", d).onclick = close;
     $("#pSave", d).onclick = async () => {
-      if (!C.loggedIn) {
-        $("#pLogin", d).innerHTML = `<p class="note warn">${t("past.loginToSave")}</p><button class="btn btn-tg" id="pLoginBtn">${ic("send")} ${t("auth.login")}</button>`;
-        $("#pLoginBtn", d).onclick = () => { S.pendingPasture = { ring, st, name: $("#pName", d).value, water: $("#pWater", d).checked }; close(); openLogin(); };
+      if (!C.loggedIn) {         // гость: одна кнопка — вход через Telegram, после входа пастбище сохранится само
+        S.pendingPasture = { ring, st, name: $("#pName", d).value, water: $("#pWater", d).checked };
+        close(); openLogin();
         return;
       }
       await savePasture({ ring, st, name: $("#pName", d).value, water: $("#pWater", d).checked });
@@ -836,6 +841,7 @@
   function renderAccount() {
     const u = C.user;
     $("#accountLabel").textContent = u ? u.name : t("auth.login");
+    $("#accountShort").textContent = u ? u.name : t("auth.loginShort");
     const coord = !!u && u.role === "coordinator";
     $$(".coord-only").forEach(el => { el.hidden = !coord; });
   }
@@ -861,8 +867,8 @@
       <form class="card" id="farmForm"><h2>${ic("leaf")} ${t("pr.farm")} ${src("input")}</h2>
         <div class="formgrid">
           <label class="field span2">${t("pr.farmName")}<input name="name" maxlength="60" value="${esc(f.name)}" required></label>
-          <div class="field span2">${t("pr.village")}<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><b id="farmVillage">${f.village ? esc(f.village.name) : "—"}</b>
-            ${S.D ? `<button type="button" class="btn btn-ghost btn-sm" id="farmUseMap">${ic("pin")} ${t("pr.useMap")}</button>` : ""}</div></div>
+          <div class="field span2">${t("pr.village")}<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b id="farmVillage" style="font-size:15px;color:var(--ink)">${f.village ? esc(f.village.name) : "—"}</b>
+            <button type="button" class="btn btn-soft btn-sm" id="farmPickMap">${ic("map")} ${t("pr.pickMap")}</button></div></div>
           <div class="span4"><div class="search" id="farmSearch" style="max-width:520px"><svg class="ic"><use href="#i-search"/></svg><input id="farmQ" placeholder="${t("home.searchPh")}" aria-label="${t("pr.village")}"><button type="button" class="btn btn-ghost btn-sm" id="farmFind">${t("pr.villagePick")}</button><ul class="results" hidden></ul></div></div>
           ${["sheep", "goats", "cattle", "horses"].map(k => `<label class="field">${t("herds." + k)}<input name="${k}" type="number" inputmode="numeric" min="0" step="10" value="${f[k] || 0}"></label>`).join("")}
           <label class="field span2">${t("pr.home")}<select name="home">${plotIds.slice(0, 8).map(id => `<option ${id === f.home ? "selected" : ""}>${id}</option>`).join("")}</select></label>
@@ -903,8 +909,10 @@
       if (!armed) { armed = true; e.currentTarget.textContent = t("pr.deleteConfirm"); return; }
       try { await C.deleteAccount(); toast(t("pr.deleted")); afterAuthChange(); } catch (err) { toast(errText(err), true); }
     };
-    const useMap = $("#farmUseMap");
-    if (useMap) useMap.onclick = () => { village = { name: S.D.village.name, lat: S.D.village.lat, lon: S.D.village.lon }; $("#farmVillage").textContent = village.name; };
+    $("#farmPickMap").onclick = async () => {
+      const v = await pickVillageOnMap(village || (S.D && S.D.village));
+      if (v) { village = v; $("#farmVillage").textContent = v.name; }
+    };
     const ul = $("#farmSearch .results");
     $("#farmFind").onclick = async () => {
       const q = $("#farmQ").value.trim(); if (!q) return;
@@ -924,6 +932,64 @@
       try { await C.saveFarm(farm); toast(t("pr.farmSaved")); if (S.D) { addOwnFarm(); render(); } renderProfile(); }
       catch (e) { toast(errText(e), true); }
     };
+  }
+
+  /** Выбор села нажатием на спутниковую карту (с приближением, поиском и геолокацией телефона). */
+  function pickVillageOnMap(start) {
+    return new Promise(resolve => {
+      if (!window.L) { toast(t("past.noMap"), true); resolve(null); return; }
+      const d = document.createElement("dialog");
+      d.className = "modal modal-wide";
+      d.innerHTML = `<form method="dialog" class="modal-x"><button aria-label="${t("common.close")}">${ic("x")}</button></form>
+        <h2>${t("pick.title")}</h2><p class="fine">${t("pick.hint")}</p>
+        <form class="search" id="pkSearch" autocomplete="off"><svg class="ic"><use href="#i-search"/></svg><input id="pkQ" placeholder="${t("home.searchPh")}" aria-label="${t("pr.village")}" enterkeyhint="search"><button class="btn btn-ghost btn-sm">${t("home.search")}</button><ul class="results" hidden></ul></form>
+        <div class="pickmap" id="pkMap"></div>
+        <div class="pickbar"><button type="button" class="btn btn-ghost btn-sm" id="pkHere">${ic("pin")} ${t("pick.here")}</button>
+          <span id="pkSel" class="pksel">—</span></div>
+        <p style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:12px"><button type="button" class="btn btn-ghost" id="pkCancel">${t("common.cancel")}</button>
+          <button type="button" class="btn btn-primary" id="pkOk" disabled>${ic("check")} ${t("pick.choose")}</button></p>`;
+      document.body.appendChild(d);
+      d.showModal();
+      let chosen = null, marker = null, seq = 0;
+      const m = L.map($("#pkMap", d), { maxZoom: 19 }).setView(start ? [start.lat, start.lon] : [48.0, 67.5], start ? 12 : 5);
+      L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxNativeZoom: 17, maxZoom: 19, attribution: "Esri · © OpenStreetMap" }).addTo(m);
+      L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}", { maxNativeZoom: 17, maxZoom: 19, opacity: 0.9 }).addTo(m);
+      setTimeout(() => m.invalidateSize(), 60);
+      const choose = async (lat, lon, knownName) => {
+        lat = +lat.toFixed(5); lon = +lon.toFixed(5);
+        if (marker) marker.setLatLng([lat, lon]); else marker = L.marker([lat, lon]).addTo(m);
+        const my = ++seq;
+        $("#pkSel", d).textContent = knownName || t("pick.naming");
+        let name = knownName;
+        if (!name) { try { name = (await PL.reverseGeocode(lat, lon, I.lang === "kk" ? "kk" : "ru")).name; } catch (_) {} }
+        if (my !== seq) return;
+        chosen = { name: name || `${lat.toFixed(3)}, ${lon.toFixed(3)}`, lat, lon };
+        $("#pkSel", d).innerHTML = `${t("pick.selected")}: <b>${esc(chosen.name)}</b> <small>(${lat.toFixed(4)}, ${lon.toFixed(4)})</small>`;
+        $("#pkOk", d).disabled = false;
+      };
+      if (start) choose(start.lat, start.lon, start.name);
+      m.on("click", e => choose(e.latlng.lat, e.latlng.lng));
+      $("#pkHere", d).onclick = () => {
+        if (!navigator.geolocation) { toast(t("pick.geoFail"), true); return; }
+        navigator.geolocation.getCurrentPosition(p => { m.setView([p.coords.latitude, p.coords.longitude], 14); choose(p.coords.latitude, p.coords.longitude); },
+          () => toast(t("pick.geoFail"), true), { enableHighAccuracy: true, timeout: 15000 });
+      };
+      const ul = $("#pkSearch .results", d);
+      $("#pkSearch", d).onsubmit = async ev => {
+        ev.preventDefault();
+        const q = $("#pkQ", d).value.trim(); if (!q) return;
+        try {
+          const found = await PL.geocode(q);
+          if (!found.length) { toast(t("err.notFound"), true); return; }
+          ul.innerHTML = found.map((x, i) => `<li tabindex="0" data-i="${i}">${esc(x.name)}<small>${esc(x.full)}</small></li>`).join(""); ul.hidden = false;
+          ul.querySelectorAll("li").forEach(li => li.onclick = () => { const x = found[+li.dataset.i]; ul.hidden = true; m.setView([x.lat, x.lon], 13); choose(x.lat, x.lon, x.name); });
+        } catch (_) { toast(t("err.geocode"), true); }
+      };
+      let result = null;
+      $("#pkCancel", d).onclick = () => d.close();
+      $("#pkOk", d).onclick = () => { result = chosen; d.close(); };
+      d.addEventListener("close", () => { m.remove(); d.remove(); resolve(result); });
+    });
   }
 
   // ---------- координатор ----------
@@ -1000,6 +1066,12 @@
     bindSearch($("#heroSearch"), $("#heroQ"));
     bindSearch($("#mapSearch"), $("#mapQ"));
     $("#pickBtn").onclick = () => { if (S.noLeaflet) { toast(t("map.fallback"), true); return; } endDraw(); setPicking(!S.picking); };
+    // числовые поля: при нажатии выделяем значение (чтобы «0» заменялся, а не дописывался), лишние нули убираем
+    document.addEventListener("focusin", e => { if (e.target.matches && e.target.matches('input[type="number"]')) setTimeout(() => { try { e.target.select(); } catch (_) {} }, 0); });
+    document.addEventListener("input", e => {
+      const el = e.target;
+      if (el.matches && el.matches('input[type="number"]') && /^0\d/.test(el.value)) el.value = String(Math.round(+el.value));
+    });
     $("#drawBtn").onclick = () => (S.draw ? endDraw() : startDraw());
     $("#drawUndo").onclick = undoDraw;
     $("#drawCancel").onclick = endDraw;
@@ -1036,6 +1108,6 @@
     return { t, fmt, fmt1, pct, esc, src, J, S, scheme, loadColor, confidence, summary: summary(), trend: trendLine(), lang: I.lang };
   }
 
-  window.JaiylymApp = { S, openVillage, render, summary, confidence, scheme, reportCtx };   // для отладки и тестов
+  window.JaiylymApp = { S, openVillage, render, summary, confidence, scheme, reportCtx, pickVillageOnMap };   // для отладки и тестов
   init();
 })();

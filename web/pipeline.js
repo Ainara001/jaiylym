@@ -47,6 +47,16 @@
     }));
   }
 
+  /** Название места по точке (для выбора села нажатием на карту). */
+  async function reverseGeocode(lat, lon, lang = "ru") {
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&zoom=14&accept-language=${lang}&lat=${lat}&lon=${lon}`, { headers: headers() });
+    if (!r.ok) throw new Error("Поиск места недоступен (" + r.status + ")");
+    const d = await r.json();
+    const a = d.address || {};
+    const name = a.village || a.town || a.city || a.hamlet || a.suburb || a.municipality || a.county || d.name || "";
+    return { name: String(name).trim(), full: d.display_name || "" };
+  }
+
   // ---------- геометрия ----------
   function kmPerDeg(lat) { return [111.32 * Math.cos(lat * Math.PI / 180), 110.57]; }
 
@@ -65,12 +75,12 @@
     return { type: "Polygon", coordinates: [pts] };
   }
 
-  function makePlots(lat, lon) {
+  function makePlots(lat, lon, steps = 12) {      // steps — плавность дуги (только для отображения)
     const out = [];
     for (const [r1, r2, code, ring] of RINGS)
       DIRS.forEach((d, i) => out.push({
         id: `${code}-${d}`, ring, dir: d, dist_km: +((r1 + r2) / 2).toFixed(1),
-        geometry: sector(lat, lon, r1, r2, i * 45 - 22.5, i * 45 + 22.5),
+        geometry: sector(lat, lon, r1, r2, i * 45 - 22.5, i * 45 + 22.5, steps),
       }));
     return out;
   }
@@ -400,5 +410,5 @@
     return m ? (m[1] === "N" ? "Б" : "Д") + "-" + DIRS[+m[2]] : null;
   }
 
-  return { geocode, buildVillage, latestScene, polygonStats, latestPolygonScene, polygonAreaHa, closeRing, plotCode, plotFromCode, bboxFor, makePlots, setUserAgent, summerYear, SIZE };
+  return { geocode, reverseGeocode, buildVillage, latestScene, polygonStats, latestPolygonScene, polygonAreaHa, closeRing, plotCode, plotFromCode, bboxFor, makePlots, setUserAgent, summerYear, SIZE };
 });
