@@ -2,461 +2,231 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Jaiylym — пастбища села</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Jaiylym — пастбища села по спутнику</title>
+<meta name="description" content="Jaiylym: спутниковый мониторинг пастбищ Sentinel-2, расчёт нагрузки, план выпаса и водопоев для сёл Казахстана.">
+<meta name="theme-color" content="#24543f">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2324543f'/%3E%3Cpath d='M4 23c5-6 9-6 12-2s7 4 12-3v10H4z' fill='%238fc79a'/%3E%3Ccircle cx='22' cy='10' r='4' fill='%23e3b25c'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<style>
-  :root {
-    --bg: #f6f4ef; --panel: #fffdf8; --ink: #1f2a1f; --muted: #6b7266; --line: #e3dfd3;
-    --ok: #2f8f46; --warn: #d9a400; --bad: #c8412b; --none: #9aa39a; --accent: #2b6e4f;
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
-  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
-  header h1 { margin: 0; font-size: 20px; letter-spacing: .3px; }
-  header .sub { color: var(--muted); font-size: 13px; flex: 1 1 260px; }
-  header a.bot { color: var(--accent); font-weight: 600; text-decoration: none; white-space: nowrap; }
-  .search { position: relative; display: flex; gap: 6px; flex: 1 1 340px; max-width: 520px; }
-  .search input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: #fff; }
-  .search ul { position: absolute; top: 100%; left: 0; right: 0; z-index: 1000; list-style: none; margin: 4px 0 0; padding: 4px; background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.12); }
-  .search li { padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
-  .search li:hover { background: #eef5f0; }
-  .search li small { color: var(--muted); display: block; }
-  .status { width: 100%; font-size: 13px; color: var(--accent); }
-  .status.err { color: var(--bad); }
-  .wrap { display: grid; grid-template-columns: minmax(0, 1fr) 420px; height: calc(100vh - 62px); }
-  #map { height: 100%; min-height: 420px; }
-  #map.picking { cursor: crosshair; }
-  aside { overflow-y: auto; padding: 14px 16px 40px; border-left: 1px solid var(--line); background: var(--panel); }
-  @media (max-width: 900px) {
-    .wrap { grid-template-columns: 1fr; height: auto; }
-    #map { height: 60vh; }
-    aside { border-left: 0; border-top: 1px solid var(--line); }
-  }
-  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
-  .seg button { border: 0; background: transparent; padding: 7px 12px; font: inherit; cursor: pointer; color: var(--ink); }
-  .seg button.on { background: var(--accent); color: #fff; }
-  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
-  .card { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: #fff; }
-  .card .k { font-size: 11px; color: var(--muted); }
-  .card .v { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
-  .card .v small { font-size: 12px; font-weight: 500; color: var(--muted); }
-  h2 { font-size: 14px; margin: 18px 0 8px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { padding: 4px 4px; border-bottom: 1px solid var(--line); text-align: left; }
-  th { font-weight: 600; color: var(--muted); font-size: 11px; }
-  td input[type=number] { width: 58px; padding: 3px 4px; border: 1px solid var(--line); border-radius: 5px; font: inherit; }
-  td input[type=text] { width: 100%; min-width: 80px; padding: 3px 4px; border: 1px solid var(--line); border-radius: 5px; font: inherit; }
-  select { font: inherit; padding: 2px; border: 1px solid var(--line); border-radius: 5px; }
-  .btn { border: 1px solid var(--accent); color: var(--accent); background: #fff; border-radius: 7px; padding: 5px 10px; font: inherit; cursor: pointer; white-space: nowrap; }
-  .btn:hover { background: #eef5f0; }
-  .btn.primary { background: var(--accent); color: #fff; }
-  .btn:disabled { opacity: .5; cursor: wait; }
-  .tl { position: relative; height: 22px; background: #eee9dc; border-radius: 5px; overflow: hidden; margin: 3px 0 10px; }
-  .tl span { position: absolute; top: 0; bottom: 0; color: #fff; font-size: 10.5px; line-height: 22px; padding-left: 4px; white-space: nowrap; overflow: hidden; border-right: 1px solid #fff; }
-  .tl .near { background: #4f8a6b; } .tl .far { background: #2a5d8a; } .tl .gap { background: var(--bad); }
-  .hname { font-weight: 600; font-size: 13px; }
-  .hname small { font-weight: 400; color: var(--muted); }
-  .note { font-size: 12px; color: var(--muted); background: #f3efe3; border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
-  .legend { background: rgba(255,253,248,.95); padding: 6px 8px; border-radius: 8px; font-size: 12px; line-height: 1.6; box-shadow: 0 1px 4px rgba(0,0,0,.2); }
-  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -2px; }
-  .plabel { background: transparent; border: 0; box-shadow: none; color: #fff; font-weight: 700; font-size: 11px; text-shadow: 0 0 3px #000, 0 0 2px #000; text-align: center; }
-  .plabel::before { display: none; }
-  .well { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); align-items: center; }
-  details summary { cursor: pointer; color: var(--muted); margin-top: 16px; }
-  .param { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 6px 0; }
-  .param input { width: 100px; padding: 3px 5px; border: 1px solid var(--line); border-radius: 5px; font: inherit; }
-  .pop b { font-size: 14px; } .pop td { border: 0; padding: 1px 6px 1px 0; }
-  .pop .sub { display: block; margin-top: 8px; padding: 7px 10px; border-radius: 8px; background: #229ED9; color: #fff !important; text-align: center; font-weight: 600; text-decoration: none; }
-  .pop .spark { display: block; margin: 4px 0 2px; }
-  .pop small { color: var(--muted); }
-  .frombot { color: #229ED9; font-size: 11px; }
-</style>
+<link rel="stylesheet" href="css/app.css">
 </head>
 <body>
-<header>
-  <h1>Jaiylym</h1>
-  <form class="search" id="search" autocomplete="off">
-    <input id="q" placeholder="Село или город, например: Кеген, Шелек, Жанаарка">
-    <button class="btn primary" id="go">Найти</button>
-    <button class="btn" type="button" id="pick" title="Нажмите на карту, чтобы выбрать центр">📍 На карте</button>
-    <ul id="results" hidden></ul>
-  </form>
-  <a class="bot" id="botlink" href="https://t.me/JAIYLYM_bot" target="_blank" rel="noopener">Бот для пастуха → @JAIYLYM_bot</a>
-  <span class="sub" id="sub"></span>
-  <div class="status" id="status" hidden></div>
+<a class="skip" href="#main" data-i18n="nav.map">Карта</a>
+
+<!-- иконки -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
+    <symbol id="i-map" viewBox="0 0 24 24"><path d="M9 3 3 6v15l6-3 6 3 6-3V3l-6 3-6-3z"/><path d="M9 3v15M15 6v15"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M1.5 21c0-4 3.5-6 7.5-6s7.5 2 7.5 6M16 3.6a4 4 0 0 1 0 8M22.5 21c0-3-2-5-4.5-5.6"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 16v-5M12 8h.01"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s-7-6.1-7-11a7 7 0 0 1 14 0c0 4.9-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></symbol>
+    <symbol id="i-drop" viewBox="0 0 24 24"><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5S12.5 5.5 12 3c-.5 2.5-2 4.9-4 6.5S5 13 5 15a7 7 0 0 0 7 7z"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M8 16v-5M13 16V8M18 16v-9"/></symbol>
+    <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M8.5 19H17a3.5 3.5 0 0 0 0-7H7a3.5 3.5 0 0 1 0-7h8.5"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-7H7v7M7 3v4h8"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/></symbol>
+    <symbol id="i-sat" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19.1 4.9a10 10 0 0 1 0 14.2M4.9 19.1a10 10 0 0 1 0-14.2"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-leaf" viewBox="0 0 24 24"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.5 19 2c1 2 2 4.2 2 8 0 5.5-4.8 10-10 10z"/><path d="M2 21c0-3 1.9-5.4 5.1-6 2.4-.5 4.9-2 5.9-3"/></symbol>
+    <symbol id="i-wifioff" viewBox="0 0 24 24"><path d="M2 2l20 20M8.5 16.4a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.7M19 12.9a10 10 0 0 0-2.5-1.7M12 20h.01"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
+  </defs>
+</svg>
+
+<header class="topbar">
+  <a class="brand" href="#/home" aria-label="Jaiylym">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#24543f"/><path d="M3 23c5-6 9-6 12.5-2s7.5 4 13.5-3v11H3z" fill="#8fc79a"/><path d="M3 26c6-4 11-3 15 0s7 2 11-1v6H3z" fill="#5fa877"/><circle cx="22" cy="10" r="4" fill="#e3b25c"/></svg>
+    <span><b>Jaiylym</b><small data-i18n="brand.tag">Пастбища села по спутнику</small></span>
+  </a>
+  <nav class="mainnav" aria-label="Разделы">
+    <a href="#/home" data-route="home"><svg class="ic"><use href="#i-home"/></svg><span data-i18n="nav.home">Главная</span></a>
+    <a href="#/map" data-route="map"><svg class="ic"><use href="#i-map"/></svg><span data-i18n="nav.map">Карта</span></a>
+    <a href="#/scenarios" data-route="scenarios"><svg class="ic"><use href="#i-layers"/></svg><span data-i18n="nav.scenarios">Сценарии</span></a>
+    <a href="#/profile" data-route="profile"><svg class="ic"><use href="#i-user"/></svg><span data-i18n="nav.profile">Профиль</span></a>
+    <a href="#/coord" data-route="coord" class="coord-only" hidden><svg class="ic"><use href="#i-users"/></svg><span data-i18n="nav.coord">Координатор</span></a>
+    <a href="#/data" data-route="data"><svg class="ic"><use href="#i-info"/></svg><span data-i18n="nav.data">О данных</span></a>
+  </nav>
+  <div class="topactions">
+    <div class="langsw" role="group" aria-label="Язык / Тіл">
+      <button type="button" data-lang="ru" aria-pressed="true">RU</button>
+      <button type="button" data-lang="kk" aria-pressed="false">KZ</button>
+    </div>
+    <a class="btn btn-tg" id="tgTop" href="https://t.me/JAIYLYM_bot" target="_blank" rel="noopener"><svg class="ic"><use href="#i-send"/></svg><span data-i18n="tg.open">Telegram-бот</span></a>
+    <button type="button" class="btn btn-ghost account" id="accountBtn"><svg class="ic"><use href="#i-user"/></svg><span id="accountLabel" data-i18n="auth.login">Войти</span></button>
+  </div>
 </header>
-<div class="wrap">
-  <div id="map"></div>
-  <aside>
-    <div class="seg" id="mode">
-      <button data-m="current">Сейчас</button>
-      <button data-m="plan" class="on">План Jaiylym</button>
-      <button data-m="ndvi">Трава (NDVI)</button>
+
+<div class="netbar" id="netbar" role="status" hidden><svg class="ic"><use href="#i-wifioff"/></svg><span data-i18n="err.offline"></span></div>
+
+<main id="main">
+  <!-- ГЛАВНАЯ -->
+  <section class="view view-home" data-view="home" aria-labelledby="homeTitle">
+    <div class="hero">
+      <div class="hero-text">
+        <p class="kicker" data-i18n="home.kicker">AgriTech для сёл Казахстана</p>
+        <h1 id="homeTitle" data-i18n="home.title">Пасти там, где есть трава, а не там, где ближе</h1>
+        <p class="lead" data-i18n="home.lead"></p>
+        <form class="search search-hero" id="heroSearch" role="search" autocomplete="off">
+          <svg class="ic"><use href="#i-search"/></svg>
+          <input id="heroQ" data-i18n-ph="home.searchPh" aria-label="Село" enterkeyhint="search">
+          <button class="btn btn-primary" data-i18n="home.search">Найти село</button>
+          <ul class="results" hidden></ul>
+        </form>
+        <div class="hero-actions">
+          <a class="btn btn-soft" href="#/map?lat=43.02&lon=79.22&name=%D0%9A%D0%B5%D0%B3%D0%B5%D0%BD" data-i18n="home.demo">Открыть пример: Кеген</a>
+          <a class="btn btn-ghost" id="continueBtn" hidden></a>
+        </div>
+        <p class="fine"><svg class="ic"><use href="#i-shield"/></svg><span data-i18n="home.noSignup"></span></p>
+      </div>
+      <div class="hero-visual" aria-hidden="true">
+        <div class="hero-card">
+          <div class="hero-card-head"><svg class="ic"><use href="#i-sat"/></svg><span>Sentinel-2 · NDVI</span></div>
+          <div id="heroScheme"></div>
+          <div class="hero-stats" id="heroStats"></div>
+          <p class="fine" id="heroStatNote"></p>
+        </div>
+      </div>
     </div>
 
-    <div class="cards">
-      <div class="card"><div class="k">Перегружено участков</div><div class="v" id="c-over"></div></div>
-      <div class="card"><div class="k">Корм сверх нормы, т сена</div><div class="v" id="c-hay"></div></div>
-      <div class="card"><div class="k">Цена этого сена, ₸</div><div class="v" id="c-money"></div></div>
+    <div class="band">
+      <h2 data-i18n="home.how">Как это работает</h2>
+      <div class="steps">
+        <article class="step"><div class="step-ic"><svg class="ic"><use href="#i-sat"/></svg></div><h3 data-i18n="home.s1.t"></h3><p data-i18n="home.s1.d"></p></article>
+        <article class="step"><div class="step-ic"><svg class="ic"><use href="#i-chart"/></svg></div><h3 data-i18n="home.s2.t"></h3><p data-i18n="home.s2.d"></p></article>
+        <article class="step"><div class="step-ic"><svg class="ic"><use href="#i-drop"/></svg></div><h3 data-i18n="home.s3.t"></h3><p data-i18n="home.s3.d"></p></article>
+      </div>
     </div>
-    <div class="note" id="explain"></div>
 
-    <h2>Стада села</h2>
-    <table id="herds">
-      <thead><tr><th>Хозяин</th><th>Овцы</th><th>КРС</th><th>Лош.</th><th>Где сейчас</th><th title="Дойные: каждый вечер в село">Дойн.</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <p><button class="btn" id="add">+ стадо</button> <small style="color:var(--muted)" id="herdnote">Стада — пример, замените своими.</small></p>
+    <div class="band band-alt">
+      <h2 data-i18n="home.for">Для кого</h2>
+      <div class="audience">
+        <article class="aud"><svg class="ic big"><use href="#i-leaf"/></svg><div><h3 data-i18n="home.farmer.t"></h3><p data-i18n="home.farmer.d"></p></div></article>
+        <article class="aud"><svg class="ic big"><use href="#i-users"/></svg><div><h3 data-i18n="home.coord.t"></h3><p data-i18n="home.coord.d"></p></div></article>
+      </div>
+      <article class="honest"><svg class="ic big"><use href="#i-shield"/></svg><div><h3 data-i18n="home.honest.t"></h3><p data-i18n="home.honest.d"></p>
+        <p class="srcrow"><span class="src src-sat" data-i18n="src.sat"></span><span class="src src-input" data-i18n="src.input"></span><span class="src src-model" data-i18n="src.model"></span></p></div></article>
+      <a class="btn btn-tg wide" href="https://t.me/JAIYLYM_bot" target="_blank" rel="noopener"><svg class="ic"><use href="#i-send"/></svg><span data-i18n="home.cta.bot"></span></a>
+    </div>
+  </section>
 
-    <h2>Маршрут на сезон (план)</h2>
-    <div id="routes"></div>
+  <!-- КАРТА -->
+  <section class="view view-map" data-view="map" hidden>
+    <div class="maptool">
+      <form class="search" id="mapSearch" role="search" autocomplete="off">
+        <svg class="ic"><use href="#i-search"/></svg>
+        <input id="mapQ" data-i18n-ph="home.searchPh" aria-label="Село" enterkeyhint="search">
+        <button class="btn btn-primary btn-sm" data-i18n="home.search">Найти</button>
+        <ul class="results" hidden></ul>
+      </form>
+      <button type="button" class="btn btn-ghost btn-sm" id="pickBtn"><svg class="ic"><use href="#i-pin"/></svg><span data-i18n="map.pick">Точка на карте</span></button>
+      <div class="vtitle" id="vtitle"></div>
+    </div>
+    <div class="status" id="status" role="status" aria-live="polite" hidden></div>
+    <div class="workspace">
+      <div class="mapwrap">
+        <div id="map" aria-label="Карта участков"></div>
+        <div id="schemeMap" class="scheme-map" hidden></div>
+        <div class="modes seg" role="tablist" aria-label="Режим карты">
+          <button role="tab" data-mode="current" data-i18n="map.mode.current">Сейчас</button>
+          <button role="tab" data-mode="plan" aria-selected="true" class="on" data-i18n="map.mode.plan">План</button>
+          <button role="tab" data-mode="ndvi" data-i18n="map.mode.ndvi">Трава</button>
+        </div>
+        <div class="legend" id="legend"></div>
+      </div>
+      <aside class="panel" aria-label="Анализ">
+        <div class="actions">
+          <button type="button" class="btn btn-primary btn-sm" id="saveScBtn"><svg class="ic"><use href="#i-save"/></svg><span data-i18n="act.save"></span></button>
+          <button type="button" class="btn btn-ghost btn-sm" id="pdfBtn"><svg class="ic"><use href="#i-file"/></svg><span data-i18n="act.pdf"></span></button>
+          <button type="button" class="btn btn-ghost btn-sm coord-only" id="publishBtn" hidden><svg class="ic"><use href="#i-users"/></svg><span data-i18n="act.publish"></span></button>
+          <a class="btn btn-ghost btn-sm" id="tgVillage" target="_blank" rel="noopener"><svg class="ic"><use href="#i-send"/></svg><span data-i18n="tg.openVillage"></span></a>
+        </div>
+        <div class="tabs" role="tablist" aria-label="Разделы анализа">
+          <button role="tab" data-tab="overview" aria-selected="true"><svg class="ic"><use href="#i-chart"/></svg><span data-i18n="tab.overview"></span></button>
+          <button role="tab" data-tab="herds" aria-selected="false"><svg class="ic"><use href="#i-users"/></svg><span data-i18n="tab.herds"></span></button>
+          <button role="tab" data-tab="routes" aria-selected="false"><svg class="ic"><use href="#i-route"/></svg><span data-i18n="tab.routes"></span></button>
+          <button role="tab" data-tab="water" aria-selected="false"><svg class="ic"><use href="#i-drop"/></svg><span data-i18n="tab.water"></span></button>
+          <button role="tab" data-tab="plots" aria-selected="false"><svg class="ic"><use href="#i-grid"/></svg><span data-i18n="tab.plots"></span></button>
+          <button role="tab" data-tab="data" aria-selected="false"><svg class="ic"><use href="#i-info"/></svg><span data-i18n="tab.data"></span></button>
+        </div>
+        <div class="tabpanes">
+          <div class="pane" data-pane="overview" role="tabpanel"></div>
+          <div class="pane" data-pane="herds" role="tabpanel" hidden></div>
+          <div class="pane" data-pane="routes" role="tabpanel" hidden></div>
+          <div class="pane" data-pane="water" role="tabpanel" hidden></div>
+          <div class="pane" data-pane="plots" role="tabpanel" hidden></div>
+          <div class="pane" data-pane="data" role="tabpanel" hidden></div>
+        </div>
+      </aside>
+    </div>
+  </section>
 
-    <h2>Куда вложить деньги на водопой</h2>
-    <div id="wells"></div>
-    <div class="note">Нажмите на дальний участок без воды и отметьте «есть водопой» — план пересчитается.
-      Мы не обещаем сделать воду. Мы показываем акимату, где водопой откроет больше всего корма.</div>
+  <!-- СЦЕНАРИИ -->
+  <section class="view view-page" data-view="scenarios" hidden>
+    <div class="page">
+      <h1 data-i18n="sc.title">Сценарии</h1>
+      <div id="scPage"></div>
+    </div>
+  </section>
 
-    <details>
-      <summary>Параметры расчёта</summary>
-      <div id="params"></div>
-      <div class="note">Биомасса = (NDVI − NDVI почвы) × коэффициент. Коэффициент нужно откалибровать:
-        срезать траву с 1 м² на 3–5 участках, высушить, взвесить. Цена сена — пример, укажите цену своего района.</div>
-    </details>
+  <!-- ПРОФИЛЬ -->
+  <section class="view view-page" data-view="profile" hidden>
+    <div class="page"><h1 data-i18n="pr.title">Профиль</h1><div id="prPage"></div></div>
+  </section>
 
-    <details>
-      <summary>Откуда данные и что условно</summary>
-      <div class="note" id="sources"></div>
-    </details>
-  </aside>
-</div>
+  <!-- КООРДИНАТОР -->
+  <section class="view view-page" data-view="coord" hidden>
+    <div class="page"><h1 data-i18n="co.title">Координатор</h1><div id="coPage"></div></div>
+  </section>
+
+  <!-- О ДАННЫХ -->
+  <section class="view view-page" data-view="data" hidden>
+    <div class="page"><h1 data-i18n="data.title">Источники данных и достоверность</h1><div id="dataPage"></div></div>
+  </section>
+</main>
+
+<!-- нижняя навигация на смартфоне -->
+<nav class="bottomnav" aria-label="Разделы">
+  <a href="#/home" data-route="home"><svg class="ic"><use href="#i-home"/></svg><span data-i18n="nav.home">Главная</span></a>
+  <a href="#/map" data-route="map"><svg class="ic"><use href="#i-map"/></svg><span data-i18n="nav.map">Карта</span></a>
+  <a href="#/scenarios" data-route="scenarios"><svg class="ic"><use href="#i-layers"/></svg><span data-i18n="nav.scenarios">Сценарии</span></a>
+  <a href="#/coord" data-route="coord" class="coord-only" hidden><svg class="ic"><use href="#i-users"/></svg><span data-i18n="nav.coord">Координатор</span></a>
+  <a href="#/profile" data-route="profile"><svg class="ic"><use href="#i-user"/></svg><span data-i18n="nav.profile">Профиль</span></a>
+  <a href="#/data" data-route="data"><svg class="ic"><use href="#i-info"/></svg><span data-i18n="nav.data">О данных</span></a>
+</nav>
+
+<!-- вход -->
+<dialog class="modal" id="loginDlg" aria-labelledby="loginTitle">
+  <form method="dialog" class="modal-x"><button aria-label="Закрыть" data-i18n-label="common.close"><svg class="ic"><use href="#i-x"/></svg></button></form>
+  <h2 id="loginTitle" data-i18n="login.title">Вход через Telegram</h2>
+  <div id="loginBody"></div>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<div id="report" class="report" aria-hidden="true"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="engine.js"></script>
 <script src="pipeline.js"></script>
 <script src="data/plots.js"></script>
 <script src="data/herds.js"></script>
-<script>
-const J = window.Jaiylym, PL = window.JaiylymPipeline;
-const BOT = "JAIYLYM_bot", BOT_API = "https://jaiylym-bot.onrender.com";
-const coord = x => (x < 0 ? "m" : "") + Math.round(Math.abs(x) * 1000);
-const botLink = (plotId) => `https://t.me/${BOT}?start=` + (plotId
-  ? `p_${coord(D.village.lat)}_${coord(D.village.lon)}_${PL.plotCode(plotId)}`
-  : `v_${coord(D.village.lat)}_${coord(D.village.lon)}`);
-let botSubs = {};          // сколько человек подписано на каждый участок (из бота)
-const DEFAULT = window.JAIYLYM_DATA;            // Кеген, посчитан заранее (ndvi.py)
-let D = null, plots = [];
-let herds = JSON.parse(JSON.stringify(window.JAIYLYM_HERDS));
-const P = J.params();
-let mode = "plan";
-const $ = id => document.getElementById(id);
-const fmt = n => Math.round(n).toLocaleString("ru-RU");
-const pct = x => isFinite(x) ? Math.round(x * 100) + "%" : "∞";
-const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-
-// ---------- карта ----------
-const map = L.map("map").setView([DEFAULT.village.lat, DEFAULT.village.lon], 12);
-L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-  maxZoom: 17, attribution: "Спутник: Esri World Imagery · NDVI: ESA Copernicus Sentinel-2 · Поиск: © OpenStreetMap",
-}).addTo(map);
-new ResizeObserver(() => map.invalidateSize()).observe($("map"));
-const group = L.layerGroup().addTo(map);
-let ndviLayer = null, layers = {}, bounds = null;
-
-const legend = L.control({ position: "bottomleft" });
-legend.onAdd = () => { const d = L.DomUtil.create("div", "legend"); d.id = "legend"; return d; };
-legend.addTo(map);
-
-function ndviPng(grid) {
-  const n = grid.size, c = document.createElement("canvas");
-  c.width = c.height = n;
-  const ctx = c.getContext("2d"), img = ctx.createImageData(n, n);
-  const stops = [[0.05, [140, 81, 10]], [0.2, [223, 194, 125]], [0.35, [166, 217, 106]], [0.55, [26, 150, 65]]];
-  const ramp = v => {
-    if (v <= stops[0][0]) return stops[0][1];
-    for (let k = 1; k < stops.length; k++) if (v <= stops[k][0]) {
-      const [a, ca] = stops[k - 1], [b, cb] = stops[k], t = (v - a) / (b - a);
-      return ca.map((x, j) => x + (cb[j] - x) * t);
-    }
-    return stops[stops.length - 1][1];
-  };
-  for (let i = 0; i < n * n; i++) {
-    const v = grid.ndvi[i];
-    if (!grid.pasture[i] || Number.isNaN(v)) continue;
-    const [r, g, b] = ramp(v);
-    img.data.set([r, g, b, 190], i * 4);
-  }
-  ctx.putImageData(img, 0, 0);
-  return c.toDataURL("image/png");
-}
-
-function showVillage(data, png) {
-  D = data; plots = data.plots;
-  group.clearLayers(); layers = {};
-  const [w, s, e, n] = D.bbox;
-  ndviLayer = L.imageOverlay(png, [[s, w], [n, e]], { opacity: 0.85 });
-  L.circleMarker([D.village.lat, D.village.lon], { radius: 6, color: "#fff", weight: 2, fillColor: "#222", fillOpacity: 1 })
-    .bindTooltip(D.village.name).addTo(group);
-  for (const p of plots) {
-    const poly = L.polygon(p.geometry.coordinates[0].map(([x, y]) => [y, x]), { weight: 1.5, color: "#fff", fillOpacity: 0.45 }).addTo(group);
-    poly.bindTooltip("", { permanent: true, direction: "center", className: "plabel" });
-    poly.on("click", () => openPlot(p, poly));
-    layers[p.id] = poly;
-  }
-  bounds = L.latLngBounds(plots.flatMap(p => p.geometry.coordinates[0].map(([x, y]) => [y, x])));
-  map.invalidateSize(); map.fitBounds(bounds, { padding: [10, 10] });
-  $("sub").textContent = `${D.village.name} · Sentinel-2, лето ${D.source.year} · ${fmt(plots.reduce((s, p) => s + p.pasture_ha, 0))} га пастбищ в радиусе 8 км`;
-  $("q").value = D.village.name;
-  history.replaceState(null, "", `#lat=${D.village.lat}&lon=${D.village.lon}&name=${encodeURIComponent(D.village.name)}`);
-  $("botlink").href = botLink();
-  herds = herds.filter(h => !h.from_bot);
-  botSubs = {};
-  renderSources();
-  render();
-  loadBotData();
-  const want = new URLSearchParams(location.hash.slice(1)).get("plot") || pendingPlot;
-  pendingPlot = null;
-  if (want && layers[want]) setTimeout(() => openPlot(plots.find(p => p.id === want), layers[want]), 300);
-}
-let pendingPlot = new URLSearchParams(location.hash.slice(1)).get("plot");
-
-// Связь с ботом: стада, которые пастухи записали в Telegram (без имён), и подписки на участки.
-// Бесплатный сервер может спать — тогда ответ придёт через ~1 минуту, сайт работает и без него.
-async function loadBotData() {
-  const key = D.village.lat + "," + D.village.lon;
-  $("herdnote").textContent = "Стада — пример, замените своими. Загружаю стада из Telegram…";
-  try {
-    const r = await fetch(`${BOT_API}/api/village?lat=${D.village.lat}&lon=${D.village.lon}`, { signal: AbortSignal.timeout(90000) });
-    const d = await r.json();
-    if (key !== D.village.lat + "," + D.village.lon) return;      // пока ждали, выбрали другое село
-    botSubs = d.subs || {};
-    const near = new Set(plots.filter(p => p.ring === "near").map(p => p.id));
-    herds = herds.filter(h => !h.from_bot).concat((d.herds || []).map(h => Object.assign({}, h, { home: near.has(h.home) ? h.home : "Б-С" })));
-    const n = (d.herds || []).length, subs = Object.values(botSubs).reduce((a, b) => a + b, 0);
-    $("herdnote").innerHTML = `Стада — пример, замените своими. Из Telegram: ${n} ${n === 1 ? "стадо" : "стад"}, подписок на участки: ${subs}.`;
-    render();
-  } catch (_) {
-    $("herdnote").textContent = "Стада — пример, замените своими. (Бот сейчас не ответил — стада из Telegram не загружены.)";
-  }
-}
-
-// ---------- выбор села ----------
-function status(msg, err) { const s = $("status"); s.hidden = !msg; s.textContent = msg || ""; s.classList.toggle("err", !!err); }
-const cacheKey = (lat, lon) => `jaiylym:v3:${(+lat).toFixed(3)},${(+lon).toFixed(3)}`;
-
-async function openVillage(name, lat, lon) {
-  $("results").hidden = true;
-  if (Math.abs(lat - DEFAULT.village.lat) < 0.01 && Math.abs(lon - DEFAULT.village.lon) < 0.01) {
-    status(""); return showVillage(Object.assign({}, DEFAULT, { plots: clonePlots(DEFAULT.plots) }), "data/ndvi.png");
-  }
-  try {
-    const hit = JSON.parse(localStorage.getItem(cacheKey(lat, lon)) || "null");
-    if (hit) { hit.village.name = name || hit.village.name; status(""); return showVillage(hit.data ? hit.data : hit, hit.png); }
-  } catch (_) {}
-  $("go").disabled = true;
-  try {
-    const res = await PL.buildVillage({ name, lat, lon, onProgress: m => status(m) });
-    const png = ndviPng(res.grid);
-    delete res.grid;
-    try { localStorage.setItem(cacheKey(lat, lon), JSON.stringify(Object.assign({}, res, { png }))); } catch (_) {}
-    status("");
-    showVillage(res, png);
-  } catch (e) {
-    status("Не получилось: " + e.message + ". Попробуйте ещё раз или другое место.", true);
-  } finally { $("go").disabled = false; }
-}
-function clonePlots(ps) { return ps.map(p => Object.assign({}, p)); }
-
-$("search").onsubmit = async ev => {
-  ev.preventDefault();
-  const q = $("q").value.trim();
-  if (!q) return;
-  status("Ищу «" + q + "»…");
-  try {
-    const found = await PL.geocode(q);
-    status(found.length ? "" : "Ничего не нашлось. Попробуйте по-русски или выберите точку на карте.", !found.length);
-    if (found.length === 1) return openVillage(found[0].name, found[0].lat, found[0].lon);
-    const ul = $("results");
-    ul.innerHTML = found.map((f, i) => `<li data-i="${i}">${esc(f.name)}<small>${esc(f.full)}</small></li>`).join("");
-    ul.hidden = !found.length;
-    ul.querySelectorAll("li").forEach(li => li.onclick = () => { const f = found[+li.dataset.i]; openVillage(f.name, f.lat, f.lon); });
-  } catch (e) { status(e.message, true); }
-};
-document.addEventListener("click", e => { if (!$("search").contains(e.target)) $("results").hidden = true; });
-
-let picking = false;
-$("pick").onclick = () => { picking = !picking; $("map").classList.toggle("picking", picking); status(picking ? "Нажмите на карту в центре села" : ""); };
-map.on("click", e => {
-  if (!picking) return;
-  picking = false; $("map").classList.remove("picking");
-  const lat = +e.latlng.lat.toFixed(5), lon = +e.latlng.lng.toFixed(5);
-  openVillage(`Точка ${lat.toFixed(3)}, ${lon.toFixed(3)}`, lat, lon);
-});
-
-// ---------- участок ----------
-function loadColor(x) { return !x ? "#9aa39a" : x <= 0.7 ? "#2f8f46" : x <= 1.0 ? "#d9a400" : "#c8412b"; }
-function ndviColor(v) { return v == null ? "#999" : v < 0.18 ? "#8c510a" : v < 0.25 ? "#dfc27d" : v < 0.32 ? "#a6d96a" : "#1a9641"; }
-
-function openPlot(p, poly) {
-  if (picking) return;
-  const c = J.plotCapacity(p, P);
-  const l = (mode === "current" ? cur : pl).load[p.id];
-  const names = l.herds.map(x => herds.find(h => h.id === x.herd)?.name).filter(Boolean);
-  const ndviRow = p.ndvi_base != null
-    ? `<tr><td>NDVI ${D.source.base_year} → ${D.source.year}</td><td>${p.ndvi_base} → ${p.ndvi}</td></tr>`
-    : `<tr><td>NDVI ${D.source.year}</td><td>${p.ndvi ?? "нет данных"}</td></tr>`;
-  poly.bindPopup(`<div class="pop"><b>Участок ${p.id}</b> · ${p.ring === "near" ? "ближний" : "дальний"}, ~${p.dist_km} км на ${p.dir}
-    <table>
-      <tr><td>Пастбище</td><td>${fmt(p.pasture_ha)} га</td></tr>${ndviRow}
-      <tr><td>Корм на сезон</td><td>${fmt(c.forage / 1000)} т сух. в-ва</td></tr>
-      <tr><td>Выдержит</td><td>${fmt(c.au_season)} УГ ≈ ${fmt(c.au_season / P.au.sheep)} овец</td></tr>
-      <tr><td>Нагрузка (${mode === "current" ? "сейчас" : "план"})</td><td><b>${pct(l.load)}</b></td></tr>
-      <tr><td>Стада</td><td>${esc(names.join(", ")) || "—"}</td></tr>
-      <tr><td>Вода</td><td>${p.water_source}</td></tr>
-    </table>
-    ${spark(p.series)}
-    ${p.ring === "far" ? `<label><input type="checkbox" id="wchk" ${p.water ? "checked" : ""}> есть водопой</label>` : ""}
-    <a class="sub" href="${botLink(p.id)}" target="_blank" rel="noopener">🔔 Подписаться в Telegram</a>
-    <small>Пастух получит уведомление, когда спутник увидит, что трава здесь убывает, и напоминание о перегоне.${botSubs[p.id] ? ` Уже подписано: ${botSubs[p.id]}.` : ""}</small></div>`).openPopup();
-  const chk = $("wchk");
-  if (chk) chk.onchange = () => {
-    p.water = chk.checked;
-    p.water_source = chk.checked ? (p.water_source === "нет" ? "новый водопой (сценарий)" : p.water_source) : "нет";
-    render(); poly.closePopup();
-  };
-}
-
-/** Мини-график NDVI участка за лето. */
-function spark(series) {
-  if (!series || series.length < 2) return "";
-  const w = 220, h = 46, vs = series.map(x => x.v), lo = Math.min(...vs) - 0.02, hi = Math.max(...vs) + 0.02;
-  const X = i => 4 + i * (w - 8) / (series.length - 1), Y = v => h - 12 - (v - lo) / (hi - lo) * (h - 18);
-  const pts = series.map((x, i) => `${X(i).toFixed(1)},${Y(x.v).toFixed(1)}`).join(" ");
-  const ch = (vs[vs.length - 1] - vs[0]) / vs[0] * 100;
-  const col = ch <= -10 ? "#c8412b" : ch >= 10 ? "#2f8f46" : "#6b7266";
-  const d = s => s.slice(8, 10) + "." + s.slice(5, 7);
-  return `<small>Трава за лето: <b style="color:${col}">${ch >= 0 ? "+" : ""}${ch.toFixed(0)}%</b></small>
-    <svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
-      <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="2"/>
-      ${series.map((x, i) => `<circle cx="${X(i).toFixed(1)}" cy="${Y(x.v).toFixed(1)}" r="2.5" fill="${col}"><title>${d(x.d)}: ${x.v}</title></circle>`).join("")}
-      <text x="2" y="${h - 1}" font-size="10" fill="#6b7266">${d(series[0].d)}</text>
-      <text x="${w - 2}" y="${h - 1}" font-size="10" fill="#6b7266" text-anchor="end">${d(series[series.length - 1].d)}</text>
-    </svg>`;
-}
-
-// ---------- расчёт и отрисовка ----------
-let cur, pl;
-function render() {
-  cur = J.current(plots, herds, P);
-  pl = J.plan(plots, herds, P);
-  const r = mode === "current" ? cur : pl;
-  for (const p of plots) {
-    const l = r.load[p.id];
-    const fill = mode === "ndvi" ? ndviColor(p.ndvi) : loadColor(l.load);
-    const label = mode === "ndvi" ? `${p.id}<br>${p.ndvi ?? "—"}` : `${p.id}<br>${l.used ? pct(l.load) : "свободен"}`;
-    layers[p.id].setStyle({ fillColor: fill, fillOpacity: mode === "ndvi" ? 0.05 : 0.5, color: p.water ? "#7fd3ff" : "#fff",
-      weight: p.water && p.ring === "far" ? 2.5 : 1.2, dashArray: p.water ? null : "4 4" });
-    layers[p.id].setTooltipContent(label);
-  }
-  if (mode === "ndvi") ndviLayer.addTo(group); else ndviLayer.remove();
-
-  $("legend").innerHTML = mode === "ndvi"
-    ? `<b>Трава, NDVI ${D.source.year}</b><br><i style="background:#1a9641"></i>густая<br><i style="background:#a6d96a"></i>средняя<br><i style="background:#dfc27d"></i>редкая<br><i style="background:#8c510a"></i>почти нет<br><small>прозрачно — не пастбище</small>`
-    : `<b>Нагрузка</b><br><i style="background:#2f8f46"></i>до 70%<br><i style="background:#d9a400"></i>70–100%<br><i style="background:#c8412b"></i>перегруз<br><i style="background:#9aa39a"></i>не используется<br><i style="background:transparent;border:2px solid #7fd3ff"></i>есть вода<br><i style="background:transparent;border:1px dashed #555"></i>нет воды`;
-
-  const hayCur = J.hayTonnes(cur.deficit_kg, P), hayPl = J.hayTonnes(pl.deficit_kg, P);
-  const mln = t => (t * P.hay_price / 1e6).toLocaleString("ru-RU", { maximumFractionDigits: 1 });
-  $("c-over").innerHTML = `${cur.overloaded} <small>→</small> ${pl.overloaded}`;
-  $("c-hay").innerHTML = `${fmt(hayCur)} <small>→</small> ${fmt(hayPl)}`;
-  $("c-money").innerHTML = `${mln(hayCur)} <small>→</small> ${mln(hayPl)} <small>млн</small>`;
-  $("explain").innerHTML =
-    `<b>Сейчас</b> все стада пасутся у села: ближние участки перегружены, а корм на ${fmt(hayCur)} т сена берётся «в долг» у земли — это и есть деградация.
-     <b>План</b> разводит стада по участкам с водой так, чтобы нигде не было больше 100%.` +
-    (hayPl > 0 ? ` Не хватает ещё ${fmt(hayPl)} т — нужен водопой на дальнем участке или сено.` : "");
-  renderHerds(); renderRoutes(); renderWells();
-}
-
-function renderHerds() {
-  const near = plots.filter(p => p.ring === "near").map(p => p.id);
-  const tb = document.querySelector("#herds tbody");
-  tb.innerHTML = herds.map((h, i) => `<tr>
-    <td><input type="text" data-i="${i}" data-k="name" value="${esc(h.name)}">${h.from_bot ? '<span class="frombot">из Telegram</span>' : ""}</td>
-    <td><input type="number" min="0" step="50" data-i="${i}" data-k="sheep" value="${h.sheep}"></td>
-    <td><input type="number" min="0" step="5" data-i="${i}" data-k="cattle" value="${h.cattle}"></td>
-    <td><input type="number" min="0" step="5" data-i="${i}" data-k="horses" value="${h.horses}"></td>
-    <td><select data-i="${i}" data-k="home">${near.map(id => `<option ${id === h.home ? "selected" : ""}>${id}</option>`).join("")}</select></td>
-    <td><input type="checkbox" data-i="${i}" data-k="daily_return" ${h.daily_return ? "checked" : ""}></td>
-  </tr>`).join("");
-  tb.querySelectorAll("input,select").forEach(el => el.onchange = () => {
-    const h = herds[+el.dataset.i], k = el.dataset.k;
-    h[k] = el.type === "checkbox" ? el.checked : el.type === "number" ? Math.max(0, +el.value || 0) : el.value;
-    render();
-  });
-}
-
-function renderRoutes() {
-  const S = P.season_days, byId = Object.fromEntries(plots.map(p => [p.id, p]));
-  $("routes").innerHTML = herds.map(h => {
-    const bars = (pl.herdPlans[h.id] || []).map(s => {
-      const cls = s.plot ? byId[s.plot].ring : "gap";
-      return `<span class="${cls}" style="left:${(s.from - 1) / S * 100}%;width:${(s.to - s.from + 1) / S * 100}%" title="${s.plot || "нет корма"}: дни ${s.from}–${s.to}">${s.plot || "нет корма"}</span>`;
-    }).join("");
-    return `<div class="hname">${esc(h.name)} <small>${fmt(J.herdAU(h, P))} УГ</small></div><div class="tl">${bars}</div>`;
-  }).join("") + `<div class="note">Сезон ${S} дней с 1 мая. Зелёный — ближние участки, синий — дальние (жайлау), красный — корма не хватило.</div>`;
-}
-
-function renderWells() {
-  const ws = J.wells(plots, P);
-  $("wells").innerHTML = ws.length ? ws.map((w, i) => `<div class="well">
-      <span><b>${i + 1}. ${w.plot}</b> — откроет корм на ≈ ${fmt(w.sheep)} овец на сезон</span>
-      <button class="btn" data-p="${w.plot}">поставить</button></div>`).join("")
-    : `<div class="note">Все дальние участки уже с водой.</div>`;
-  document.querySelectorAll("#wells button").forEach(b => b.onclick = () => {
-    const p = plots.find(x => x.id === b.dataset.p);
-    p.water = true; p.water_source = "новый водопой (сценарий)"; render();
-  });
-}
-
-function renderParams() {
-  const fields = [["season_days", "Сезон, дней"], ["intake", "Корм на 1 УГ в сутки, кг"], ["util", "Можно стравить, доля"],
-    ["k_ndvi", "Биомасса на ед. NDVI, кг/га"], ["hay_price", "Цена сена, ₸/т (пример)"]];
-  $("params").innerHTML = fields.map(([k, t]) => `<div class="param"><span>${t}</span><input type="number" step="any" data-k="${k}" value="${P[k]}"></div>`).join("");
-  $("params").querySelectorAll("input").forEach(i => i.onchange = () => { P[i.dataset.k] = +i.value; render(); });
-}
-
-function renderSources() {
-  const s = D.source;
-  let trend = "";
-  if (s.base_year) {
-    const avg = ring => { const xs = plots.filter(p => p.ring === ring && p.ndvi != null && p.ndvi_base != null); return xs.reduce((a, p) => a + p.ndvi - p.ndvi_base, 0) / xs.length; };
-    const f = x => (x >= 0 ? "+" : "") + x.toFixed(3);
-    trend = `<br><b>${s.base_year} → ${s.year}:</b> NDVI на ближних участках ${f(avg("near"))}, на дальних ${f(avg("far"))}.
-      У села трава не растёт, хотя дальше от села растёт. Это похоже на перевыпас у села, но два года — не доказательство:
-      нужен ряд за 5–8 лет и проверка на месте.`;
-  }
-  $("sources").innerHTML = `
-    <b>Реальные данные:</b> снимки Sentinel-2 (ESA Copernicus) за ${s.dates.length} безоблачных дней лета ${s.year}
-    (${s.dates.slice().sort().join(", ")}); маска пастбищ — ESA WorldCover (трава, кустарник, редкая растительность).
-    Данные берутся через Microsoft Planetary Computer прямо в браузере.<br>
-    <b>Условно:</b> границы участков (секторы 8 направлений × 2 кольца; в реальности — схема пастбищ акимата),
-    стада (пример), вода на дальних участках (по водоёмам на карте — уточнить у пастухов), коэффициент биомассы, цена сена.${trend}`;
-}
-
-$("mode").querySelectorAll("button").forEach(b => b.onclick = () => {
-  mode = b.dataset.m;
-  $("mode").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
-  render();
-});
-$("add").onclick = () => {
-  herds.push({ id: "h" + Date.now(), name: "Новое стадо", sheep: 300, goats: 0, cattle: 0, horses: 0, home: "Б-С", daily_return: false });
-  render();
-};
-
-// ---------- старт: село из ссылки (#lat=..&lon=..&name=..) или Кеген ----------
-renderParams();
-const h = new URLSearchParams(location.hash.slice(1));
-if (h.get("lat") && h.get("lon")) openVillage(h.get("name") || "Село", +h.get("lat"), +h.get("lon"));
-else openVillage(DEFAULT.village.name, DEFAULT.village.lat, DEFAULT.village.lon);
-</script>
+<script src="js/i18n.js"></script>
+<script src="js/client.js"></script>
+<script src="js/report.js"></script>
+<script src="js/app.js"></script>
 </body>
 </html>

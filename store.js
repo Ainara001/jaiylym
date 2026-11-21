@@ -69,7 +69,11 @@ function redisClient(url) {
     return raw ? go() : connect().then(go);
   }
 
-  return { get: k => send(["GET", k]), set: (k, v) => send(["SET", k, v]) };
+  return {
+    get: k => send(["GET", k]),
+    set: (k, v, ttlSec) => send(ttlSec ? ["SET", k, v, "EX", Math.ceil(ttlSec)] : ["SET", k, v]),
+    del: k => send(["DEL", k]),
+  };
 }
 
 function createStore() {
@@ -80,6 +84,12 @@ function createStore() {
       kind: "Key Value (Redis)",
       load: async () => { const s = await r.get(KEY); return s ? JSON.parse(s) : null; },
       save: async obj => { await r.set(KEY, JSON.stringify(obj)); },
+      // короткоживущие записи (коды входа, сессии): значение JSON, срок жизни в секундах
+      kv: {
+        get: async k => { const s = await r.get("jaiylym:" + k); return s == null ? null : JSON.parse(s); },
+        set: (k, v, ttlSec) => r.set("jaiylym:" + k, JSON.stringify(v), ttlSec),
+        del: k => r.del("jaiylym:" + k),
+      },
     };
   }
   const file = process.env.BOT_STATE_FILE || require("path").join(__dirname, "bot_state.json");
@@ -87,7 +97,17 @@ function createStore() {
     kind: "файл bot_state.json",
     load: async () => { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch (_) { return null; } },
     save: async obj => { fs.writeFileSync(file, JSON.stringify(obj)); },
+    kv: memoryKv(),   // на своём компьютере сессии живут до перезапуска
   };
 }
 
-module.exports = { createStore, redisClient };
+function memoryKv() {
+  const m = new Map();
+  return {
+    get: async k => { const e = m.get(k); if (!e) return null; if (e.exp && e.exp < Date.now()) { m.delete(k); return null; } return JSON.parse(e.v); },
+    set: async (k, v, ttlSec) => { m.set(k, { v: JSON.stringify(v), exp: ttlSec ? Date.now() + ttlSec * 1000 : 0 }); },
+    del: async k => { m.delete(k); },
+  };
+}
+
+module.exports = { createStore, redisClient, memoryKv };

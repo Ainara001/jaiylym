@@ -1,0 +1,862 @@
+/* Jaiylym — интерфейс приложения.
+ * Расчёты — web/engine.js (без изменений), спутник — web/pipeline.js, сервер — js/client.js. */
+(function () {
+  "use strict";
+  const J = window.Jaiylym, PL = window.JaiylymPipeline, C = window.Client, I = window.I18N, t = I.t;
+  const DEFAULT = window.JAIYLYM_DATA, DEMO_HERDS = window.JAIYLYM_HERDS;
+  const BOT = "JAIYLYM_bot";
+  const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+  // числа и даты в казахстанском формате для обоих языков: 1 234,5 и 21.11.2026 14:05
+  const fmt = n => Math.round(n).toLocaleString("ru-RU");
+  const fmt1 = n => (+n).toLocaleString("ru-RU", { maximumFractionDigits: 1 });
+  const two = n => String(n).padStart(2, "0");
+  const dateStr = (s, time = true) => { const d = new Date(s); if (isNaN(d)) return ""; return `${two(d.getDate())}.${two(d.getMonth() + 1)}.${d.getFullYear()}` + (time ? ` ${two(d.getHours())}:${two(d.getMinutes())}` : ""); };
+  const pct = x => (isFinite(x) ? Math.round(x * 100) + " %" : "∞");
+  const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const ic = id => `<svg class="ic"><use href="#i-${id}"/></svg>`;
+  const src = k => `<span class="src src-${k}">${t("src." + k)}</span>`;
+  const coord = x => (x < 0 ? "m" : "") + Math.round(Math.abs(x) * 1000);
+  const isKegen = (lat, lon) => Math.abs(lat - DEFAULT.village.lat) < 0.01 && Math.abs(lon - DEFAULT.village.lon) < 0.01;
+
+  // ---------- состояние ----------
+  const S = {
+    D: null, plots: [], baseWater: {}, added: new Set(), herds: [], P: J.params(),
+    mode: "plan", tab: "overview", cur: null, pl: null, botSubs: {}, picking: false,
+    map: null, layers: {}, group: null, ndviLayer: null, png: null, route: "home", loadingKey: null, histKey: null,
+  };
+
+  // ---------- мелкие помощники ----------
+  let toastTimer;
+  function toast(msg, err) {
+    const el = $("#toast"); el.textContent = msg; el.classList.toggle("err", !!err); el.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, err ? 6000 : 3500);
+  }
+  function status(msg, { err = false, busy = false } = {}) {
+    const el = $("#status");
+    el.hidden = !msg;
+    el.classList.toggle("err", err);
+    el.innerHTML = msg ? (busy ? '<span class="spin" aria-hidden="true"></span>' : "") + `<span>${esc(msg)}</span>` : "";
+  }
+  const loadColor = x => (!x ? "#9aa29a" : x <= 0.7 ? "#3e8e5a" : x <= 1 ? "#c9970f" : "#bf4a2a");
+  const ndviColor = v => (v == null ? "#9aa29a" : v < 0.18 ? "#8c510a" : v < 0.25 ? "#d8b56a" : v < 0.32 ? "#9fd068" : "#2f9a4b");
+  // Достоверность спутникового показателя участка: число безоблачных снимков (series) и площадь пастбища
+  function confidence(p) {
+    if (p.ndvi == null || p.pasture_ha < 20) return "low";
+    const n = (p.series || []).length;
+    if (n >= 4 && p.pasture_ha >= 100) return "high";
+    if (n >= 2) return "medium";
+    return "low";
+  }
+  const confTag = p => { const c = confidence(p); return `<span class="conf conf-${c}">${t("conf." + c)}</span>`; };
+  const botLink = plotId => `https://t.me/${BOT}?start=` + (S.D ? (plotId
+    ? `p_${coord(S.D.village.lat)}_${coord(S.D.village.lon)}_${PL.plotCode(plotId)}`
+    : `v_${coord(S.D.village.lat)}_${coord(S.D.village.lon)}`) : "");
+
+  async function askText(title, value) {
+    return new Promise(resolve => {
+      const d = document.createElement("dialog");
+      d.className = "modal";
+      d.innerHTML = `<form method="dialog"><h2>${esc(title)}</h2><label class="field"><input name="v" maxlength="80" value="${esc(value)}" required></label>
+        <p style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px"><button class="btn btn-ghost" value="cancel" formnovalidate>${t("common.cancel")}</button>
+        <button class="btn btn-primary" value="ok">${t("common.save")}</button></p></form>`;
+      document.body.appendChild(d);
+      d.addEventListener("close", () => { const v = d.returnValue === "ok" ? d.querySelector("input").value.trim() : null; d.remove(); resolve(v || null); });
+      d.showModal(); d.querySelector("input").select();
+    });
+  }
+
+  // ---------- маршрутизация: #/home, #/map?lat=..&lon=..&name=..&plot=.., #/scenarios, #/profile, #/coord, #/data ----------
+  function parseHash() {
+    const h = location.hash.replace(/^#/, "");
+    if (/^lat=/.test(h)) return { route: "map", q: new URLSearchParams(h) };          // старые ссылки из бота
+    const m = /^\/?([a-z]*)\??(.*)$/.exec(h) || [];
+    return { route: ["home", "map", "scenarios", "profile", "coord", "data"].includes(m[1]) ? m[1] : "home", q: new URLSearchParams(m[2] || "") };
+  }
+  function go(route, q) { location.hash = "#/" + route + (q ? "?" + q : ""); }
+  function onRoute() {
+    const { route, q } = parseHash();
+    S.route = route;
+    $$("[data-view]").forEach(v => { v.hidden = v.dataset.view !== route; });
+    $$("[data-route]").forEach(a => { if (a.dataset.route === route) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
+    if (route === "map") {
+      ensureMap();
+      const lat = +q.get("lat"), lon = +q.get("lon");
+      if (q.get("lat") && q.get("lon") && Number.isFinite(lat) && Number.isFinite(lon)) {
+        const same = S.D && Math.abs(S.D.village.lat - lat) < 1e-4 && Math.abs(S.D.village.lon - lon) < 1e-4;
+        const pend = S.pending && S.pending.key === cacheKey(lat, lon) ? S.pending.opts : null;
+        S.pending = null;
+        if (!same || pend) openVillage(q.get("name") || "Село", lat, lon, Object.assign({ plot: q.get("plot") }, pend || {}));
+        else if (q.get("plot")) focusPlot(q.get("plot"));
+      } else if (!S.D) {
+        const last = C.ls.get("jaiylym:last", null);
+        if (last) openVillage(last.name, last.lat, last.lon); else openVillage(DEFAULT.village.name, DEFAULT.village.lat, DEFAULT.village.lon);
+      }
+      setTimeout(() => S.map && S.map.invalidateSize(), 50);
+    }
+    if (route === "home") renderHome();
+    if (route === "scenarios") renderScenarios();
+    if (route === "profile") renderProfile();
+    if (route === "coord") renderCoord();
+    if (route === "data") renderDataPage();
+    window.scrollTo(0, 0);
+  }
+
+  // ---------- карта ----------
+  function ensureMap() {
+    if (S.map || S.noLeaflet) return;
+    if (!window.L) { S.noLeaflet = true; $("#map").hidden = true; $("#schemeMap").hidden = false; return; }
+    S.map = L.map("map", { zoomControl: true, attributionControl: true }).setView([DEFAULT.village.lat, DEFAULT.village.lon], 12);
+    const tiles = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+      maxZoom: 17, attribution: "Esri World Imagery · Sentinel-2 ESA Copernicus · © OpenStreetMap",
+    }).addTo(S.map);
+    let tileErrors = 0;
+    tiles.on("tileerror", () => { if (++tileErrors === 6 && !navigator.onLine) toast(t("map.fallback"), true); });
+    S.group = L.layerGroup().addTo(S.map);
+    new ResizeObserver(() => S.map.invalidateSize()).observe($("#map"));
+    S.map.on("click", e => {
+      if (!S.picking) return;
+      setPicking(false);
+      const lat = +e.latlng.lat.toFixed(5), lon = +e.latlng.lng.toFixed(5);
+      openVillage(`${lat.toFixed(3)}, ${lon.toFixed(3)}`, lat, lon);
+    });
+  }
+  function setPicking(on) {
+    S.picking = on;
+    $("#map").classList.toggle("picking", on);
+    status(on ? t("map.picking") : "");
+  }
+
+  function drawVillage() {
+    S.layers = {};
+    if (S.noLeaflet) return;            // запасная схема рисуется в paintMap(), когда нагрузка уже посчитана
+    S.group.clearLayers();
+    const [w, s, e, n] = S.D.bbox;
+    S.ndviLayer = L.imageOverlay(S.png, [[s, w], [n, e]], { opacity: 0.85 });
+    L.circleMarker([S.D.village.lat, S.D.village.lon], { radius: 6, color: "#fff", weight: 2, fillColor: "#1b2a21", fillOpacity: 1 })
+      .bindTooltip(esc(S.D.village.name)).addTo(S.group);
+    for (const p of S.plots) {
+      const poly = L.polygon(p.geometry.coordinates[0].map(([x, y]) => [y, x]), { weight: 1.5, color: "#fff", fillOpacity: 0.45 }).addTo(S.group);
+      poly.bindTooltip("", { permanent: true, direction: "center", className: "plabel" });
+      poly.on("click", () => { if (!S.picking) openPlot(p.id); });
+      S.layers[p.id] = poly;
+    }
+    const b = L.latLngBounds(S.plots.flatMap(p => p.geometry.coordinates[0].map(([x, y]) => [y, x])));
+    S.map.invalidateSize(); S.map.fitBounds(b, { padding: [12, 12] });
+  }
+
+  // ---------- выбор села ----------
+  const cacheKey = (lat, lon) => `jaiylym:v3:${(+lat).toFixed(3)},${(+lon).toFixed(3)}`;
+  function ndviPng(grid) {
+    const n = grid.size, c = document.createElement("canvas");
+    c.width = c.height = n;
+    const ctx = c.getContext("2d"), img = ctx.createImageData(n, n);
+    const stops = [[0.05, [140, 81, 10]], [0.2, [216, 181, 106]], [0.35, [159, 208, 104]], [0.55, [47, 154, 75]]];
+    const ramp = v => {
+      if (v <= stops[0][0]) return stops[0][1];
+      for (let k = 1; k < stops.length; k++) if (v <= stops[k][0]) {
+        const [a, ca] = stops[k - 1], [b, cb] = stops[k], q = (v - a) / (b - a);
+        return ca.map((x, j) => x + (cb[j] - x) * q);
+      }
+      return stops[stops.length - 1][1];
+    };
+    for (let i = 0; i < n * n; i++) {
+      const v = grid.ndvi[i];
+      if (!grid.pasture[i] || Number.isNaN(v)) continue;
+      const [r, g, b] = ramp(v);
+      img.data.set([r, g, b, 190], i * 4);
+    }
+    ctx.putImageData(img, 0, 0);
+    return c.toDataURL("image/png");
+  }
+
+  async function openVillage(name, lat, lon, opts = {}) {
+    const key = cacheKey(lat, lon);
+    S.loadingKey = key;
+    $$(".results").forEach(u => { u.hidden = true; });
+    let data = null, png = null;
+    if (isKegen(lat, lon)) { data = JSON.parse(JSON.stringify(DEFAULT)); png = "data/ndvi.png"; }
+    else {
+      const hit = C.ls.get(key, null);
+      if (hit && hit.plots) { data = hit; png = hit.png; delete data.png; data.village.name = name || data.village.name; }
+    }
+    if (!data) {
+      if (!navigator.onLine) { status(t("err.offline"), { err: true }); return; }
+      try {
+        const res = await PL.buildVillage({ name, lat, lon, onProgress: m => {
+          const k = /снимк.*Sentinel/.test(m) ? "st.scenes" : /Загружаю/.test(m) ? "st.loading" : "st.computing";
+          status(t(k), { busy: true });
+        } });
+        if (S.loadingKey !== key) return;                      // пока считали, выбрали другое место
+        png = ndviPng(res.grid); delete res.grid;
+        data = res;
+        C.ls.set(key, Object.assign({}, res, { png }));
+      } catch (e) {
+        if (S.loadingKey === key) status(t("err.build") + ": " + e.message, { err: true });
+        return;
+      }
+    }
+    status("");
+    S.D = data; S.png = png;
+    S.baseWater = Object.fromEntries(data.plots.map(p => [p.id, p.water]));
+    S.added = new Set((opts.water || []).filter(id => S.baseWater[id] === false));
+    if (opts.params) Object.assign(S.P, opts.params);
+    rebuildPlots();
+    S.herds = opts.herds ? opts.herds.map(h => Object.assign({}, h)) : (isKegen(lat, lon) ? DEMO_HERDS.map(h => Object.assign({ demo: true }, h)) : []);
+    addOwnFarm();
+    S.botSubs = {};
+    C.ls.set("jaiylym:last", { name: data.village.name, lat: data.village.lat, lon: data.village.lon });
+    history.replaceState(null, "", `#/map?lat=${data.village.lat}&lon=${data.village.lon}&name=${encodeURIComponent(data.village.name)}`);
+    $("#mapQ").value = data.village.name;
+    $("#tgVillage").href = botLink();
+    drawVillage();
+    render();
+    if (!opts.herds) loadBotData();
+    if (S.histKey !== key) { S.histKey = key; C.addHistory({ kind: "open", village: data.village, summary: summary() }); }
+    const want = opts.plot;
+    if (want) setTimeout(() => focusPlot(want), 350);
+  }
+
+  function rebuildPlots() {
+    S.plots = S.D.plots.map(p => Object.assign({}, p, {
+      water: S.baseWater[p.id] || S.added.has(p.id),
+      water_source: S.added.has(p.id) ? t("pop.hasWater") : p.water_source,
+    }));
+  }
+  function addOwnFarm() {
+    const u = C.user;
+    S.herds = S.herds.filter(h => !h.mine);
+    if (!u || !u.farm || !S.D) return;
+    const f = u.farm;
+    if (Math.abs(f.village.lat - S.D.village.lat) > 0.0015 || Math.abs(f.village.lon - S.D.village.lon) > 0.0015) return;
+    S.herds.unshift({ id: "mine", mine: true, name: f.name, sheep: f.sheep, goats: f.goats, cattle: f.cattle, horses: f.horses, home: f.home, daily_return: f.daily_return });
+  }
+
+  async function loadBotData() {
+    const key = cacheKey(S.D.village.lat, S.D.village.lon);
+    try {
+      const d = await C.villageData(S.D.village.lat, S.D.village.lon);
+      if (cacheKey(S.D.village.lat, S.D.village.lon) !== key) return;
+      S.botSubs = d.subs || {};
+      const near = new Set(S.plots.filter(p => p.ring === "near").map(p => p.id));
+      let n = 0;
+      const fromBot = (d.herds || []).filter(h => !h.mine).map(h => Object.assign({}, h, {
+        name: `${t("herds.tg")} ${++n}`, home: near.has(h.home) ? h.home : "Б-С" }));
+      S.herds = S.herds.filter(h => !h.from_bot).concat(fromBot);
+      render();
+    } catch (_) { /* бот спит или нет сети — сайт работает и без него */ }
+  }
+
+  // ---------- поиск ----------
+  function bindSearch(form, input) {
+    const ul = form.querySelector(".results");
+    form.addEventListener("submit", async ev => {
+      ev.preventDefault();
+      const q = input.value.trim();
+      if (!q) return;
+      if (!navigator.onLine) { toast(t("err.offline"), true); return; }
+      const btn = form.querySelector("button"); btn.disabled = true;
+      if (S.route === "map") status(t("st.search", { q }), { busy: true });
+      try {
+        const found = await PL.geocode(q);
+        status("");
+        if (!found.length) { toast(t("err.notFound"), true); return; }
+        const pick = f => { ul.hidden = true; if (S.route !== "map") go("map", `lat=${f.lat}&lon=${f.lon}&name=${encodeURIComponent(f.name)}`); else openVillage(f.name, f.lat, f.lon); };
+        if (found.length === 1) return pick(found[0]);
+        ul.innerHTML = found.map((f, i) => `<li tabindex="0" data-i="${i}">${esc(f.name)}<small>${esc(f.full)}</small></li>`).join("");
+        ul.hidden = false;
+        ul.querySelectorAll("li").forEach(li => {
+          const choose = () => pick(found[+li.dataset.i]);
+          li.onclick = choose;
+          li.onkeydown = e => { if (e.key === "Enter") choose(); };
+        });
+        ul.querySelector("li").focus();
+      } catch (e) { status(""); toast(t("err.geocode") + ": " + e.message, true); }
+      finally { btn.disabled = false; }
+    });
+    document.addEventListener("click", e => { if (!form.contains(e.target)) ul.hidden = true; });
+    form.addEventListener("keydown", e => { if (e.key === "Escape") ul.hidden = true; });
+  }
+
+  // ---------- расчёт и отрисовка ----------
+  function summary() {
+    const cur = J.current(S.plots, S.herds, S.P), pl = J.plan(S.plots, S.herds, S.P);
+    return { overloaded_before: cur.overloaded, overloaded_after: pl.overloaded,
+      excess_t: +J.hayTonnes(cur.deficit_kg, S.P).toFixed(1), deficit_t: +J.hayTonnes(pl.deficit_kg, S.P).toFixed(1),
+      herds: S.herds.length, au: Math.round(S.herds.reduce((s, h) => s + J.herdAU(h, S.P), 0)), water_added: [...S.added] };
+  }
+
+  function render() {
+    if (!S.D) return;
+    S.cur = J.current(S.plots, S.herds, S.P);
+    S.pl = J.plan(S.plots, S.herds, S.P);
+    const past = S.plots.reduce((s, p) => s + p.pasture_ha, 0);
+    $("#vtitle").innerHTML = `<b>${esc(S.D.village.name)}</b> · Sentinel-2, ${S.D.source.year} · ${fmt(past)} ${t("common.ha")} ${src("sat")}`;
+    paintMap();
+    renderPane(S.tab);
+  }
+
+  function plotLabel(p) {
+    const r = S.mode === "current" ? S.cur : S.pl, l = r.load[p.id];
+    const small = window.matchMedia("(max-width: 860px)").matches;
+    if (S.mode === "ndvi") return `${p.id}<br>${p.ndvi ?? "—"}`;
+    return l.used ? `${p.id}<br>${pct(l.load)}` : (small ? p.id : `${p.id}<br>${t("map.free")}`);
+  }
+  function plotFill(p) {
+    const r = S.mode === "current" ? S.cur : S.pl;
+    return S.mode === "ndvi" ? ndviColor(p.ndvi) : loadColor(r.load[p.id].load);
+  }
+  function paintMap() {
+    if (S.noLeaflet) { renderSchemeMap(); }
+    else {
+      for (const p of S.plots) {
+        const lay = S.layers[p.id]; if (!lay) continue;
+        lay.setStyle({ fillColor: plotFill(p), fillOpacity: S.mode === "ndvi" ? 0.06 : 0.5, color: p.water ? "#8fd3ff" : "#ffffff",
+          weight: p.water && p.ring === "far" ? 2.6 : 1.2, dashArray: p.water ? null : "4 4" });
+        lay.setTooltipContent(plotLabel(p));
+      }
+      if (S.ndviLayer) { if (S.mode === "ndvi") S.ndviLayer.addTo(S.group); else S.ndviLayer.remove(); }
+    }
+    const lg = $("#legend");
+    if (!lg.dataset.bound) {      // на телефоне легенда свёрнута, раскрывается нажатием
+      lg.dataset.bound = "1";
+      lg.classList.toggle("collapsed", window.matchMedia("(max-width: 860px)").matches);
+      lg.addEventListener("click", () => lg.classList.toggle("collapsed"));
+      lg.setAttribute("role", "button"); lg.tabIndex = 0;
+      lg.addEventListener("keydown", e => { if (e.key === "Enter") lg.classList.toggle("collapsed"); });
+    }
+    lg.innerHTML = S.mode === "ndvi"
+      ? `<b>${t("map.legend.ndvi")} ${S.D.source.year}</b><i style="background:#2f9a4b"></i>${t("map.legend.dense")}<br><i style="background:#9fd068"></i>${t("map.legend.mid")}<br><i style="background:#d8b56a"></i>${t("map.legend.sparse")}<br><i style="background:#8c510a"></i>${t("map.legend.none")}<br><small>${t("map.legend.nonpasture")}</small>`
+      : `<b>${t("map.legend.load")}</b><i style="background:#3e8e5a"></i>${t("map.legend.ok")}<br><i style="background:#c9970f"></i>${t("map.legend.warn")}<br><i style="background:#bf4a2a"></i>${t("map.legend.bad")}<br><i style="background:#9aa29a"></i>${t("map.legend.idle")}<br><i style="border:2px solid #2f7aa6"></i>${t("map.legend.water")}<br><i style="border:1.5px dashed #555"></i>${t("map.legend.nowater")}`;
+    $$(".modes button").forEach(b => { const on = b.dataset.mode === S.mode; b.classList.toggle("on", on); b.setAttribute("aria-selected", on); });
+  }
+
+  // ---------- схема участков (SVG): героиня главной, сравнение, PDF и запасная карта без сети ----------
+  function scheme(plots, colorOf, labelOf, { size = 300, dark = false, interactive = false } = {}) {
+    const c = size / 2, rNear = [size * 0.06, size * 0.27], rFar = [size * 0.27, size * 0.48];
+    const pt = (r, a) => [c + r * Math.sin(a), c - r * Math.cos(a)];
+    const arc = (r1, r2, a1, a2) => {
+      const [x1, y1] = pt(r2, a1), [x2, y2] = pt(r2, a2), [x3, y3] = pt(r1, a2), [x4, y4] = pt(r1, a1);
+      return `M${x1.toFixed(1)},${y1.toFixed(1)} A${r2},${r2} 0 0 1 ${x2.toFixed(1)},${y2.toFixed(1)} L${x3.toFixed(1)},${y3.toFixed(1)} A${r1},${r1} 0 0 0 ${x4.toFixed(1)},${y4.toFixed(1)}Z`;
+    };
+    const dirs = J.DIRS;
+    const parts = plots.map(p => {
+      const i = dirs.indexOf(p.dir), [r1, r2] = p.ring === "near" ? rNear : rFar;
+      const a1 = (i * 45 - 22.5) * Math.PI / 180, a2 = (i * 45 + 22.5) * Math.PI / 180, am = i * 45 * Math.PI / 180;
+      const [lx, ly] = pt((r1 + r2) / 2, am);
+      const stroke = p.water && p.ring === "far" ? "#8fd3ff" : (dark ? "#1b3f30" : "#ffffff");
+      const lab = labelOf(p);
+      return `<g${interactive ? ` data-plot="${p.id}" tabindex="0" role="button" aria-label="${esc(p.id)}" style="cursor:pointer"` : ""}>
+        <path d="${arc(r1, r2, a1, a2)}" fill="${colorOf(p)}" stroke="${stroke}" stroke-width="${p.water && p.ring === "far" ? 2.5 : 1.5}" ${p.water ? "" : 'stroke-dasharray="3 3"'}/>
+        <text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" font-size="${p.ring === "near" ? size * 0.03 : size * 0.038}" font-weight="700" fill="#fff" style="paint-order:stroke;stroke:rgba(0,0,0,.55);stroke-width:2px">
+          <tspan x="${lx.toFixed(1)}" dy="-0.2em">${esc(p.id)}</tspan>${lab ? `<tspan x="${lx.toFixed(1)}" dy="1.15em" font-weight="600">${esc(lab)}</tspan>` : ""}</text></g>`;
+    }).join("");
+    return `<svg viewBox="0 0 ${size} ${size}" role="img" aria-label="${t("ov.schemes")}">${parts}<circle cx="${c}" cy="${c}" r="${size * 0.022}" fill="${dark ? "#e3b25c" : "#1b2a21"}" stroke="#fff" stroke-width="1.5"/></svg>`;
+  }
+  function renderSchemeMap() {
+    const el = $("#schemeMap");
+    el.innerHTML = `<p class="fine">${ic("wifioff")} ${t("map.fallback")}</p>` +
+      scheme(S.plots, plotFill, p => { const l = (S.mode === "current" ? S.cur : S.pl).load[p.id]; return S.mode === "ndvi" ? String(p.ndvi ?? "—") : (l.used ? pct(l.load) : ""); }, { size: 520, interactive: true });
+    el.querySelectorAll("[data-plot]").forEach(g => {
+      g.onclick = () => openPlot(g.dataset.plot);
+      g.onkeydown = e => { if (e.key === "Enter") openPlot(g.dataset.plot); };
+    });
+  }
+
+  // ---------- карточка участка ----------
+  function spark(series) {
+    if (!series || series.length < 2) return "";
+    const w = 240, h = 50, vs = series.map(x => x.v), lo = Math.min(...vs) - 0.02, hi = Math.max(...vs) + 0.02;
+    const X = i => 4 + i * (w - 8) / (series.length - 1), Y = v => h - 13 - (v - lo) / (hi - lo) * (h - 20);
+    const ch = (vs[vs.length - 1] - vs[0]) / vs[0] * 100, col = ch <= -10 ? "#bf4a2a" : ch >= 10 ? "#3e8e5a" : "#627064";
+    const d = s => s.slice(8, 10) + "." + s.slice(5, 7);
+    return `<p style="margin:10px 0 0;font-size:12.5px">${t("pop.season")}: <b style="color:${col}">${ch >= 0 ? "+" : ""}${ch.toFixed(0)} %</b> ${src("sat")}</p>
+      <svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block;max-width:100%">
+      <polyline points="${series.map((x, i) => `${X(i).toFixed(1)},${Y(x.v).toFixed(1)}`).join(" ")}" fill="none" stroke="${col}" stroke-width="2"/>
+      ${series.map((x, i) => `<circle cx="${X(i).toFixed(1)}" cy="${Y(x.v).toFixed(1)}" r="2.6" fill="${col}"><title>${d(x.d)}: ${x.v}</title></circle>`).join("")}
+      <text x="2" y="${h - 1}" font-size="10" fill="#627064">${d(series[0].d)}</text><text x="${w - 2}" y="${h - 1}" font-size="10" fill="#627064" text-anchor="end">${d(series[series.length - 1].d)}</text></svg>`;
+  }
+  function plotHtml(p) {
+    const c = J.plotCapacity(p, S.P), l = (S.mode === "current" ? S.cur : S.pl).load[p.id];
+    const names = l.herds.map(x => (S.herds.find(h => h.id === x.herd) || {}).name).filter(Boolean);
+    const ndviRow = p.ndvi_base != null ? `${p.ndvi_base} → ${p.ndvi}` : (p.ndvi ?? "—");
+    return `<div class="pop"><h3 style="margin:0 0 6px">${esc(p.id)} <small style="font-weight:500;color:#627064">${p.ring === "near" ? t("pop.near") : t("pop.far")}, ~${p.dist_km} ${t("common.km")}, ${p.dir}</small></h3>
+      <table><tbody>
+      <tr><td>${t("pop.pasture")}</td><td>${fmt(p.pasture_ha)} ${t("common.ha")} ${src("sat")}</td></tr>
+      <tr><td>${t("pop.ndvi")}${p.ndvi_base != null ? ` ${S.D.source.base_year} → ${S.D.source.year}` : ""}</td><td>${ndviRow} ${src("sat")}</td></tr>
+      <tr><td>${t("pop.conf")}</td><td>${confTag(p)}</td></tr>
+      <tr><td>${t("pop.forage")}</td><td>${fmt(c.forage / 1000)} ${t("pop.t")} ${src("model")}</td></tr>
+      <tr><td>${t("pop.cap")}</td><td>≈ ${fmt(c.au_season / S.P.au.sheep)} ${t("pop.sheep")} ${src("model")}</td></tr>
+      <tr><td>${t("pop.load")}</td><td><b>${pct(l.load)}</b> (${S.mode === "current" ? t("kpi.before") : t("kpi.after")})</td></tr>
+      <tr><td>${t("pop.herds")}</td><td style="white-space:normal">${esc(names.join(", ")) || "—"}</td></tr>
+      <tr><td>${t("pop.water")}</td><td style="white-space:normal">${esc(p.water_source)}</td></tr>
+      </tbody></table>
+      ${spark(p.series)}
+      ${p.ring === "far" && S.baseWater[p.id] === false ? `<label class="check" style="margin-top:8px"><input type="checkbox" data-water="${p.id}" ${S.added.has(p.id) ? "checked" : ""}> ${t("pop.hasWater")} ${src("input")}</label>` : ""}
+      <a class="btn btn-tg btn-sm" style="width:100%;margin-top:10px;color:#fff" href="${botLink(p.id)}" target="_blank" rel="noopener">${ic("send")} ${t("pop.subscribe")}</a>
+      ${S.botSubs[p.id] ? `<p class="fine" style="margin:6px 0 0">${t("pop.subsCount", { n: S.botSubs[p.id] })}</p>` : ""}</div>`;
+  }
+  function bindPlotHtml(root) {
+    root.querySelectorAll("[data-water]").forEach(chk => chk.onchange = () => { toggleWater(chk.dataset.water, chk.checked); });
+  }
+  let plotDlg;
+  function openPlot(id) {
+    const p = S.plots.find(x => x.id === id); if (!p) return;
+    if (!S.noLeaflet && S.layers[id]) {
+      const h = $("#map").clientHeight;
+      const pop = L.popup({ maxWidth: 300, maxHeight: Math.max(220, h - 120), autoPanPaddingTopLeft: [16, 70], autoPanPaddingBottomRight: [16, 16] })
+        .setLatLng(S.layers[id].getBounds().getCenter()).setContent(plotHtml(p)).openOn(S.map);
+      bindPlotHtml(pop.getElement());
+      return;
+    }
+    plotDlg = plotDlg || Object.assign(document.createElement("dialog"), { className: "modal" });
+    if (!plotDlg.isConnected) document.body.appendChild(plotDlg);
+    plotDlg.innerHTML = `<form method="dialog" class="modal-x"><button aria-label="${t("common.close")}">${ic("x")}</button></form>` + plotHtml(p);
+    bindPlotHtml(plotDlg);
+    plotDlg.showModal();
+  }
+  function focusPlot(id) {
+    if (!S.plots.some(p => p.id === id)) return;
+    if (!S.noLeaflet && S.layers[id]) S.map.fitBounds(S.layers[id].getBounds(), { padding: [40, 40], maxZoom: 13, animate: false });
+    openPlot(id);
+  }
+  function toggleWater(id, on) {
+    if (S.baseWater[id] !== false) return;
+    on ? S.added.add(id) : S.added.delete(id);
+    rebuildPlots();
+    render();
+    if (S.map) S.map.closePopup();
+    toast(on ? `${t("water.added")}: ${id}` : `${t("water.remove")}: ${id}`);
+  }
+
+  // ---------- вкладки панели ----------
+  function renderPane(tab) {
+    S.tab = tab;
+    $$(".tabs [data-tab]").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === tab));
+    $$(".pane").forEach(p => { p.hidden = p.dataset.pane !== tab; });
+    const el = $(`.pane[data-pane="${tab}"]`);
+    ({ overview: paneOverview, herds: paneHerds, routes: paneRoutes, water: paneWater, plots: panePlots, data: paneData })[tab](el);
+  }
+
+  function kpi(label, a, b, srcs, fmtFn = fmt, lowerIsBetter = true) {
+    const good = lowerIsBetter ? b <= a : b >= a;
+    return `<div class="kpi"><div class="k">${label}</div>
+      <div class="v"><span class="was">${fmtFn(a)}</span><span class="arr">→</span><span class="${good ? "now" : "was"}">${fmtFn(b)}</span></div>
+      <div class="lbl"><span>${t("kpi.before")}</span><span>${t("kpi.after")}</span></div>${srcs}</div>`;
+  }
+  function compareChart() {
+    const rows = S.plots.filter(p => S.cur.load[p.id].used > 0 || S.pl.load[p.id].used > 0)
+      .sort((a, b) => S.cur.load[b.id].load - S.cur.load[a.id].load);
+    if (!rows.length) return "";
+    const maxL = Math.min(8, Math.max(1.2, ...rows.map(p => Math.max(S.cur.load[p.id].load, S.pl.load[p.id].load)).filter(isFinite)));
+    const W = 400, L0 = 46, R = 50, bh = 9, gap = 6, rh = bh * 2 + gap + 8, H = rows.length * rh + 26;
+    const x = v => L0 + Math.min(v, maxL) / maxL * (W - L0 - R);
+    const bar = (v, y, col) => `<rect x="${L0}" y="${y}" width="${Math.max(1.5, x(v) - L0).toFixed(1)}" height="${bh}" rx="3" fill="${col}"/>
+      <text x="${(x(v) + 4).toFixed(1)}" y="${y + bh - 1}" font-size="10.5" fill="#3b4a40">${pct(v)}${v > maxL ? " ›" : ""}</text>`;
+    const body = rows.map((p, i) => {
+      const y = 8 + i * rh, lc = S.cur.load[p.id].load, lp = S.pl.load[p.id].load;
+      return `<text x="0" y="${y + bh + 4}" font-size="11.5" font-weight="700" fill="#1b2a21">${esc(p.id)}</text>${bar(lc, y, loadColor(lc))}${bar(lp, y + bh + 3, "#2f7aa6")}`;
+    }).join("");
+    return `<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${t("ov.compare")}">${body}
+      <line x1="${x(1)}" x2="${x(1)}" y1="2" y2="${H - 18}" stroke="#1b2a21" stroke-dasharray="3 3"/>
+      <text x="${x(1)}" y="${H - 4}" font-size="10.5" text-anchor="middle" fill="#1b2a21">100 %</text></svg>
+      <p class="cap"><i style="display:inline-block;width:10px;height:10px;background:#bf4a2a;border-radius:3px"></i> ${t("kpi.before")} &nbsp;
+      <i style="display:inline-block;width:10px;height:10px;background:#2f7aa6;border-radius:3px"></i> ${t("kpi.after")}. ${t("ov.compareNote")}</p></div>`;
+  }
+  function paneOverview(el) {
+    if (!S.herds.length) {
+      el.innerHTML = `<p class="empty">${t("ov.noherds")}</p><button class="btn btn-soft" id="addDemo">${ic("plus")} ${t("ov.addDemo")}</button> <button class="btn btn-ghost" id="addHerd0">${ic("plus")} ${t("herds.add")}</button>${paramsBlock()}`;
+      $("#addDemo", el).onclick = () => { S.herds = DEMO_HERDS.map(h => Object.assign({ demo: true }, h)); render(); };
+      $("#addHerd0", el).onclick = () => { addHerd(); renderPane("herds"); };
+      bindParams(el);
+      return;
+    }
+    const hc = J.hayTonnes(S.cur.deficit_kg, S.P), hp = J.hayTonnes(S.pl.deficit_kg, S.P);
+    const mln = x => fmt1(x * S.P.hay_price / 1e6);
+    el.innerHTML = `<div class="kpis">
+        ${kpi(t("kpi.overloaded"), S.cur.overloaded, S.pl.overloaded, src("model"))}
+        ${kpi(t("kpi.excess"), hc, hp, src("model"))}
+        ${kpi(t("kpi.cost"), hc, hp, src("model") + " " + src("input"), mln)}
+      </div>
+      <p class="note warn">${t("kpi.costNote")}</p>
+      <p class="note">${t("ov.explain.cur", { t: fmt(hc) })} ${t("ov.explain.plan")}${hp > 0 ? " " + t("ov.explain.deficit", { t: fmt(hp) }) : ""}</p>
+      <h3>${ic("chart")} ${t("ov.compare")}</h3>${compareChart()}
+      <h3>${ic("grid")} ${t("ov.schemes")}</h3>
+      <div class="schemes">
+        <figure>${scheme(S.plots, p => loadColor(S.cur.load[p.id].load), p => (S.cur.load[p.id].used ? pct(S.cur.load[p.id].load) : ""))}<figcaption>${t("map.mode.current")}</figcaption></figure>
+        <figure>${scheme(S.plots, p => loadColor(S.pl.load[p.id].load), p => (S.pl.load[p.id].used ? pct(S.pl.load[p.id].load) : ""))}<figcaption>${t("map.mode.plan")}</figcaption></figure>
+      </div>${paramsBlock()}`;
+    bindParams(el);
+  }
+  function paramsBlock() {
+    const f = [["season_days", "params.season"], ["intake", "params.intake"], ["util", "params.util"], ["k_ndvi", "params.k"], ["hay_price", "params.hay"]];
+    return `<details class="params"><summary>${t("params.title")} ${src("model")} ${src("input")}</summary>
+      ${f.map(([k, l]) => `<label class="field">${t(l)}<input type="number" step="any" min="0" data-param="${k}" value="${S.P[k]}"></label>`).join("")}
+      <button class="linkbtn" data-reset>${t("params.reset")}</button></details>`;
+  }
+  function bindParams(el) {
+    el.querySelectorAll("[data-param]").forEach(i => i.onchange = () => {
+      const v = +i.value; if (!Number.isFinite(v) || v <= 0) { i.value = S.P[i.dataset.param]; return; }
+      S.P[i.dataset.param] = v; render();
+    });
+    const r = el.querySelector("[data-reset]"); if (r) r.onclick = () => { S.P = J.params(); render(); };
+  }
+
+  function addHerd() {
+    S.herds.push({ id: "h" + Date.now().toString(36), name: t("herds.farm") + " " + (S.herds.length + 1), sheep: 300, goats: 0, cattle: 0, horses: 0, home: "Б-С", daily_return: false });
+    render();
+  }
+  function paneHerds(el) {
+    const near = S.plots.filter(p => p.ring === "near").map(p => p.id);
+    const tag = h => h.mine ? `<span class="tag tag-mine">${t("herds.mine")}</span>` : h.from_bot ? `<span class="tag tag-tg">${t("herds.tg")}</span>` : h.demo ? `<span class="tag">${t("herds.demo")}</span>` : "";
+    el.innerHTML = S.herds.map((h, i) => `<div class="herd" data-i="${i}">
+        <div class="herd-head"><input data-k="name" value="${esc(h.name)}" aria-label="${t("herds.name")}" ${h.mine || h.from_bot ? "readonly" : ""}>${tag(h)}
+          ${h.mine || h.from_bot ? "" : `<button class="btn btn-ghost btn-sm" data-del aria-label="${t("herds.remove")}">${ic("trash")}</button>`}</div>
+        <div class="herd-grid">
+          ${["sheep", "goats", "cattle", "horses"].map(k => `<label class="field">${t("herds." + k)}<input type="number" inputmode="numeric" min="0" step="10" data-k="${k}" value="${h[k] || 0}" ${h.mine || h.from_bot ? "readonly" : ""}></label>`).join("")}
+        </div>
+        <div class="herd-foot">
+          <label class="field" style="flex-direction:row;align-items:center;gap:8px">${t("herds.home")}<select data-k="home" ${h.mine || h.from_bot ? "disabled" : ""}>${near.map(id => `<option ${id === h.home ? "selected" : ""}>${id}</option>`).join("")}</select></label>
+          <label class="check"><input type="checkbox" data-k="daily_return" ${h.daily_return ? "checked" : ""} ${h.mine || h.from_bot ? "disabled" : ""}> ${t("herds.daily")}</label>
+          <span class="au">${fmt(J.herdAU(h, S.P))} ${t("herds.au")} ${src("input")}</span>
+        </div></div>`).join("") +
+      `<button class="btn btn-soft" id="addHerd">${ic("plus")} ${t("herds.add")}</button><p class="note">${t("herds.note")}</p>`;
+    $$(".herd", el).forEach(card => {
+      const h = S.herds[+card.dataset.i];
+      card.querySelectorAll("[data-k]").forEach(inp => inp.onchange = () => {
+        const k = inp.dataset.k;
+        h[k] = inp.type === "checkbox" ? inp.checked : inp.type === "number" ? Math.max(0, Math.round(+inp.value || 0)) : inp.value;
+        if (inp.type === "number") inp.value = h[k];
+        delete h.demo;
+        S.cur = J.current(S.plots, S.herds, S.P); S.pl = J.plan(S.plots, S.herds, S.P); paintMap();
+        card.querySelector(".au").innerHTML = `${fmt(J.herdAU(h, S.P))} ${t("herds.au")} ${src("input")}`;
+      });
+      const del = card.querySelector("[data-del]");
+      if (del) del.onclick = () => { S.herds.splice(+card.dataset.i, 1); render(); };
+    });
+    $("#addHerd", el).onclick = addHerd;
+  }
+
+  function paneRoutes(el) {
+    if (!S.herds.length) { el.innerHTML = `<p class="empty">${t("ov.noherds")}</p>`; return; }
+    const Sd = S.P.season_days, byId = Object.fromEntries(S.plots.map(p => [p.id, p]));
+    el.innerHTML = S.herds.map(h => {
+      const bars = (S.pl.herdPlans[h.id] || []).map(s => {
+        const cls = s.plot ? byId[s.plot].ring : "gap";
+        const lab = s.plot || t("routes.nofeed");
+        return `<span class="${cls}" style="left:${(s.from - 1) / Sd * 100}%;width:${(s.to - s.from + 1) / Sd * 100}%" title="${esc(lab)}: ${t("common.days")} ${s.from}–${s.to}">${esc(lab)}</span>`;
+      }).join("");
+      return `<div class="rname"><span>${esc(h.name)}</span><small>${fmt(J.herdAU(h, S.P))} ${t("herds.au")}</small></div><div class="tl" role="img" aria-label="${esc(h.name)}">${bars}</div>`;
+    }).join("") + `<p class="note">${t("routes.note", { d: Sd })} ${src("model")}</p>`;
+  }
+
+  function paneWater(el) {
+    const ws = J.wells(S.plots, S.P);
+    const baseOnly = S.D.plots.map(p => Object.assign({}, p, { water: S.baseWater[p.id] }));
+    const before = J.plan(baseOnly, S.herds, S.P);
+    const added = [...S.added];
+    el.innerHTML = `<h3>${ic("drop")} ${t("water.title")} ${src("model")}</h3>
+      ${ws.length ? `<ul class="list">${ws.map((w, i) => `<li class="row"><div class="grow"><b>${i + 1}. ${esc(w.plot)}</b><small>${t("water.opens", { n: fmt(w.sheep) })}</small></div>
+        <div class="btns"><button class="btn btn-soft btn-sm" data-add="${w.plot}">${ic("plus")} ${t("water.add")}</button></div></li>`).join("")}</ul>` : `<p class="empty">${t("water.none")}</p>`}
+      ${added.length ? `<h3>${t("water.added")} ${src("input")}</h3><ul class="list">${added.map(id => `<li class="row"><div class="grow"><b>${esc(id)}</b></div>
+        <div class="btns"><button class="btn btn-ghost btn-sm" data-rm="${id}">${ic("x")} ${t("water.remove")}</button></div></li>`).join("")}</ul>
+        <p class="note">${t("water.effect", { a: fmt(J.hayTonnes(before.deficit_kg, S.P)), b: fmt(J.hayTonnes(S.pl.deficit_kg, S.P)), c: before.overloaded, d: S.pl.overloaded })}</p>` : ""}
+      <p class="note">${t("water.note")}</p>`;
+    el.querySelectorAll("[data-add]").forEach(b => b.onclick = () => toggleWater(b.dataset.add, true));
+    el.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => toggleWater(b.dataset.rm, false));
+  }
+
+  function panePlots(el) {
+    el.innerHTML = `<div class="tablewrap"><table><thead><tr><th>${t("plots.id")}</th><th class="num">${t("plots.ha")}</th><th class="num">${t("plots.ndvi")}</th>
+      <th class="num">${t("plots.cap")}</th><th class="num">${t("plots.load")}</th><th>${t("plots.conf")}</th></tr></thead><tbody>
+      ${S.plots.map(p => { const l = S.pl.load[p.id].load, c = J.plotCapacity(p, S.P);
+        return `<tr data-plot="${p.id}" tabindex="0" style="cursor:pointer"><td><b>${esc(p.id)}</b> ${p.water ? ic("drop") : ""}</td><td class="num">${fmt(p.pasture_ha)}</td>
+        <td class="num">${p.ndvi ?? "—"}</td><td class="num">${fmt(c.au_season / S.P.au.sheep)}</td>
+        <td class="num"><span class="loadpill" style="background:${loadColor(l)}">${S.pl.load[p.id].used ? pct(l) : "—"}</span></td><td>${confTag(p)}</td></tr>`; }).join("")}
+      </tbody></table></div><p class="srcrow" style="margin-top:10px">${t("plots.ha")}, NDVI: ${src("sat")} &nbsp; ${t("plots.cap")}, ${t("plots.load")}: ${src("model")}</p>`;
+    el.querySelectorAll("tr[data-plot]").forEach(r => {
+      const go2 = () => { if (window.matchMedia("(max-width: 860px)").matches) window.scrollTo({ top: 0, behavior: "smooth" }); focusPlot(r.dataset.plot); };
+      r.onclick = go2; r.onkeydown = e => { if (e.key === "Enter") go2(); };
+    });
+  }
+
+  function trendLine() {
+    if (!S.D.source.base_year) return "";
+    const avg = ring => { const xs = S.D.plots.filter(p => p.ring === ring && p.ndvi != null && p.ndvi_base != null); return xs.reduce((a, p) => a + p.ndvi - p.ndvi_base, 0) / xs.length; };
+    const f = x => (x >= 0 ? "+" : "") + x.toFixed(3);
+    return t("data.trend", { a: S.D.source.base_year, b: S.D.source.year, n: f(avg("near")), f: f(avg("far")) });
+  }
+  function paneData(el) {
+    const s = S.D.source, counts = { high: 0, medium: 0, low: 0 };
+    S.plots.forEach(p => counts[confidence(p)]++);
+    el.innerHTML = `<div class="srcblock s-sat"><h3>${src("sat")} ${t("data.sat.t")}</h3>
+        <p>${t("data.village")}: <b>${esc(S.D.village.name)}</b> (${S.D.village.lat}, ${S.D.village.lon}). ${t("data.year")}: <b>${s.year}</b>.<br>
+        ${t("data.scenes")} (${s.dates.length}): ${s.dates.slice().sort().join(", ")}.</p>
+        <p style="margin-top:8px">${t("plots.conf")}: <span class="conf conf-high">${t("conf.high")} ${counts.high}</span> <span class="conf conf-medium">${t("conf.medium")} ${counts.medium}</span> <span class="conf conf-low">${t("conf.low")} ${counts.low}</span></p>
+        ${trendLine() ? `<p class="note">${trendLine()}</p>` : ""}</div>
+      <div class="srcblock s-input"><h3>${src("input")} ${t("data.input.t")}</h3><p>${t("data.input.d")}</p></div>
+      <div class="srcblock s-model"><h3>${src("model")} ${t("data.model.t")}</h3><p>${t("data.model.d")}</p></div>
+      <p><a href="#/data">${t("nav.data")}</a></p>`;
+  }
+
+  // ---------- сценарии ----------
+  function scenarioPayload(name, shared) {
+    return { name, shared: !!shared, village: S.D.village,
+      herds: S.herds.filter(h => !h.from_bot).map(h => ({ id: h.id, name: h.name, sheep: h.sheep || 0, goats: h.goats || 0, cattle: h.cattle || 0, horses: h.horses || 0, home: h.home, daily_return: !!h.daily_return })),
+      water: [...S.added], params: { season_days: S.P.season_days, intake: S.P.intake, util: S.P.util, k_ndvi: S.P.k_ndvi, hay_price: S.P.hay_price },
+      summary: summary() };
+  }
+  async function saveScenario(shared) {
+    if (!S.D) return;
+    const name = await askText(t("act.namePrompt"), `${S.D.village.name}, ${dateStr(new Date(), false)}`);
+    if (!name) return;
+    try {
+      await C.saveScenario(scenarioPayload(name, shared));
+      toast(shared ? t("act.published") : C.loggedIn ? t("act.saved") : t("act.savedLocal"));
+      C.addHistory({ kind: shared ? "publish" : "save", village: S.D.village, summary: summary() });
+    } catch (e) { toast(errText(e), true); }
+  }
+  function loadScenario(sc) {
+    // сценарий применяется при открытии карты (onRoute) — так не бывает двух параллельных загрузок
+    S.pending = { key: cacheKey(sc.village.lat, sc.village.lon), opts: { herds: sc.herds || [], water: sc.water || [], params: sc.params || null } };
+    const h = `#/map?lat=${sc.village.lat}&lon=${sc.village.lon}&name=${encodeURIComponent(sc.village.name)}`;
+    if (location.hash === h) onRoute(); else location.hash = h;
+  }
+  const errText = e => (e && e.message === "offline" ? t("err.offline") : e && e.message === "network" ? t("err.server") : (e && e.message) || t("err.server"));
+  const when = s => dateStr(s);
+  const kindLabel = k => t("hist." + k) === "hist." + k ? k : t("hist." + k);
+  const sumLine = s => (s ? `${t("kpi.overloaded")}: ${s.overloaded_before} → ${s.overloaded_after}; ${t("kpi.excess")}: ${fmt(s.excess_t || 0)} → ${fmt(s.deficit_t || 0)}` : "");
+
+  async function renderScenarios() {
+    const el = $("#scPage");
+    el.innerHTML = `<div class="card"><p class="empty">…</p></div>`;
+    let sc, hist;
+    try { [sc, hist] = await Promise.all([C.listScenarios(), C.listHistory()]); }
+    catch (e) { el.innerHTML = `<div class="card"><p class="empty">${esc(errText(e))}</p></div>`; return; }
+    const row = (s, canDel) => `<li class="row"><div class="grow"><b>${esc(s.name)}</b><small>${esc(s.village.name)} · ${when(s.created)} · ${(s.herds || []).length} ${t("sc.herds")} · ${(s.water || []).length} ${t("sc.water")}${s.ownerName && s.shared ? " · " + esc(s.ownerName) : ""}</small><small>${sumLine(s.summary)}</small></div>
+      <div class="btns"><button class="btn btn-soft btn-sm" data-load="${esc(s.id)}">${t("sc.load")}</button>${canDel ? `<button class="btn btn-ghost btn-sm" data-del="${esc(s.id)}" aria-label="${t("sc.del")}">${ic("trash")}</button>` : ""}</div></li>`;
+    const all = (sc.own || []).concat(sc.shared || []);
+    el.innerHTML = `${!C.loggedIn ? `<p class="note warn">${t("sc.guestNote")}</p>` : ""}
+      <div class="card"><h2>${ic("layers")} ${t("sc.own")}</h2>${(sc.own || []).length ? `<ul class="list">${sc.own.map(s => row(s, true)).join("")}</ul>` : `<p class="empty">${t("sc.empty")}</p>`}</div>
+      ${C.loggedIn ? `<div class="card"><h2>${ic("users")} ${t("sc.shared")}</h2>${(sc.shared || []).length ? `<ul class="list">${sc.shared.map(s => row(s, C.user && s.owner === C.user.uid)).join("")}</ul>` : `<p class="empty">${t("sc.sharedEmpty")}</p>`}</div>` : ""}
+      <div class="card"><h2>${ic("clock")} ${t("sc.history")}</h2>${(hist || []).length ? `<ul class="list">${hist.slice(0, 30).map((h, i) => `<li class="row"><div class="grow"><b>${esc(h.village.name)}</b><small>${when(h.at)} · ${esc(kindLabel(h.kind))}</small><small>${sumLine(h.summary)}</small></div>
+        <div class="btns"><button class="btn btn-ghost btn-sm" data-hist="${i}">${t("sc.load")}</button></div></li>`).join("")}</ul>` : `<p class="empty">${t("sc.histEmpty")}</p>`}</div>`;
+    el.querySelectorAll("[data-load]").forEach(b => b.onclick = () => { const s = all.find(x => x.id === b.dataset.load); if (s) loadScenario(s); });
+    el.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+      try { await C.deleteScenario(b.dataset.del); renderScenarios(); } catch (e) { toast(errText(e), true); }
+    });
+    el.querySelectorAll("[data-hist]").forEach(b => b.onclick = () => { const h = hist[+b.dataset.hist]; go("map", `lat=${h.village.lat}&lon=${h.village.lon}&name=${encodeURIComponent(h.village.name)}`); });
+  }
+
+  // ---------- вход ----------
+  let pollTimer = null;
+  async function openLogin() {
+    const dlg = $("#loginDlg"), body = $("#loginBody");
+    clearTimeout(pollTimer);
+    body.innerHTML = `<p>${t("pr.login.d")}</p><div class="waiting"><span class="spin" style="width:16px;height:16px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite"></span><span id="lgWait">${t("login.wait")}</span></div>`;
+    if (!dlg.open) dlg.showModal();
+    const wake = setTimeout(() => { const w = $("#lgWait"); if (w) w.textContent = t("login.wake"); }, 4000);
+    let st;
+    try { st = await C.startLogin(); }
+    catch (e) { clearTimeout(wake); body.innerHTML = `<p class="note warn">${t("login.fail")}</p><button class="btn btn-ghost" id="lgAgain">${t("login.again")}</button>`; $("#lgAgain").onclick = openLogin; return; }
+    clearTimeout(wake);
+    body.innerHTML = `<ol class="steps-ol"><li>${t("login.step1")}</li><li>${t("login.step2")}</li></ol>
+      <div class="code" aria-label="${t("login.code")}">${esc(st.code)}</div>
+      <a class="btn btn-tg wide" href="${esc(st.link)}" target="_blank" rel="noopener">${ic("send")} ${t("login.open")}</a>
+      <div class="waiting" id="lgState"><span class="spin" style="width:16px;height:16px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite"></span>${t("login.wait")}</div>`;
+    const started = Date.now();
+    const poll = async () => {
+      if (!dlg.open) return;
+      try {
+        const r = await C.pollLogin(st.nonce);
+        if (r.status === "ok") { dlg.close(); toast(t("login.ok")); await afterAuthChange(); return; }
+        if (r.status === "denied" || r.status === "expired") {
+          $("#lgState").innerHTML = `<span>${t(r.status === "denied" ? "login.denied" : "login.expired")}</span> <button class="btn btn-ghost btn-sm" id="lgAgain">${t("login.again")}</button>`;
+          $("#lgAgain").onclick = openLogin; return;
+        }
+      } catch (_) { /* временная ошибка сети — пробуем дальше */ }
+      if (Date.now() - started < 600000) pollTimer = setTimeout(poll, 2500);
+    };
+    pollTimer = setTimeout(poll, 2500);
+  }
+
+  async function afterAuthChange() {
+    renderAccount();
+    if (S.D) { addOwnFarm(); render(); }
+    onRoute();
+  }
+  function renderAccount() {
+    const u = C.user;
+    $("#accountLabel").textContent = u ? u.name : t("auth.login");
+    const coord = !!u && u.role === "coordinator";
+    $$(".coord-only").forEach(el => { el.hidden = !coord; });
+  }
+
+  // ---------- профиль ----------
+  async function renderProfile() {
+    const el = $("#prPage"), u = C.user;
+    if (!u) {
+      el.innerHTML = `<div class="card"><h2>${ic("user")} ${t("pr.guest.t")}</h2><p>${t("pr.guest.d")}</p></div>
+        <div class="card"><h2>${ic("send")} ${t("pr.login.t")}</h2><p>${t("pr.login.d")}</p><button class="btn btn-tg" id="prLogin">${ic("send")} ${t("auth.login")}</button></div>`;
+      $("#prLogin").onclick = openLogin;
+      return;
+    }
+    const f = u.farm || { name: "", village: null, sheep: 0, goats: 0, cattle: 0, horses: 0, daily_return: false, home: "Б-С", plots: [] };
+    const plotIds = J.DIRS.map(d => "Б-" + d).concat(J.DIRS.map(d => "Д-" + d));
+    const initials = (u.name || "?").split(/\s+/).map(s => s[0]).join("").slice(0, 2).toUpperCase();
+    el.innerHTML = `<div class="card"><div class="who"><div class="avatar">${esc(initials)}</div><div><h2 style="margin:0">${esc(u.name)}</h2>
+        <span class="tag ${u.role === "coordinator" ? "tag-mine" : ""}">${t("role." + u.role)}</span></div></div>
+        <dl class="kv"><dt>${t("pr.id")}</dt><dd>${esc(u.uid)}${u.username ? " · @" + esc(u.username) : ""}</dd><dt>${t("pr.since")}</dt><dd>${when(u.created)}</dd></dl>
+        ${u.role !== "coordinator" ? `<p class="note">${t("pr.coordHint")}</p>` : ""}
+        <p style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px"><button class="btn btn-ghost" id="prLogout">${ic("logout")} ${t("auth.logout")}</button>
+        <button class="btn btn-danger" id="prDelete">${ic("trash")} ${t("pr.delete")}</button></p></div>
+      <form class="card" id="farmForm"><h2>${ic("leaf")} ${t("pr.farm")} ${src("input")}</h2>
+        <div class="formgrid">
+          <label class="field span2">${t("pr.farmName")}<input name="name" maxlength="60" value="${esc(f.name)}" required></label>
+          <div class="field span2">${t("pr.village")}<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><b id="farmVillage">${f.village ? esc(f.village.name) : "—"}</b>
+            ${S.D ? `<button type="button" class="btn btn-ghost btn-sm" id="farmUseMap">${ic("pin")} ${t("pr.useMap")}</button>` : ""}</div></div>
+          <div class="span4"><div class="search" id="farmSearch" style="max-width:520px"><svg class="ic"><use href="#i-search"/></svg><input id="farmQ" placeholder="${t("home.searchPh")}" aria-label="${t("pr.village")}"><button type="button" class="btn btn-ghost btn-sm" id="farmFind">${t("pr.villagePick")}</button><ul class="results" hidden></ul></div></div>
+          ${["sheep", "goats", "cattle", "horses"].map(k => `<label class="field">${t("herds." + k)}<input name="${k}" type="number" inputmode="numeric" min="0" step="10" value="${f[k] || 0}"></label>`).join("")}
+          <label class="field span2">${t("pr.home")}<select name="home">${plotIds.slice(0, 8).map(id => `<option ${id === f.home ? "selected" : ""}>${id}</option>`).join("")}</select></label>
+          <label class="check span2" style="align-self:end;padding-bottom:8px"><input type="checkbox" name="daily_return" ${f.daily_return ? "checked" : ""}> ${t("herds.daily")}</label>
+          <div class="span4 field">${t("pr.plots")}<div class="chips">${plotIds.map(id => `<label class="chip"><input type="checkbox" name="plots" value="${id}" ${(f.plots || []).includes(id) ? "checked" : ""}>${id}</label>`).join("")}</div></div>
+        </div>
+        <p style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px"><button class="btn btn-primary">${ic("save")} ${t("pr.saveFarm")}</button>
+        ${f.village ? `<a class="btn btn-soft" href="#/map?lat=${f.village.lat}&lon=${f.village.lon}&name=${encodeURIComponent(f.village.name)}">${ic("map")} ${t("pr.openMap")}</a>` : ""}</p></form>`;
+    let village = f.village;
+    $("#prLogout").onclick = async () => { await C.logout(); toast(t("auth.logout")); afterAuthChange(); };
+    let armed = false;
+    $("#prDelete").onclick = async e => {
+      if (!armed) { armed = true; e.currentTarget.textContent = t("pr.deleteConfirm"); return; }
+      try { await C.deleteAccount(); toast(t("pr.deleted")); afterAuthChange(); } catch (err) { toast(errText(err), true); }
+    };
+    const useMap = $("#farmUseMap");
+    if (useMap) useMap.onclick = () => { village = { name: S.D.village.name, lat: S.D.village.lat, lon: S.D.village.lon }; $("#farmVillage").textContent = village.name; };
+    const ul = $("#farmSearch .results");
+    $("#farmFind").onclick = async () => {
+      const q = $("#farmQ").value.trim(); if (!q) return;
+      try {
+        const found = await PL.geocode(q);
+        if (!found.length) { toast(t("err.notFound"), true); return; }
+        ul.innerHTML = found.map((x, i) => `<li tabindex="0" data-i="${i}">${esc(x.name)}<small>${esc(x.full)}</small></li>`).join(""); ul.hidden = false;
+        ul.querySelectorAll("li").forEach(li => li.onclick = () => { const x = found[+li.dataset.i]; village = { name: x.name, lat: x.lat, lon: x.lon }; $("#farmVillage").textContent = x.name; ul.hidden = true; });
+      } catch (e) { toast(t("err.geocode"), true); }
+    };
+    $("#farmForm").onsubmit = async ev => {
+      ev.preventDefault();
+      if (!village) { toast(t("pr.noVillage"), true); return; }
+      const fd = new FormData(ev.target);
+      const farm = { name: fd.get("name"), village, home: fd.get("home"), daily_return: fd.get("daily_return") === "on", plots: fd.getAll("plots") };
+      for (const k of ["sheep", "goats", "cattle", "horses"]) farm[k] = Math.max(0, Math.round(+fd.get(k) || 0));
+      try { await C.saveFarm(farm); toast(t("pr.farmSaved")); if (S.D) { addOwnFarm(); render(); } renderProfile(); }
+      catch (e) { toast(errText(e), true); }
+    };
+  }
+
+  // ---------- координатор ----------
+  async function renderCoord() {
+    const el = $("#coPage"), u = C.user;
+    if (!u || u.role !== "coordinator") { el.innerHTML = `<div class="card"><p>${t("co.denied")}</p></div>`; return; }
+    const vs = u.villages || [];
+    el.innerHTML = `<div class="card"><h2>${ic("pin")} ${t("co.villages")}</h2>
+      ${vs.length ? `<ul class="list">${vs.map(v => `<li class="row"><div class="grow"><b>${esc(v.name)}</b><small>${v.lat}, ${v.lon}</small></div>
+        <div class="btns"><button class="btn btn-soft btn-sm" data-farms="${esc(v.vk)}">${t("co.farms")}</button><button class="btn btn-ghost btn-sm" data-rmv="${esc(v.vk)}" aria-label="${t("co.remove")}">${ic("x")}</button></div></li>`).join("")}</ul>` : `<p class="empty">${t("co.noVillages")}</p>`}
+      ${S.D ? `<button class="btn btn-ghost" id="coAdd">${ic("plus")} ${t("co.addCurrent")}: ${esc(S.D.village.name)}</button>` : ""}</div>
+      <div class="card" id="coFarms" hidden></div>`;
+    const add = $("#coAdd");
+    if (add) add.onclick = async () => { try { await C.coordAddVillage(S.D.village); renderCoord(); } catch (e) { toast(errText(e), true); } };
+    el.querySelectorAll("[data-rmv]").forEach(b => b.onclick = async () => { try { await C.coordRemoveVillage(b.dataset.rmv); renderCoord(); } catch (e) { toast(errText(e), true); } });
+    el.querySelectorAll("[data-farms]").forEach(b => b.onclick = async () => {
+      const v = vs.find(x => x.vk === b.dataset.farms), box = $("#coFarms");
+      box.hidden = false; box.innerHTML = `<p class="empty">…</p>`;
+      try {
+        const { farms } = await C.coordFarms(v.vk);
+        box.innerHTML = `<h2>${ic("users")} ${t("co.farms")}: ${esc(v.name)}</h2>${farms.length ? `<div class="tablewrap"><table><thead><tr><th>${t("herds.farm")}</th><th>${t("co.owner")}</th>
+          <th class="num">${t("herds.sheep")}</th><th class="num">${t("herds.cattle")}</th><th class="num">${t("herds.horses")}</th><th>${t("co.updated")}</th></tr></thead><tbody>
+          ${farms.map(f => `<tr><td><b>${esc(f.name)}</b></td><td>${esc(f.owner)}</td><td class="num">${fmt(f.sheep)}</td><td class="num">${fmt(f.cattle)}</td><td class="num">${fmt(f.horses)}</td><td>${when(f.updated)}</td></tr>`).join("")}
+          </tbody></table></div><button class="btn btn-primary" id="coJoint" style="margin-top:14px">${ic("map")} ${t("co.joint")}</button>` : `<p class="empty">${t("co.noFarms")}</p>`}`;
+        const j = $("#coJoint");
+        if (j) j.onclick = () => loadScenario({ village: v, water: [], params: null,
+          herds: farms.map(f => ({ id: "f" + f.uid, name: `${f.name} (${f.owner})`, sheep: f.sheep, goats: f.goats, cattle: f.cattle, horses: f.horses, home: f.home, daily_return: f.daily_return })) });
+      } catch (e) { box.innerHTML = `<p class="empty">${esc(errText(e))}</p>`; }
+    });
+  }
+
+  // ---------- страница «О данных» ----------
+  function renderDataPage() {
+    $("#dataPage").innerHTML = `<div class="card">
+      <div class="srcblock s-sat"><h3>${src("sat")} ${t("data.sat.t")}</h3><p>${t("data.sat.d")}</p></div>
+      <div class="srcblock s-input"><h3>${src("input")} ${t("data.input.t")}</h3><p>${t("data.input.d")}</p></div>
+      <div class="srcblock s-model"><h3>${src("model")} ${t("data.model.t")}</h3><p>${t("data.model.d")}</p></div></div>
+      <div class="card"><h2>${ic("shield")} ${t("data.conf.t")}</h2><p>${t("data.conf.d")}</p>
+      <p><span class="conf conf-high">${t("conf.high")}</span> <span class="conf conf-medium">${t("conf.medium")}</span> <span class="conf conf-low">${t("conf.low")}</span></p>
+      <p class="note warn">${t("kpi.costNote")}</p></div>`;
+  }
+
+  // ---------- главная ----------
+  function renderHome() {
+    const plots = DEFAULT.plots.map(p => Object.assign({}, p));
+    const pl = J.plan(plots, DEMO_HERDS);
+    $("#heroScheme").innerHTML = scheme(plots, p => loadColor(pl.load[p.id].load), p => (pl.load[p.id].used ? pct(pl.load[p.id].load) : ""), { size: 320, dark: true });
+    const ha = plots.reduce((s, p) => s + p.pasture_ha, 0);
+    $("#heroStats").innerHTML = `<div><b>${plots.length}</b><span>${t("home.stat.plots")}</span></div><div><b>${DEFAULT.source.dates.length}</b><span>${t("home.stat.scenes")}</span></div><div><b>${fmt(ha)}</b><span>${t("home.stat.ha")}</span></div>`;
+    $("#heroStatNote").textContent = `${t("home.stat.note")} ${DEFAULT.source.year}. ${t("map.mode.plan")}: ${t("herds.demo").toLowerCase()}.`;
+    const last = C.ls.get("jaiylym:last", null), cb = $("#continueBtn");
+    if (last && !isKegen(last.lat, last.lon)) { cb.hidden = false; cb.textContent = t("home.continue") + last.name; cb.href = `#/map?lat=${last.lat}&lon=${last.lon}&name=${encodeURIComponent(last.name)}`; }
+    else cb.hidden = true;
+  }
+
+  // ---------- язык, сеть, запуск ----------
+  function setLang(l) {
+    I.setLang(l);
+    $$(".langsw button").forEach(b => b.setAttribute("aria-pressed", b.dataset.lang === I.lang));
+    renderAccount();
+    if (S.D) { rebuildPlots(); render(); }
+    onRoute();
+  }
+  function netState() {
+    $("#netbar").hidden = navigator.onLine;
+    if (navigator.onLine && netState.was === false) toast(t("err.online"));
+    netState.was = navigator.onLine;
+  }
+
+  async function init() {
+    I.applyStatic();
+    $$(".langsw button").forEach(b => { b.setAttribute("aria-pressed", b.dataset.lang === I.lang); b.onclick = () => setLang(b.dataset.lang); });
+    document.documentElement.lang = I.lang === "kk" ? "kk" : "ru";
+    bindSearch($("#heroSearch"), $("#heroQ"));
+    bindSearch($("#mapSearch"), $("#mapQ"));
+    $("#pickBtn").onclick = () => { if (S.noLeaflet) { toast(t("map.fallback"), true); return; } setPicking(!S.picking); };
+    $$(".modes button").forEach(b => b.onclick = () => { S.mode = b.dataset.mode; paintMap(); if (S.tab === "plots") renderPane("plots"); });
+    $$(".tabs [data-tab]").forEach(b => b.onclick = () => renderPane(b.dataset.tab));
+    $(".tabs").addEventListener("keydown", e => {
+      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+      const bs = $$(".tabs [data-tab]"), i = bs.findIndex(b => b.getAttribute("aria-selected") === "true");
+      const n = bs[(i + (e.key === "ArrowRight" ? 1 : bs.length - 1)) % bs.length]; n.focus(); renderPane(n.dataset.tab);
+    });
+    $("#saveScBtn").onclick = () => saveScenario(false);
+    $("#publishBtn").onclick = () => saveScenario(true);
+    $("#pdfBtn").onclick = async () => {
+      if (!S.D) return;
+      toast(t("rep.making"));
+      try { await window.Report.export(reportCtx()); C.addHistory({ kind: "pdf", village: S.D.village, summary: summary() }); }
+      catch (e) { toast(t("rep.printFallback"), true); }
+    };
+    $("#accountBtn").onclick = () => (C.loggedIn ? go("profile") : openLogin());
+    $("#loginDlg").addEventListener("close", () => clearTimeout(pollTimer));
+    window.addEventListener("hashchange", onRoute);
+    window.addEventListener("online", netState); window.addEventListener("offline", netState);
+    netState();
+    onRoute();
+    if (C.loggedIn) { try { await C.me(); } catch (_) {} renderAccount(); if (S.D) { addOwnFarm(); render(); } if (["profile", "coord", "scenarios"].includes(S.route)) onRoute(); }
+    else renderAccount();
+    if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+  }
+
+  // данные для PDF-отчёта
+  function reportCtx() {
+    return { t, fmt, fmt1, pct, esc, src, J, S, scheme, loadColor, confidence, summary: summary(), trend: trendLine(), lang: I.lang };
+  }
+
+  window.JaiylymApp = { S, openVillage, render, summary, confidence, scheme, reportCtx };   // для отладки и тестов
+  init();
+})();
