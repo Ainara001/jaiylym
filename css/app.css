@@ -83,6 +83,8 @@ button, input, select { font: inherit; color: inherit; }
 .langsw button[aria-pressed="true"] { background: var(--ink); color: #fff; }
 .account { max-width: 200px; }
 .account span { overflow: hidden; text-overflow: ellipsis; }
+.account .lbl-short { display: none; }
+@media (max-width: 860px) { .account .lbl-long { display: none; } .account .lbl-short { display: inline; } }
 .netbar { position: sticky; top: calc(var(--top-h) + env(safe-area-inset-top, 0px)); z-index: 999; display: flex; gap: 10px; align-items: center;
   padding: 8px 16px; background: #3b2f1c; color: #fff4dc; font-size: 14px; }
 
@@ -190,6 +192,12 @@ button, input, select { font: inherit; color: inherit; }
 .pasture .kv { margin-top: 8px; }
 .pasture .btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
 .pop td, .modal td, .pasture td { white-space: normal; vertical-align: top; }
+.modal-wide { width: min(880px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); }
+.pickmap { height: min(58vh, 520px); min-height: 280px; border-radius: 12px; margin-top: 10px; background: #dfe3d6; }
+.pickbar { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 10px; }
+.pksel { font-size: 14px; color: var(--ink-2); }
+.modal .search { margin-top: 6px; }
+@media (max-width: 860px) { .modal { padding: 18px 14px; } .modal-wide { width: calc(100vw - 16px); } .pickmap { height: 50vh; } }
 .pop td:first-child, .modal td:first-child, .pasture td:first-child { color: var(--muted); width: 42%; }
 .leaflet-container { font-family: var(--font); }
 .leaflet-popup-content-wrapper { border-radius: 14px; }
