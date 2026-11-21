@@ -15,6 +15,7 @@
  *                 видит хозяйства своих сёл, публикует общий план села.
  */
 const crypto = require("crypto");
+const PL = require("./web/pipeline.js");
 
 const SESSION_TTL = 30 * 24 * 3600;
 const LOGIN_TTL = 600;
@@ -77,7 +78,7 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
   // ---------- представления данных ----------
   const pubUser = u => ({
     uid: u.uid, name: u.name, username: u.username || null, role: roleOf(u), created: u.created,
-    farm: u.farm || null, villages: roleOf(u) === "coordinator" ? (u.villages || []) : [],
+    farm: u.farm || null, pastures: u.pastures || [], villages: roleOf(u) === "coordinator" ? (u.villages || []) : [],
   });
   const farmVk = u => (u.farm && u.farm.village ? vkey(u.farm.village.lat, u.farm.village.lon) : null);
   const canSeeVillage = (u, vk) => farmVk(u) === vk || (roleOf(u) === "coordinator" && (u.villages || []).some(v => v.vk === vk));
@@ -93,6 +94,36 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
       home: PLOT_RE.test(b.home) && b.home.startsWith("Б") ? b.home : "Б-С",
       plots: Array.isArray(b.plots) ? [...new Set(b.plots.filter(p => PLOT_RE.test(p)))].slice(0, 16) : [],
       updated: new Date().toISOString(),
+    };
+  }
+  /** Своё пастбище: контур проверяется и площадь пересчитывается на сервере; NDVI посчитан в браузере по Sentinel-2. */
+  function cleanPasture(b) {
+    const g = b.geometry || {};
+    let ring = g.type === "Polygon" && Array.isArray(g.coordinates) ? g.coordinates[0] : null;
+    if (!Array.isArray(ring) || ring.length < 3 || ring.length > 201) throw Object.assign(new Error("контур: от 3 до 200 точек"), { code: 400 });
+    ring = ring.map(p => [+(+p[0]).toFixed(6), +(+p[1]).toFixed(6)]);
+    if (!ring.every(([x, y]) => coordOk(y, x))) throw Object.assign(new Error("неверные координаты"), { code: 400 });
+    ring = PL.closeRing(ring);
+    const xs = ring.map(p => p[0]), ys = ring.map(p => p[1]);
+    if (Math.max(...xs) - Math.min(...xs) > 0.45 || Math.max(...ys) - Math.min(...ys) > 0.3) throw Object.assign(new Error("участок больше 30 км"), { code: 400 });
+    const area = PL.polygonAreaHa(ring);
+    if (area < 1) throw Object.assign(new Error("участок меньше 1 га"), { code: 400 });
+    const s = b.stats || {};
+    const nd = x => (Number.isFinite(+x) && x !== null && Math.abs(+x) <= 1 ? +(+x).toFixed(3) : null);
+    const series = (Array.isArray(s.series) ? s.series : []).slice(0, 12)
+      .filter(x => x && /^\d{4}-\d{2}-\d{2}$/.test(x.d) && nd(x.v) != null).map(x => ({ d: x.d, v: nd(x.v) }));
+    return {
+      id: rnd(8), name: str(b.name, 60) || "Пастбище",
+      geometry: { type: "Polygon", coordinates: [ring] },
+      area_ha: Math.round(area * 10) / 10,
+      water: !!b.water,                                        // ввод фермера: есть ли вода
+      stats: {
+        ndvi: nd(s.ndvi), series,
+        pasture_ha: Math.min(Math.round(area * 10) / 10, Math.max(0, +s.pasture_ha || 0)),
+        wc_pasture_share: Math.min(1, Math.max(0, +s.wc_pasture_share || 0)),
+        water_on_map: !!s.water_on_map, year: num(s.year, 3000),
+      },
+      created: new Date().toISOString(),
     };
   }
   function cleanScenario(b, u) {
@@ -206,6 +237,23 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         return json(res, 200, pubUser(u)), true;
       }
 
+      // --- свои пастбища (контур рисует фермер) ---
+      if (p === "/api/me/pastures" && req.method === "POST") {
+        if ((u.pastures || []).length >= 10) return json(res, 400, { error: "не больше 10 пастбищ на хозяйство" }), true;
+        const past = cleanPasture(await body(req));
+        u.pastures = (u.pastures || []).concat([past]);
+        save();
+        return json(res, 200, pubUser(u)), true;
+      }
+      const pm = /^\/api\/me\/pastures\/([A-Za-z0-9_-]{6,20})$/.exec(p);
+      if (pm && req.method === "DELETE") {
+        const before = (u.pastures || []).length;
+        u.pastures = (u.pastures || []).filter(x => x.id !== pm[1]);
+        if (u.pastures.length === before) return json(res, 404, { error: "пастбище не найдено" }), true;
+        save();
+        return json(res, 200, pubUser(u)), true;
+      }
+
       // --- сценарии: свои + общие планы сёл, к которым есть доступ ---
       if (p === "/api/scenarios" && req.method === "GET") {
         const shared = [];
@@ -277,6 +325,7 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
           const farms = Object.values(st().users).filter(x => farmVk(x) === vk).map(x => ({
             uid: x.uid, owner: x.name, name: x.farm.name, sheep: x.farm.sheep, goats: x.farm.goats, cattle: x.farm.cattle,
             horses: x.farm.horses, daily_return: x.farm.daily_return, home: x.farm.home, plots: x.farm.plots, updated: x.farm.updated,
+            pastures: (x.pastures || []).map(q => ({ id: q.id, name: q.name, geometry: q.geometry, area_ha: q.area_ha, water: q.water, ndvi: q.stats && q.stats.ndvi })),
           }));
           return json(res, 200, { vk, farms }), true;
         }

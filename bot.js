@@ -310,6 +310,48 @@ function textMySubs(c) {
   };
 }
 
+// ---------- свои пастбища: контур нарисован на сайте; владелец — тот же Telegram-аккаунт ----------
+const ha1 = x => (+x || 0).toFixed(1).replace(".", ",");
+const myPastures = chatId => (((state.users || {})[String(chatId)] || {}).pastures) || [];
+function pastureCenter(q) {
+  const r = q.geometry.coordinates[0];
+  return [r.reduce((s, p) => s + p[1], 0) / r.length, r.reduce((s, p) => s + p[0], 0) / r.length];
+}
+function pastureLink(chatId, q) {
+  const u = (state.users || {})[String(chatId)], v = u && u.farm && u.farm.village;
+  const [lat, lon] = v ? [v.lat, v.lon] : pastureCenter(q);
+  return `${SITE}#/map?lat=${(+lat).toFixed(5)}&lon=${(+lon).toFixed(5)}&name=${encodeURIComponent(v ? v.name : q.name)}&pasture=${q.id}`;
+}
+function pastureReport(chatId, q) {
+  const s = q.stats || {}, series = s.series || [];
+  const cap = J.plotCapacity({ ndvi: s.ndvi, pasture_ha: s.pasture_ha || 0 });
+  let text = `Пастбище «${q.name}»: ${ha1(q.area_ha)} га (границы нарисованы вами на сайте).\n` +
+    `Трава за лето ${s.year || ""} — NDVI по снимкам Sentinel-2 внутри границ:\n`;
+  if (series.length) {
+    text += series.map(x => `${fmtDate(x.d)}  ${"▇".repeat(Math.max(1, Math.round(x.v * 20)))} ${x.v.toFixed(2)}`).join("\n");
+    const ch = (series[series.length - 1].v - series[0].v) / series[0].v * 100;
+    text += `\n\nЗа лето: ${ch >= 0 ? "+" : ""}${ch.toFixed(0)}% ${ch <= -10 ? "— трава убывает" : ch >= 10 ? "— растёт" : "≈ стабильно"}.`;
+  } else text += `в среднем ${s.ndvi ?? "нет данных"}.`;
+  text += `\nСейчас: ${ndviWord(s.ndvi)}. Выдержит за сезон ≈ ${fmt(cap.au_season / 0.2)} овец (оценка модели). Вода: ${q.water ? "есть" : "не указана"}.`;
+  return text + `\n\nНа карте: ${pastureLink(chatId, q)}`;
+}
+function pastureAlert(chatId, q, cur, prev, date) {
+  const base = prev.length ? median(prev.slice(-3)) : null;
+  const delta = base == null ? null : cur - base, rel = delta == null ? 0 : delta / base;
+  const head = delta != null && (delta <= -0.05 || rel <= -0.12) ? "Внимание: трава убывает" : cur < 0.2 ? "Мало травы"
+    : delta != null && (delta >= 0.05 || rel >= 0.12) ? "Трава растёт" : "Свежий снимок";
+  const advice = head.startsWith("Внимание") ? "Если стадо там — планируйте перегон заранее. Проверьте на месте: иногда снимок портит дымка."
+    : head === "Мало травы" ? "Долго пасти здесь не стоит." : head === "Трава растёт" ? "Участок восстанавливается." : "Заметных изменений нет.";
+  return `${head} — ваше пастбище «${q.name}»\n\nСнимок Sentinel-2 от ${fmtDate(date)}: NDVI ${cur.toFixed(2)}` +
+    (base != null ? ` (было ≈ ${base.toFixed(2)}, ${delta >= 0 ? "+" : ""}${(delta / base * 100).toFixed(0)}%)` : "") +
+    `.\n${advice}\n\nНа карте: ${pastureLink(chatId, q)}`;
+}
+function pasturesKeyboard(c, chatId) {
+  return { inline_keyboard: myPastures(chatId).map(q => [
+    { text: `Отчёт: ${q.name}`.slice(0, 40), callback_data: "pr:" + q.id },
+    { text: (c.psubs || []).includes(q.id) ? "Отписаться" : "Подписаться", callback_data: "pt:" + q.id }]) };
+}
+
 // ---------- ежедневная проверка (её запускает GitHub Actions через POST /cron) ----------
 async function runCron(send, now = new Date()) {
   const month = now.getMonth() + 1, inSeason = month >= 5 && month <= 9;
@@ -340,6 +382,26 @@ async function runCron(send, now = new Date()) {
       const text = alertText(v, p, m.ndvi, hist.map(h => h.v), scene.date);
       hist.push({ d: scene.date, v: m.ndvi }); v.monitor.hist[id] = hist.slice(-8);
       for (const chat of subscribers(vk, id)) { await send(chat, text, MENU); report.alerts++; }
+    }
+  }
+
+  // 1б. свои пастбища, на которые подписан владелец
+  for (const [chat, c] of Object.entries(state.chats)) {
+    for (const id of c.psubs || []) {
+      const q = myPastures(chat).find(x => x.id === id); if (!q) continue;
+      q.monitor = q.monitor || { last: null, hist: null };
+      let scene;
+      try { scene = await PL.latestPolygonScene({ ring: q.geometry.coordinates[0], after: q.monitor.last, now }); }
+      catch (e) { console.error("cron pasture", id, e.message); report.errors++; continue; }
+      if (!scene) continue;
+      report.scenes++;
+      q.monitor.last = scene.date;
+      if (scene.valid < 0.6 || scene.ndvi == null) continue;                 // облака закрыли участок
+      const seed = q.stats && q.stats.year === now.getFullYear() ? (q.stats.series || []).filter(x => x.d < scene.date) : [];
+      const hist = q.monitor.hist || seed.slice(-5);
+      await send(chat, pastureAlert(chat, q, scene.ndvi, hist.map(h => h.v), scene.date), MENU);
+      report.alerts++;
+      q.monitor.hist = hist.concat([{ d: scene.date, v: scene.ndvi }]).slice(-8);
     }
   }
 
@@ -399,6 +461,14 @@ async function handle(update, send, today = new Date()) {
       ids.forEach(id => toggleSub(c, c.village, id, true));
       return send(chatId, `Подписала вас на участки маршрута: ${ids.join(", ")}. В сезон пришлю уведомление о каждом новом снимке и напомню о перегоне за 3 дня.`, MENU);
     }
+    if (kind === "pr" || kind === "pt") {                 // своё пастбище: отчёт / подписка
+      const q = myPastures(chatId).find(x => x.id === arg);
+      if (!q) return send(chatId, "Пастбище не найдено в вашем профиле.", MENU);
+      if (kind === "pr") return send(chatId, pastureReport(chatId, q), MENU);
+      const on = !(c.psubs || []).includes(q.id);
+      c.psubs = (c.psubs || []).filter(x => x !== q.id).concat(on ? [q.id] : []); save();
+      return send(chatId, on ? `Подписка на пастбище «${q.name}» оформлена.` : `Вы отписались от пастбища «${q.name}».`, pasturesKeyboard(c, chatId));
+    }
     if (kind === "r" || kind === "d" || kind === "u") {   // отчёт / пример уведомления / отписка
       const [vk, code] = arg.split("|"), v = state.villages[vk], id = PL.plotFromCode(code);
       const p = v && id && v.data.plots.find(x => x.id === id);
@@ -427,6 +497,14 @@ async function handle(update, send, today = new Date()) {
     return send(chatId, `Вход на сайт Jaiylym.\n\nКод на сайте должен быть: ${rec.code}\n\nЕсли код совпадает и вход начали вы, подтвердите. ` +
       `Если вы не входили на сайт, нажмите «Отмена».`,
       { inline_keyboard: [[{ text: "Подтвердить вход", callback_data: "lg:" + lg[1] }, { text: "Отмена", callback_data: "ln:" + lg[1] }]] });
+  }
+
+  const mine = /^\/start\s+m_([A-Za-z0-9_-]{6,20})$/.exec(text);
+  if (mine) {                                       // с сайта: подписаться на своё пастбище
+    const q = myPastures(chatId).find(x => x.id === mine[1]);
+    if (!q) return send(chatId, "Это пастбище не найдено в вашем профиле. Войдите на сайт тем же аккаунтом Telegram и сохраните пастбище в профиле.", MENU);
+    c.psubs = [...new Set((c.psubs || []).concat([q.id]))].slice(-10); save();
+    return send(chatId, `Вы подписаны на своё пастбище «${q.name}». С мая по сентябрь пришлю уведомление о каждом новом снимке.\n\n` + pastureReport(chatId, q), MENU);
   }
 
   const deep = /^\/start\s+([vp])_(m?\d+)_(m?\d+)(?:_([NF][0-7]))?$/i.exec(text);
@@ -495,6 +573,7 @@ async function handle(update, send, today = new Date()) {
   }
 
   if (low === "участки" || low === "/plots") {
+    if (myPastures(chatId).length) await send(chatId, "Ваши пастбища (нарисованы на сайте):", pasturesKeyboard(c, chatId));
     const my = textMySubs(c);
     if (my.kb) await send(chatId, my.text, my.kb);
     return send(chatId, `${my.kb ? "Добавить участки" : "Подпишитесь на участки"} села ${v.data.village.name} — нажмите на участок (✓ — уже подписаны):`, plotsKeyboard(c, c.village, v));

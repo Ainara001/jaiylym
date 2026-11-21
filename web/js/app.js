@@ -85,12 +85,17 @@
         const same = S.D && Math.abs(S.D.village.lat - lat) < 1e-4 && Math.abs(S.D.village.lon - lon) < 1e-4;
         const pend = S.pending && S.pending.key === cacheKey(lat, lon) ? S.pending.opts : null;
         S.pending = null;
-        if (!same || pend) openVillage(q.get("name") || "Село", lat, lon, Object.assign({ plot: q.get("plot") }, pend || {}));
-        else if (q.get("plot")) focusPlot(q.get("plot"));
+        const extra = { plot: q.get("plot"), pasture: q.get("pasture"), draw: q.get("draw") === "1" };
+        if (!same || pend) openVillage(q.get("name") || "Село", lat, lon, Object.assign(extra, pend || {}));
+        else {
+          if (extra.plot) focusPlot(extra.plot);
+          if (extra.pasture) focusPasture(extra.pasture);
+          if (extra.draw) startDraw();
+        }
       } else if (!S.D) {
-        const last = C.ls.get("jaiylym:last", null);
-        if (last) openVillage(last.name, last.lat, last.lon); else openVillage(DEFAULT.village.name, DEFAULT.village.lat, DEFAULT.village.lon);
-      }
+        const last = C.ls.get("jaiylym:last", null), extra = { draw: q.get("draw") === "1" };
+        if (last) openVillage(last.name, last.lat, last.lon, extra); else openVillage(DEFAULT.village.name, DEFAULT.village.lat, DEFAULT.village.lon, extra);
+      } else if (q.get("draw") === "1") setTimeout(startDraw, 100);
       setTimeout(() => S.map && S.map.invalidateSize(), 50);
     }
     if (route === "home") renderHome();
@@ -112,8 +117,10 @@
     let tileErrors = 0;
     tiles.on("tileerror", () => { if (++tileErrors === 6 && !navigator.onLine) toast(t("map.fallback"), true); });
     S.group = L.layerGroup().addTo(S.map);
+    S.pastGroup = L.layerGroup().addTo(S.map);
     new ResizeObserver(() => S.map.invalidateSize()).observe($("#map"));
     S.map.on("click", e => {
+      if (S.draw) { addDrawPoint(e.latlng); return; }
       if (!S.picking) return;
       setPicking(false);
       const lat = +e.latlng.lat.toFixed(5), lon = +e.latlng.lng.toFixed(5);
@@ -137,11 +144,149 @@
     for (const p of S.plots) {
       const poly = L.polygon(p.geometry.coordinates[0].map(([x, y]) => [y, x]), { weight: 1.5, color: "#fff", fillOpacity: 0.45 }).addTo(S.group);
       poly.bindTooltip("", { permanent: true, direction: "center", className: "plabel" });
-      poly.on("click", () => { if (!S.picking) openPlot(p.id); });
+      poly.on("click", () => { if (!S.picking && !S.draw) openPlot(p.id); });
       S.layers[p.id] = poly;
     }
     const b = L.latLngBounds(S.plots.flatMap(p => p.geometry.coordinates[0].map(([x, y]) => [y, x])));
     S.map.invalidateSize(); S.map.fitBounds(b, { padding: [12, 12] });
+    drawPastures();
+  }
+
+  // ---------- свои пастбища: фермер рисует контур, NDVI считается по снимкам внутри него ----------
+  const farmAU = () => (C.user && C.user.farm ? J.herdAU(C.user.farm, S.P) : 0);
+  function pastConf(st, area) {
+    const n = (st.series || []).length;
+    if (st.ndvi == null || area < 1) return "low";
+    if (n >= 4 && area >= 5) return "high";
+    return n >= 2 ? "medium" : "low";
+  }
+  function pastureRows(st, area, water) {
+    const cap = J.plotCapacity({ ndvi: st.ndvi, pasture_ha: st.pasture_ha }, S.P);
+    const au = farmAU(), load = au && cap.au_days > 0 ? au * S.P.season_days / cap.au_days : null;
+    const c = pastConf(st, area);
+    return `<table><tbody>
+      <tr><td>${t("past.area")}</td><td>${fmt1(area)} ${t("common.ha")} ${src("input")}</td></tr>
+      <tr><td>${t("past.usable")}</td><td>${fmt1(st.pasture_ha)} ${t("common.ha")} ${src("sat")}</td></tr>
+      <tr><td>NDVI ${st.year || ""}</td><td>${st.ndvi ?? "—"} ${src("sat")} <span class="conf conf-${c}">${t("conf." + c)}</span></td></tr>
+      <tr><td>${t("past.cap")}</td><td>≈ ${fmt(cap.au_season / S.P.au.sheep)} ${t("pop.sheep")} ${src("model")}</td></tr>
+      <tr><td>${t("past.myLoad")}</td><td>${load == null ? `<small>${t("past.noFarm")}</small>` : `<b style="color:${loadColor(load)}">${pct(load)}</b> ${src("model")}`}</td></tr>
+      <tr><td>${t("pop.water")}</td><td>${water ? t("pop.hasWater").replace(/ \(.*\)/, "") : "—"}${st.water_on_map ? ` (${t("past.waterMap")})` : ""}</td></tr>
+      </tbody></table>${spark(st.series)}
+      ${st.wc_pasture_share != null ? `<p class="fine" style="margin:6px 0 0">${t("past.wc", { p: Math.round(st.wc_pasture_share * 100) })}</p>` : ""}`;
+  }
+  const pastLink = id => `https://t.me/${BOT}?start=m_${id}`;
+  function pastureHtml(q) {
+    return `<div class="pop"><h3 style="margin:0 0 6px">${esc(q.name)} <small style="font-weight:500;color:#627064">${t("past.mine")}</small></h3>
+      ${pastureRows(q.stats || {}, q.area_ha, q.water)}
+      <a class="btn btn-tg btn-sm" style="width:100%;margin-top:10px;color:#fff" href="${pastLink(q.id)}" target="_blank" rel="noopener">${ic("send")} ${t("past.notify")}</a>
+      <p class="fine" style="margin:6px 0 0">${t("past.boundaryNote")}</p></div>`;
+  }
+  function drawPastures() {
+    if (!S.pastGroup) return;
+    S.pastGroup.clearLayers();
+    S.pastLayers = {};
+    for (const q of (C.user && C.user.pastures) || []) {
+      const ll = q.geometry.coordinates[0].map(([x, y]) => [y, x]);
+      const poly = L.polygon(ll, { color: "#e3b25c", weight: 3, fillColor: "#e3b25c", fillOpacity: 0.18 }).addTo(S.pastGroup);
+      poly.bindTooltip(esc(q.name), { permanent: true, direction: "center", className: "plabel past" });
+      poly.on("click", () => { if (!S.draw && !S.picking) openPasture(q.id); });
+      S.pastLayers[q.id] = poly;
+    }
+  }
+  function openPasture(id) {
+    const q = ((C.user && C.user.pastures) || []).find(x => x.id === id), lay = S.pastLayers && S.pastLayers[id];
+    if (!q || !lay) return;
+    L.popup({ maxWidth: 300, maxHeight: Math.max(220, $("#map").clientHeight - 120), autoPanPaddingTopLeft: [16, 70] })
+      .setLatLng(lay.getBounds().getCenter()).setContent(pastureHtml(q)).openOn(S.map);
+  }
+  function focusPasture(id) {
+    const lay = S.pastLayers && S.pastLayers[id];
+    if (!lay) return;
+    S.map.fitBounds(lay.getBounds(), { padding: [50, 50], maxZoom: 15, animate: false });
+    openPasture(id);
+  }
+
+  function startDraw() {
+    if (S.noLeaflet || !S.map) { toast(t("past.noMap"), true); return; }
+    if (S.draw) return;
+    setPicking(false);
+    S.map.closePopup();
+    S.draw = { pts: [], line: L.polyline([], { color: "#e3b25c", weight: 3, dashArray: "6 5" }).addTo(S.map), marks: L.layerGroup().addTo(S.map) };
+    $("#map").classList.add("drawing");
+    $("#drawbar").hidden = false;
+    updateDrawHint();
+  }
+  function updateDrawHint() {
+    $("#drawHint").textContent = t("past.drawHint", { n: S.draw ? S.draw.pts.length : 0 });
+    $("#drawDone").disabled = !S.draw || S.draw.pts.length < 3;
+    $("#drawUndo").disabled = !S.draw || !S.draw.pts.length;
+  }
+  function redrawLine() {
+    const pts = S.draw.pts;
+    S.draw.line.setLatLngs(pts.length >= 3 ? pts.concat([pts[0]]) : pts);
+    S.draw.marks.clearLayers();
+    pts.forEach((p, i) => L.circleMarker(p, { radius: i ? 5 : 7, color: "#fff", weight: 2, fillColor: "#e3b25c", fillOpacity: 1 }).addTo(S.draw.marks));
+    updateDrawHint();
+  }
+  function addDrawPoint(ll) { if (S.draw.pts.length >= 200) return; S.draw.pts.push(ll); redrawLine(); }
+  function undoDraw() { if (S.draw && S.draw.pts.length) { S.draw.pts.pop(); redrawLine(); } }
+  function endDraw() {
+    if (!S.draw) return;
+    S.draw.line.remove(); S.draw.marks.remove();
+    S.draw = null;
+    $("#map").classList.remove("drawing");
+    $("#drawbar").hidden = true;
+  }
+  async function finishDraw() {
+    if (!S.draw || S.draw.pts.length < 3) { toast(t("past.need3"), true); return; }
+    const ring = S.draw.pts.map(p => [+p.lng.toFixed(6), +p.lat.toFixed(6)]);
+    const preview = L.polygon(S.draw.pts, { color: "#e3b25c", weight: 3, fillOpacity: 0.12 }).addTo(S.map);
+    endDraw();
+    if (!navigator.onLine) { preview.remove(); toast(t("err.offline"), true); return; }
+    status(t("past.computing"), { busy: true });
+    let st;
+    try { st = await PL.polygonStats({ ring, onProgress: () => status(t("past.computing"), { busy: true }) }); }
+    catch (e) { preview.remove(); status(t("err.build") + ": " + e.message, { err: true }); return; }
+    status("");
+    showPastureResult(ring, st, preview);
+  }
+  function showPastureResult(ring, st, preview) {
+    const d = document.createElement("dialog");
+    d.className = "modal";
+    const n = ((C.user && C.user.pastures) || []).length + 1;
+    d.innerHTML = `<form method="dialog" class="modal-x"><button aria-label="${t("common.close")}">${ic("x")}</button></form>
+      <h2>${t("past.result")}</h2>
+      <label class="field">${t("past.name")}<input id="pName" maxlength="60" value="${esc(t("past.mine") + " " + n)}"></label>
+      <div id="pRows" style="margin-top:10px">${pastureRows(st, st.area_ha, st.water_on_map)}</div>
+      <label class="check" style="margin-top:10px"><input type="checkbox" id="pWater" ${st.water_on_map ? "checked" : ""}> ${t("past.water")} ${src("input")}</label>
+      <p class="fine" style="margin-top:8px">${t("past.boundaryNote")}</p>
+      <div id="pLogin"></div>
+      <p style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:14px">
+        <button class="btn btn-ghost" id="pCancel">${t("common.cancel")}</button>
+        <button class="btn btn-primary" id="pSave">${ic("save")} ${t("past.save")}</button></p>`;
+    document.body.appendChild(d);
+    const close = () => { d.close(); };
+    d.addEventListener("close", () => { preview.remove(); d.remove(); });
+    $("#pWater", d).onchange = e => { $("#pRows", d).innerHTML = pastureRows(st, st.area_ha, e.target.checked); };
+    $("#pCancel", d).onclick = close;
+    $("#pSave", d).onclick = async () => {
+      if (!C.loggedIn) {
+        $("#pLogin", d).innerHTML = `<p class="note warn">${t("past.loginToSave")}</p><button class="btn btn-tg" id="pLoginBtn">${ic("send")} ${t("auth.login")}</button>`;
+        $("#pLoginBtn", d).onclick = () => { S.pendingPasture = { ring, st, name: $("#pName", d).value, water: $("#pWater", d).checked }; close(); openLogin(); };
+        return;
+      }
+      await savePasture({ ring, st, name: $("#pName", d).value, water: $("#pWater", d).checked });
+      close();
+    };
+    d.showModal();
+  }
+  async function savePasture({ ring, st, name, water }) {
+    try {
+      await C.addPasture({ name, water, geometry: { type: "Polygon", coordinates: [ring.concat([ring[0]])] },
+        stats: { ndvi: st.ndvi, series: st.series, pasture_ha: st.pasture_ha, wc_pasture_share: st.wc_pasture_share, water_on_map: st.water_on_map, year: st.year } });
+      toast(t("past.saved"));
+      drawPastures();
+    } catch (e) { toast(errText(e), true); }
   }
 
   // ---------- выбор села ----------
@@ -214,6 +359,8 @@
     if (S.histKey !== key) { S.histKey = key; C.addHistory({ kind: "open", village: data.village, summary: summary() }); }
     const want = opts.plot;
     if (want) setTimeout(() => focusPlot(want), 350);
+    if (opts.pasture) setTimeout(() => focusPasture(opts.pasture), 400);
+    if (opts.draw) setTimeout(startDraw, 450);
   }
 
   function rebuildPlots() {
@@ -682,7 +829,9 @@
   async function afterAuthChange() {
     renderAccount();
     if (S.D) { addOwnFarm(); render(); }
-    onRoute();
+    drawPastures();
+    if (C.loggedIn && S.pendingPasture) { const p = S.pendingPasture; S.pendingPasture = null; await savePasture(p); }
+    if (S.route !== "map") onRoute();
   }
   function renderAccount() {
     const u = C.user;
@@ -721,8 +870,33 @@
           <div class="span4 field">${t("pr.plots")}<div class="chips">${plotIds.map(id => `<label class="chip"><input type="checkbox" name="plots" value="${id}" ${(f.plots || []).includes(id) ? "checked" : ""}>${id}</label>`).join("")}</div></div>
         </div>
         <p style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px"><button class="btn btn-primary">${ic("save")} ${t("pr.saveFarm")}</button>
-        ${f.village ? `<a class="btn btn-soft" href="#/map?lat=${f.village.lat}&lon=${f.village.lon}&name=${encodeURIComponent(f.village.name)}">${ic("map")} ${t("pr.openMap")}</a>` : ""}</p></form>`;
+        ${f.village ? `<a class="btn btn-soft" href="#/map?lat=${f.village.lat}&lon=${f.village.lon}&name=${encodeURIComponent(f.village.name)}">${ic("map")} ${t("pr.openMap")}</a>` : ""}</p></form>
+      <div class="card" id="pastCard"><h2>${ic("pen")} ${t("past.title")}</h2>
+        ${(u.pastures || []).length ? (u.pastures || []).map(q => `<div class="pasture" data-pid="${esc(q.id)}">
+            <div class="pasture-head"><b>${esc(q.name)}</b><small style="color:var(--muted)">${dateStr(q.created, false)}</small></div>
+            ${pastureRows(q.stats || {}, q.area_ha, q.water)}
+            <div class="btns"><button class="btn btn-soft btn-sm" data-pshow>${ic("map")} ${t("past.show")}</button>
+              <a class="btn btn-tg btn-sm" href="${pastLink(q.id)}" target="_blank" rel="noopener">${ic("send")} ${t("past.notify")}</a>
+              <button class="btn btn-ghost btn-sm" data-pdel>${ic("trash")} ${t("sc.del")}</button></div></div>`).join("")
+          : `<p class="empty">${t("past.empty")}</p>`}
+        <button class="btn btn-accent" id="pastDraw">${ic("pen")} ${t("past.draw")}</button>
+        <p class="fine" style="margin-top:10px">${t("past.boundaryNote")}</p></div>`;
     let village = f.village;
+    // карта для пастбища: село хозяйства, иначе открытое село, иначе центр самого пастбища
+    const mapQ = (extra, q) => {
+      const v = f.village || (S.D && S.D.village) || (q && (() => { const r = q.geometry.coordinates[0]; return { name: q.name, lat: +(r.reduce((s, p) => s + p[1], 0) / r.length).toFixed(5), lon: +(r.reduce((s, p) => s + p[0], 0) / r.length).toFixed(5) }; })()) || DEFAULT.village;
+      return `lat=${v.lat}&lon=${v.lon}&name=${encodeURIComponent(v.name)}&${extra}`;
+    };
+    $("#pastDraw").onclick = () => go("map", mapQ("draw=1"));
+    $$("[data-pid]").forEach(box => {
+      const q = u.pastures.find(x => x.id === box.dataset.pid);
+      box.querySelector("[data-pshow]").onclick = () => go("map", mapQ("pasture=" + q.id, q));
+      let armedP = false;
+      box.querySelector("[data-pdel]").onclick = async e => {
+        if (!armedP) { armedP = true; e.currentTarget.lastChild.textContent = " " + t("past.delConfirm"); return; }
+        try { await C.deletePasture(q.id); drawPastures(); renderProfile(); } catch (err) { toast(errText(err), true); }
+      };
+    });
     $("#prLogout").onclick = async () => { await C.logout(); toast(t("auth.logout")); afterAuthChange(); };
     let armed = false;
     $("#prDelete").onclick = async e => {
@@ -825,7 +999,12 @@
     document.documentElement.lang = I.lang === "kk" ? "kk" : "ru";
     bindSearch($("#heroSearch"), $("#heroQ"));
     bindSearch($("#mapSearch"), $("#mapQ"));
-    $("#pickBtn").onclick = () => { if (S.noLeaflet) { toast(t("map.fallback"), true); return; } setPicking(!S.picking); };
+    $("#pickBtn").onclick = () => { if (S.noLeaflet) { toast(t("map.fallback"), true); return; } endDraw(); setPicking(!S.picking); };
+    $("#drawBtn").onclick = () => (S.draw ? endDraw() : startDraw());
+    $("#drawUndo").onclick = undoDraw;
+    $("#drawCancel").onclick = endDraw;
+    $("#drawDone").onclick = finishDraw;
+    document.addEventListener("keydown", e => { if (S.draw && e.key === "Escape") endDraw(); if (S.draw && e.key === "Enter" && !e.target.closest("input,textarea")) finishDraw(); });
     $$(".modes button").forEach(b => b.onclick = () => { S.mode = b.dataset.mode; paintMap(); if (S.tab === "plots") renderPane("plots"); });
     $$(".tabs [data-tab]").forEach(b => b.onclick = () => renderPane(b.dataset.tab));
     $(".tabs").addEventListener("keydown", e => {

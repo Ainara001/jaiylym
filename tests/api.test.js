@@ -129,6 +129,47 @@ test("история расчётов — только своя", async () => {
   assert.equal((await call("GET", "/api/history", { token: other })).data.length, 0);
 });
 
+test("свои пастбища: проверка контура, площадь считает сервер, чужое удалить нельзя, координатор видит", async () => {
+  const lat = 43.05, lon = 79.22, dy = 1 / 110.57, dx = 1 / (111.32 * Math.cos(lat * Math.PI / 180));
+  const ring = [[lon, lat], [lon + dx, lat], [lon + dx, lat + dy], [lon, lat + dy]];           // 1×1 км, контур не замкнут
+  const body = { name: "Летнее", geometry: { type: "Polygon", coordinates: [ring] }, area_ha: 99999, water: true,
+    stats: { ndvi: 0.207, pasture_ha: 99.3, wc_pasture_share: 0.99, series: [{ d: "2026-06-27", v: 0.214 }, { d: "плохо", v: 1 }], year: 2026 } };
+  const r = await call("POST", "/api/me/pastures", { token: farmer, body });
+  assert.equal(r.status, 200);
+  const past = r.data.pastures[0];
+  assert.ok(Math.abs(past.area_ha - 100) < 0.5, "площадь пересчитана сервером, а не взята у клиента: " + past.area_ha);
+  assert.equal(past.geometry.coordinates[0].length, 5, "контур замкнут");
+  assert.deepEqual(past.stats.series, [{ d: "2026-06-27", v: 0.214 }], "плохие точки графика отброшены");
+
+  assert.equal((await call("POST", "/api/me/pastures", { token: farmer, body: { geometry: { type: "Polygon", coordinates: [ring.slice(0, 2)] } } })).status, 400);
+  const huge = [[79, 43], [79.6, 43], [79.6, 43.4], [79, 43.4]];
+  assert.equal((await call("POST", "/api/me/pastures", { token: farmer, body: { geometry: { type: "Polygon", coordinates: [huge] } } })).status, 400);
+  assert.equal((await call("POST", "/api/me/pastures", { token: farmer, body: { geometry: { type: "Polygon", coordinates: [[[0, 0], [0, 200], [1, 1]]] } } })).status, 400);
+
+  assert.equal((await call("DELETE", "/api/me/pastures/" + past.id, { token: other })).status, 404, "чужое пастбище не удаляется");
+  const f = await call("GET", "/api/coord/farms?vk=43.020,79.220", { token: coord });
+  assert.equal(f.data.farms[0].pastures[0].name, "Летнее");
+
+  for (let i = 0; i < 9; i++) await call("POST", "/api/me/pastures", { token: farmer, body });
+  assert.equal((await call("POST", "/api/me/pastures", { token: farmer, body })).status, 400, "не больше 10");
+  assert.equal((await call("DELETE", "/api/me/pastures/" + past.id, { token: farmer })).status, 200);
+});
+
+test("бот: подписка на своё пастбище только владельцу, уведомление по реальному снимку", async () => {
+  const q = bot.getState().users["111"].pastures[0];
+  sent.length = 0;
+  await bot.handle({ message: { chat: { id: 222 }, from: { id: 222 }, text: "/start m_" + q.id } }, send);
+  assert.match(sent[0].text, /не найдено в вашем профиле/, "чужое пастбище не подписывается");
+  await bot.handle({ message: { chat: { id: 111 }, from: { id: 111 }, text: "/start m_" + q.id } }, send);
+  assert.match(sent[1].text, /Вы подписаны на своё пастбище «Летнее»/);
+  assert.match(sent[1].text, /pasture=/, "ссылка ведёт на пастбище на сайте");
+  sent.length = 0;
+  const r = await bot.runCron(send, new Date("2026-08-31T04:00:00Z"));
+  const mine = sent.filter(m => m.chat === "111" && /ваше пастбище «Летнее»/.test(m.text));
+  assert.equal(mine.length, 1, JSON.stringify(r));
+  assert.match(mine[0].text, /Снимок Sentinel-2 от 29\.08: NDVI 0\.\d\d/);
+});
+
 test("выход и удаление аккаунта", async () => {
   assert.equal((await call("POST", "/auth/logout", { token: other })).status, 200);
   assert.equal((await call("GET", "/api/me", { token: other })).status, 401, "после выхода токен не работает");

@@ -267,6 +267,132 @@
     return { id: it.id, date: it.properties.datetime.slice(0, 10), cloud: it.properties["eo:cloud_cover"], plots };
   }
 
+  // ---------- своё пастбище: контур, нарисованный фермером ----------
+  const WC_EXCLUDE = [50, 80];        // застройка и вода — не корм; остальное внутри контура фермер считает пастбищем
+
+  /** Площадь многоугольника [[lon,lat],…] в гектарах (локальная проекция, точность ~0.5 % для участков до 30 км). */
+  function polygonAreaHa(ring) {
+    const lat0 = ring.reduce((s, p) => s + p[1], 0) / ring.length;
+    const [kx, ky] = kmPerDeg(lat0);
+    let a = 0;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) a += (ring[j][0] * kx) * (ring[i][1] * ky) - (ring[i][0] * kx) * (ring[j][1] * ky);
+    return Math.abs(a / 2) * 100;
+  }
+  function closeRing(ring) {
+    const r = ring.map(p => [+p[0], +p[1]]);
+    const a = r[0], b = r[r.length - 1];
+    if (a[0] !== b[0] || a[1] !== b[1]) r.push([a[0], a[1]]);
+    return r;
+  }
+  function checkRing(ring) {
+    if (!Array.isArray(ring) || ring.length < 4) throw new Error("нужно минимум 3 точки");
+    if (ring.length > 201) throw new Error("слишком много точек (максимум 200)");
+    if (!ring.every(p => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]) && Math.abs(p[0]) <= 180 && Math.abs(p[1]) <= 90))
+      throw new Error("неверные координаты");
+    const xs = ring.map(p => p[0]), ys = ring.map(p => p[1]);
+    const [kx, ky] = kmPerDeg(ys[0]);
+    if ((Math.max(...xs) - Math.min(...xs)) * kx > 30 || (Math.max(...ys) - Math.min(...ys)) * ky > 30) throw new Error("участок больше 30 км — разбейте его на части");
+    const ha = polygonAreaHa(ring);
+    if (ha < 1) throw new Error("участок меньше 1 га");
+    return ha;
+  }
+  function ringBbox(ring) {
+    const xs = ring.map(p => p[0]), ys = ring.map(p => p[1]);
+    const mx = (Math.max(...xs) - Math.min(...xs)) * 0.04 + 0.0005, my = (Math.max(...ys) - Math.min(...ys)) * 0.04 + 0.0005;
+    return [Math.min(...xs) - mx, Math.min(...ys) - my, Math.max(...xs) + mx, Math.max(...ys) + my].map(v => +v.toFixed(6));
+  }
+  function insideMask(ring, bbox) {
+    const m = new Uint8Array(SIZE * SIZE);
+    for (let row = 0; row < SIZE; row++) {
+      const y = bbox[3] - (row + 0.5) * (bbox[3] - bbox[1]) / SIZE;
+      for (let col = 0; col < SIZE; col++) {
+        const x = bbox[0] + (col + 0.5) * (bbox[2] - bbox[0]) / SIZE;
+        let inside = false;
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+          const [xi, yi] = ring[i], [xj, yj] = ring[j];
+          if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+        }
+        m[row * SIZE + col] = inside ? 1 : 0;
+      }
+    }
+    return m;
+  }
+  function maskedMean(nd, inside, land) {
+    let sum = 0, n = 0, all = 0;
+    for (let i = 0; i < nd.length; i++) {
+      if (!inside[i] || WC_EXCLUDE.includes(land[i])) continue;
+      all++;
+      if (!Number.isNaN(nd[i])) { sum += nd[i]; n++; }
+    }
+    return { ndvi: n ? +(sum / n).toFixed(3) : null, valid: all ? n / all : 0 };
+  }
+
+  /**
+   * Статистика по контуру, нарисованному фермером: площадь, NDVI (медиана безоблачных летних снимков),
+   * NDVI по каждому снимку, доля «пастбища» по ESA WorldCover (для справки), есть ли вода на карте.
+   */
+  async function polygonStats({ ring, year, onProgress }) {
+    const say = m => onProgress && onProgress(m);
+    ring = closeRing(ring);
+    const area = checkRing(ring);
+    const bbox = ringBbox(ring);
+    year = year || summerYear();
+    say("Ищу безоблачные снимки Sentinel-2…");
+    let scenes = await findScenes(bbox, year);
+    if (scenes.length < 2) { year -= 1; scenes = await findScenes(bbox, year); }
+    if (!scenes.length) throw new Error("Нет безоблачных летних снимков для этого места");
+    say(`Загружаю ${scenes.length} снимков и карту покрытия земли…`);
+    const [per, land] = await Promise.all([Promise.all(scenes.map(it => sceneNdvi(bbox, it))), loadLand(bbox)]);
+    say("Считаю NDVI внутри участка…");
+    const inside = insideMask(ring, bbox);
+    const N = SIZE * SIZE, buf = [];
+    const med = new Float32Array(N).fill(NaN);
+    let inN = 0, usable = 0, pasture = 0, water = 0;
+    for (let i = 0; i < N; i++) {
+      if (!inside[i]) continue;
+      inN++;
+      if (!WC_EXCLUDE.includes(land[i])) usable++;
+      if (WC_PASTURE.includes(land[i])) pasture++;
+      if (land[i] === WC_WATER) water++;
+      buf.length = 0;
+      for (const nd of per) if (!Number.isNaN(nd[i])) buf.push(nd[i]);
+      if (!buf.length) continue;
+      buf.sort((a, b) => a - b);
+      const m = buf.length >> 1;
+      med[i] = buf.length % 2 ? buf[m] : (buf[m - 1] + buf[m]) / 2;
+    }
+    if (inN < 4) throw new Error("участок слишком маленький для снимка 10 м");
+    const dates = scenes.map(s => s.properties.datetime.slice(0, 10));
+    const series = per.map((nd, j) => { const r = maskedMean(nd, inside, land); return { d: dates[j], v: r.valid >= 0.5 ? r.ndvi : null }; })
+      .filter(x => x.v != null).sort((x, y) => x.d < y.d ? -1 : 1);
+    const pxHa = area / inN;
+    return {
+      area_ha: Math.round(area * 10) / 10,
+      pasture_ha: Math.round(usable * pxHa * 10) / 10,       // площадь без застройки и воды
+      wc_pasture_share: +(pasture / inN).toFixed(2),          // доля, которую WorldCover считает травой/кустарником
+      water_on_map: water * pxHa >= 0.2,
+      ndvi: maskedMean(med, inside, land).ndvi,
+      series, dates, year,
+    };
+  }
+
+  /** Мониторинг своего пастбища: NDVI на самом свежем снимке новее `after`, или null. */
+  async function latestPolygonScene({ ring, after, now = new Date(), days = 20 }) {
+    ring = closeRing(ring);
+    const bbox = ringBbox(ring);
+    const from = new Date(now - days * 864e5).toISOString().slice(0, 10);
+    const items = (await stac({
+      collections: ["sentinel-2-l2a"], bbox, datetime: `${from}/${now.toISOString().slice(0, 10)}T23:59:59Z`,
+      query: { "eo:cloud_cover": { lt: 60 } }, limit: 30,
+    })).filter(it => !after || it.properties.datetime.slice(0, 10) > after)
+      .sort((a, b) => a.properties.datetime < b.properties.datetime ? 1 : -1);
+    if (!items.length) return null;
+    const it = items[0];
+    const [nd, land] = await Promise.all([sceneNdvi(bbox, it), loadLand(bbox)]);
+    const r = maskedMean(nd, insideMask(ring, bbox), land);
+    return { id: it.id, date: it.properties.datetime.slice(0, 10), cloud: it.properties["eo:cloud_cover"], ndvi: r.ndvi, valid: r.valid };
+  }
+
   // Код участка для ссылок и кнопок Telegram (только латиница): "Д-С" ↔ "F0"
   function plotCode(id) { const [r, d] = id.split("-"); return (r === "Б" ? "N" : "F") + DIRS.indexOf(d); }
   function plotFromCode(code) {
@@ -274,5 +400,5 @@
     return m ? (m[1] === "N" ? "Б" : "Д") + "-" + DIRS[+m[2]] : null;
   }
 
-  return { geocode, buildVillage, latestScene, plotCode, plotFromCode, bboxFor, makePlots, setUserAgent, summerYear, SIZE };
+  return { geocode, buildVillage, latestScene, polygonStats, latestPolygonScene, polygonAreaHa, closeRing, plotCode, plotFromCode, bboxFor, makePlots, setUserAgent, summerYear, SIZE };
 });
