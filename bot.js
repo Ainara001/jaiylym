@@ -427,6 +427,11 @@ async function handle(update, send, today = new Date()) {
       if (!ok) return send(chatId, "Ссылка для входа устарела. Нажмите «Войти» на сайте ещё раз.", MENU);
       return send(chatId, kind === "lg" ? "Вход подтверждён. Вернитесь на сайт — он откроется сам через несколько секунд." : "Вход отменён.", MENU);
     }
+    if (kind === "here") {                                // открыть пастбища вокруг присланной геопозиции
+      const [la, lo] = arg.split(",").map(Number);
+      if (!Number.isFinite(la) || !Number.isFinite(lo)) return;
+      return chooseVillage(chatId, await reverseName(la, lo), la, lo, send);
+    }
     if (kind === "pick" && c.pending && c.pending[+arg]) {
       const f = c.pending[+arg]; c.pending = null;
       return chooseVillage(chatId, f.name, f.lat, f.lon, send);
@@ -524,11 +529,31 @@ async function handle(update, send, today = new Date()) {
       `Напишите название вашего села или города (например: Кеген, Шелек, Жанаарка) или отправьте геолокацию.`, ASK_VILLAGE);
   }
 
+  // Кнопки с геопозицией работают только в мобильном Telegram. На компьютере они присылают просто текст —
+  // объясняем, как отправить геопозицию, вместо «Не понял».
+  if (!msg.location && /^(где я\??|\/where|отправить геолокацию села)$/i.test(low)) {
+    return send(chatId, "Чтобы определить, где вы, боту нужна геопозиция.\n\n" +
+      "В Telegram на телефоне: нажмите кнопку «Где я?» внизу и разрешите доступ к местоположению " +
+      "(или скрепка → «Геопозиция» → «Отправить своё местоположение»).\n\n" +
+      "Telegram на компьютере геопозицию не отправляет — откройте бота на телефоне." +
+      (v ? "" : "\n\nИли просто напишите название своего села."), v ? MENU : ASK_VILLAGE);
+  }
+
   if (msg.location) {
     const { latitude: lat, longitude: lon } = msg.location;
     if (!v) return chooseVillage(chatId, await reverseName(lat, lon), lat, lon, send);
     const p = v.data.plots.find(pp => pointInPoly([lon, lat], pp.geometry.coordinates[0]));
-    if (!p) return send(chatId, `Вы вне пастбищ села ${v.data.village.name} (или в самом селе). Если это другое село — нажмите «Сменить село».`, MENU);
+    if (!p) {
+      // вне участков выбранного села: говорим, где человек, и предлагаем открыть пастбища вокруг этой точки
+      const vl = v.data.village, kx = 111.32 * Math.cos(vl.lat * Math.PI / 180);
+      const km = Math.hypot((lon - vl.lon) * kx, (lat - vl.lat) * 110.57);
+      const here = await reverseName(lat, lon);
+      const txt = km < 0.5
+        ? `Вы в самом селе ${vl.name} — участки начинаются в 0,5 км от центра. Отправьте геопозицию с пастбища, чтобы узнать участок.`
+        : `Вы примерно в ${km < 10 ? km.toFixed(1).replace(".", ",") : Math.round(km)} км от села ${vl.name}, за пределами его участков (они до 8 км от центра). ` +
+          `По карте это место: ${here}.`;
+      return send(chatId, txt, km < 0.5 ? MENU : { inline_keyboard: [[{ text: `Открыть пастбища: ${here}`.slice(0, 60), callback_data: `here:${(+lat).toFixed(5)},${(+lon).toFixed(5)}` }]] });
+    }
     const { pl } = compute(v), herd = herdsOf(v).find(h => h.id === c.herd);
     let s = `Вы на участке ${where(p)}.\nНагрузка по плану: ${pct(pl.load[p.id].load)}. Трава (NDVI): ${p.ndvi ?? "нет данных"}.`;
     if (herd) {
