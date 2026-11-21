@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jaiylym — пастбища села</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --bg: #f6f4ef; --panel: #fffdf8; --ink: #1f2a1f; --muted: #6b7266; --line: #e3dfd3;
+    --ok: #2f8f46; --warn: #d9a400; --bad: #c8412b; --none: #9aa39a; --accent: #2b6e4f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: .3px; }
+  header .sub { color: var(--muted); font-size: 13px; flex: 1 1 260px; }
+  header a.bot { color: var(--accent); font-weight: 600; text-decoration: none; white-space: nowrap; }
+  .search { position: relative; display: flex; gap: 6px; flex: 1 1 340px; max-width: 520px; }
+  .search input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: #fff; }
+  .search ul { position: absolute; top: 100%; left: 0; right: 0; z-index: 1000; list-style: none; margin: 4px 0 0; padding: 4px; background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.12); }
+  .search li { padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .search li:hover { background: #eef5f0; }
+  .search li small { color: var(--muted); display: block; }
+  .status { width: 100%; font-size: 13px; color: var(--accent); }
+  .status.err { color: var(--bad); }
+  .wrap { display: grid; grid-template-columns: minmax(0, 1fr) 420px; height: calc(100vh - 62px); }
+  #map { height: 100%; min-height: 420px; }
+  #map.picking { cursor: crosshair; }
+  aside { overflow-y: auto; padding: 14px 16px 40px; border-left: 1px solid var(--line); background: var(--panel); }
+  @media (max-width: 900px) {
+    .wrap { grid-template-columns: 1fr; height: auto; }
+    #map { height: 60vh; }
+    aside { border-left: 0; border-top: 1px solid var(--line); }
+  }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
+  .seg button { border: 0; background: transparent; padding: 7px 12px; font: inherit; cursor: pointer; color: var(--ink); }
+  .seg button.on { background: var(--accent); color: #fff; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: #fff; }
+  .card .k { font-size: 11px; color: var(--muted); }
+  .card .v { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .card .v small { font-size: 12px; font-weight: 500; color: var(--muted); }
+  h2 { font-size: 14px; margin: 18px 0 8px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 4px 4px; border-bottom: 1px solid var(--line); text-align: left; }
+  th { font-weight: 600; color: var(--muted); font-size: 11px; }
+  td input[type=number] { width: 58px; padding: 3px 4px; border: 1px solid var(--line); border-radius: 5px; font: inherit; }
+  td input[type=text] { width: 100%; min-width: 80px; padding: 3px 4px; border: 1px solid var(--line); border-radius: 5px; font: inherit; }
+  select { font: inherit; padding: 2px; border: 1px solid var(--line); border-radius: 5px; }
+  .btn { border: 1px solid var(--accent); color: var(--accent); background: #fff; border-radius: 7px; padding: 5px 10px; font: inherit; cursor: pointer; white-space: nowrap; }
+  .btn:hover { background: #eef5f0; }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn:disabled { opacity: .5; cursor: wait; }
+  .tl { position: relative; height: 22px; background: #eee9dc; border-radius: 5px; overflow: hidden; margin: 3px 0 10px; }
+  .tl span { position: absolute; top: 0; bottom: 0; color: #fff; font-size: 10.5px; line-height: 22px; padding-left: 4px; white-space: nowrap; overflow: hidden; border-right: 1px solid #fff; }
+  .tl .near { background: #4f8a6b; } .tl .far { background: #2a5d8a; } .tl .gap { background: var(--bad); }
+  .hname { font-weight: 600; font-size: 13px; }
+  .hname small { font-weight: 400; color: var(--muted); }
+  .note { font-size: 12px; color: var(--muted); background: #f3efe3; border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
+  .legend { background: rgba(255,253,248,.95); padding: 6px 8px; border-radius: 8px; font-size: 12px; line-height: 1.6; box-shadow: 0 1px 4px rgba(0,0,0,.2); }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -2px; }
+  .plabel { background: transparent; border: 0; box-shadow: none; color: #fff; font-weight: 700; font-size: 11px; text-shadow: 0 0 3px #000, 0 0 2px #000; text-align: center; }
+  .plabel::before { display: none; }
+  .well { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); align-items: center; }
+  details summary { cursor: pointer; color: var(--muted); margin-top: 16px; }
+  .param { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 6px 0; }
+  .param input { width: 100px; padding: 3px 5px; border: 1px solid var(--line); border-radius: 5px; font: inherit; }
+  .pop b { font-size: 14px; } .pop td { border: 0; padding: 1px 6px 1px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Jaiylym</h1>
+  <form class="search" id="search" autocomplete="off">
+    <input id="q" placeholder="Село или город, например: Кеген, Шелек, Жанаарка">
+    <button class="btn primary" id="go">Найти</button>
+    <button class="btn" type="button" id="pick" title="Нажмите на карту, чтобы выбрать центр">📍 На карте</button>
+    <ul id="results" hidden></ul>
+  </form>
+  <a class="bot" href="https://t.me/JAIYLYM_bot" target="_blank" rel="noopener">Бот для пастуха → @JAIYLYM_bot</a>
+  <span class="sub" id="sub"></span>
+  <div class="status" id="status" hidden></div>
+</header>
+<div class="wrap">
+  <div id="map"></div>
+  <aside>
+    <div class="seg" id="mode">
+      <button data-m="current">Сейчас</button>
+      <button data-m="plan" class="on">План Jaiylym</button>
+      <button data-m="ndvi">Трава (NDVI)</button>
+    </div>
+
+    <div class="cards">
+      <div class="card"><div class="k">Перегружено участков</div><div class="v" id="c-over"></div></div>
+      <div class="card"><div class="k">Корм сверх нормы, т сена</div><div class="v" id="c-hay"></div></div>
+      <div class="card"><div class="k">Цена этого сена, ₸</div><div class="v" id="c-money"></div></div>
+    </div>
+    <div class="note" id="explain"></div>
+
+    <h2>Стада села</h2>
+    <table id="herds">
+      <thead><tr><th>Хозяин</th><th>Овцы</th><th>КРС</th><th>Лош.</th><th>Где сейчас</th><th title="Дойные: каждый вечер в село">Дойн.</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p><button class="btn" id="add">+ стадо</button> <small style="color:var(--muted)">Стада — пример, замените своими.</small></p>
+
+    <h2>Маршрут на сезон (план)</h2>
+    <div id="routes"></div>
+
+    <h2>Куда вложить деньги на водопой</h2>
+    <div id="wells"></div>
+    <div class="note">Нажмите на дальний участок без воды и отметьте «есть водопой» — план пересчитается.
+      Мы не обещаем сделать воду. Мы показываем акимату, где водопой откроет больше всего корма.</div>
+
+    <details>
+      <summary>Параметры расчёта</summary>
+      <div id="params"></div>
+      <div class="note">Биомасса = (NDVI − NDVI почвы) × коэффициент. Коэффициент нужно откалибровать:
+        срезать траву с 1 м² на 3–5 участках, высушить, взвесить. Цена сена — пример, укажите цену своего района.</div>
+    </details>
+
+    <details>
+      <summary>Откуда данные и что условно</summary>
+      <div class="note" id="sources"></div>
+    </details>
+  </aside>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="engine.js"></script>
+<script src="pipeline.js"></script>
+<script src="data/plots.js"></script>
+<script src="data/herds.js"></script>
+<script>
+const J = window.Jaiylym, PL = window.JaiylymPipeline;
+const DEFAULT = window.JAIYLYM_DATA;            // Кеген, посчитан заранее (ndvi.py)
+let D = null, plots = [];
+let herds = JSON.parse(JSON.stringify(window.JAIYLYM_HERDS));
+const P = J.params();
+let mode = "plan";
+const $ = id => document.getElementById(id);
+const fmt = n => Math.round(n).toLocaleString("ru-RU");
+const pct = x => isFinite(x) ? Math.round(x * 100) + "%" : "∞";
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---------- карта ----------
+const map = L.map("map").setView([DEFAULT.village.lat, DEFAULT.village.lon], 12);
+L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+  maxZoom: 17, attribution: "Спутник: Esri World Imagery · NDVI: ESA Copernicus Sentinel-2 · Поиск: © OpenStreetMap",
+}).addTo(map);
+new ResizeObserver(() => map.invalidateSize()).observe($("map"));
+const group = L.layerGroup().addTo(map);
+let ndviLayer = null, layers = {}, bounds = null;
+
+const legend = L.control({ position: "bottomleft" });
+legend.onAdd = () => { const d = L.DomUtil.create("div", "legend"); d.id = "legend"; return d; };
+legend.addTo(map);
+
+function ndviPng(grid) {
+  const n = grid.size, c = document.createElement("canvas");
+  c.width = c.height = n;
+  const ctx = c.getContext("2d"), img = ctx.createImageData(n, n);
+  const stops = [[0.05, [140, 81, 10]], [0.2, [223, 194, 125]], [0.35, [166, 217, 106]], [0.55, [26, 150, 65]]];
+  const ramp = v => {
+    if (v <= stops[0][0]) return stops[0][1];
+    for (let k = 1; k < stops.length; k++) if (v <= stops[k][0]) {
+      const [a, ca] = stops[k - 1], [b, cb] = stops[k], t = (v - a) / (b - a);
+      return ca.map((x, j) => x + (cb[j] - x) * t);
+    }
+    return stops[stops.length - 1][1];
+  };
+  for (let i = 0; i < n * n; i++) {
+    const v = grid.ndvi[i];
+    if (!grid.pasture[i] || Number.isNaN(v)) continue;
+    const [r, g, b] = ramp(v);
+    img.data.set([r, g, b, 190], i * 4);
+  }
+  ctx.putImageData(img, 0, 0);
+  return c.toDataURL("image/png");
+}
+
+function showVillage(data, png) {
+  D = data; plots = data.plots;
+  group.clearLayers(); layers = {};
+  const [w, s, e, n] = D.bbox;
+  ndviLayer = L.imageOverlay(png, [[s, w], [n, e]], { opacity: 0.85 });
+  L.circleMarker([D.village.lat, D.village.lon], { radius: 6, color: "#fff", weight: 2, fillColor: "#222", fillOpacity: 1 })
+    .bindTooltip(D.village.name).addTo(group);
+  for (const p of plots) {
+    const poly = L.polygon(p.geometry.coordinates[0].map(([x, y]) => [y, x]), { weight: 1.5, color: "#fff", fillOpacity: 0.45 }).addTo(group);
+    poly.bindTooltip("", { permanent: true, direction: "center", className: "plabel" });
+    poly.on("click", () => openPlot(p, poly));
+    layers[p.id] = poly;
+  }
+  bounds = L.latLngBounds(plots.flatMap(p => p.geometry.coordinates[0].map(([x, y]) => [y, x])));
+  map.invalidateSize(); map.fitBounds(bounds, { padding: [10, 10] });
+  $("sub").textContent = `${D.village.name} · Sentinel-2, лето ${D.source.year} · ${fmt(plots.reduce((s, p) => s + p.pasture_ha, 0))} га пастбищ в радиусе 8 км`;
+  $("q").value = D.village.name;
+  history.replaceState(null, "", `#lat=${D.village.lat}&lon=${D.village.lon}&name=${encodeURIComponent(D.village.name)}`);
+  renderSources();
+  render();
+}
+
+// ---------- выбор села ----------
+function status(msg, err) { const s = $("status"); s.hidden = !msg; s.textContent = msg || ""; s.classList.toggle("err", !!err); }
+const cacheKey = (lat, lon) => `jaiylym:v2:${(+lat).toFixed(3)},${(+lon).toFixed(3)}`;
+
+async function openVillage(name, lat, lon) {
+  $("results").hidden = true;
+  if (Math.abs(lat - DEFAULT.village.lat) < 0.01 && Math.abs(lon - DEFAULT.village.lon) < 0.01) {
+    status(""); return showVillage(Object.assign({}, DEFAULT, { plots: clonePlots(DEFAULT.plots) }), "data/ndvi.png");
+  }
+  try {
+    const hit = JSON.parse(localStorage.getItem(cacheKey(lat, lon)) || "null");
+    if (hit) { hit.village.name = name || hit.village.name; status(""); return showVillage(hit.data ? hit.data : hit, hit.png); }
+  } catch (_) {}
+  $("go").disabled = true;
+  try {
+    const res = await PL.buildVillage({ name, lat, lon, onProgress: m => status(m) });
+    const png = ndviPng(res.grid);
+    delete res.grid;
+    try { localStorage.setItem(cacheKey(lat, lon), JSON.stringify(Object.assign({}, res, { png }))); } catch (_) {}
+    status("");
+    showVillage(res, png);
+  } catch (e) {
+    status("Не получилось: " + e.message + ". Попробуйте ещё раз или другое место.", true);
+  } finally { $("go").disabled = false; }
+}
+function clonePlots(ps) { return ps.map(p => Object.assign({}, p)); }
+
+$("search").onsubmit = async ev => {
+  ev.preventDefault();
+  const q = $("q").value.trim();
+  if (!q) return;
+  status("Ищу «" + q + "»…");
+  try {
+    const found = await PL.geocode(q);
+    status(found.length ? "" : "Ничего не нашлось. Попробуйте по-русски или выберите точку на карте.", !found.length);
+    if (found.length === 1) return openVillage(found[0].name, found[0].lat, found[0].lon);
+    const ul = $("results");
+    ul.innerHTML = found.map((f, i) => `<li data-i="${i}">${esc(f.name)}<small>${esc(f.full)}</small></li>`).join("");
+    ul.hidden = !found.length;
+    ul.querySelectorAll("li").forEach(li => li.onclick = () => { const f = found[+li.dataset.i]; openVillage(f.name, f.lat, f.lon); });
+  } catch (e) { status(e.message, true); }
+};
+document.addEventListener("click", e => { if (!$("search").contains(e.target)) $("results").hidden = true; });
+
+let picking = false;
+$("pick").onclick = () => { picking = !picking; $("map").classList.toggle("picking", picking); status(picking ? "Нажмите на карту в центре села" : ""); };
+map.on("click", e => {
+  if (!picking) return;
+  picking = false; $("map").classList.remove("picking");
+  const lat = +e.latlng.lat.toFixed(5), lon = +e.latlng.lng.toFixed(5);
+  openVillage(`Точка ${lat.toFixed(3)}, ${lon.toFixed(3)}`, lat, lon);
+});
+
+// ---------- участок ----------
+function loadColor(x) { return !x ? "#9aa39a" : x <= 0.7 ? "#2f8f46" : x <= 1.0 ? "#d9a400" : "#c8412b"; }
+function ndviColor(v) { return v == null ? "#999" : v < 0.18 ? "#8c510a" : v < 0.25 ? "#dfc27d" : v < 0.32 ? "#a6d96a" : "#1a9641"; }
+
+function openPlot(p, poly) {
+  if (picking) return;
+  const c = J.plotCapacity(p, P);
+  const l = (mode === "current" ? cur : pl).load[p.id];
+  const names = l.herds.map(x => herds.find(h => h.id === x.herd)?.name).filter(Boolean);
+  const ndviRow = p.ndvi_base != null
+    ? `<tr><td>NDVI ${D.source.base_year} → ${D.source.year}</td><td>${p.ndvi_base} → ${p.ndvi}</td></tr>`
+    : `<tr><td>NDVI ${D.source.year}</td><td>${p.ndvi ?? "нет данных"}</td></tr>`;
+  poly.bindPopup(`<div class="pop"><b>Участок ${p.id}</b> · ${p.ring === "near" ? "ближний" : "дальний"}, ~${p.dist_km} км на ${p.dir}
+    <table>
+      <tr><td>Пастбище</td><td>${fmt(p.pasture_ha)} га</td></tr>${ndviRow}
+      <tr><td>Корм на сезон</td><td>${fmt(c.forage / 1000)} т сух. в-ва</td></tr>
+      <tr><td>Выдержит</td><td>${fmt(c.au_season)} УГ ≈ ${fmt(c.au_season / P.au.sheep)} овец</td></tr>
+      <tr><td>Нагрузка (${mode === "current" ? "сейчас" : "план"})</td><td><b>${pct(l.load)}</b></td></tr>
+      <tr><td>Стада</td><td>${esc(names.join(", ")) || "—"}</td></tr>
+      <tr><td>Вода</td><td>${p.water_source}</td></tr>
+    </table>
+    ${p.ring === "far" ? `<label><input type="checkbox" id="wchk" ${p.water ? "checked" : ""}> есть водопой</label>` : ""}</div>`).openPopup();
+  const chk = $("wchk");
+  if (chk) chk.onchange = () => {
+    p.water = chk.checked;
+    p.water_source = chk.checked ? (p.water_source === "нет" ? "новый водопой (сценарий)" : p.water_source) : "нет";
+    render(); poly.closePopup();
+  };
+}
+
+// ---------- расчёт и отрисовка ----------
+let cur, pl;
+function render() {
+  cur = J.current(plots, herds, P);
+  pl = J.plan(plots, herds, P);
+  const r = mode === "current" ? cur : pl;
+  for (const p of plots) {
+    const l = r.load[p.id];
+    const fill = mode === "ndvi" ? ndviColor(p.ndvi) : loadColor(l.load);
+    const label = mode === "ndvi" ? `${p.id}<br>${p.ndvi ?? "—"}` : `${p.id}<br>${l.used ? pct(l.load) : "свободен"}`;
+    layers[p.id].setStyle({ fillColor: fill, fillOpacity: mode === "ndvi" ? 0.05 : 0.5, color: p.water ? "#7fd3ff" : "#fff",
+      weight: p.water && p.ring === "far" ? 2.5 : 1.2, dashArray: p.water ? null : "4 4" });
+    layers[p.id].setTooltipContent(label);
+  }
+  if (mode === "ndvi") ndviLayer.addTo(group); else ndviLayer.remove();
+
+  $("legend").innerHTML = mode === "ndvi"
+    ? `<b>Трава, NDVI ${D.source.year}</b><br><i style="background:#1a9641"></i>густая<br><i style="background:#a6d96a"></i>средняя<br><i style="background:#dfc27d"></i>редкая<br><i style="background:#8c510a"></i>почти нет<br><small>прозрачно — не пастбище</small>`
+    : `<b>Нагрузка</b><br><i style="background:#2f8f46"></i>до 70%<br><i style="background:#d9a400"></i>70–100%<br><i style="background:#c8412b"></i>перегруз<br><i style="background:#9aa39a"></i>не используется<br><i style="background:transparent;border:2px solid #7fd3ff"></i>есть вода<br><i style="background:transparent;border:1px dashed #555"></i>нет воды`;
+
+  const hayCur = J.hayTonnes(cur.deficit_kg, P), hayPl = J.hayTonnes(pl.deficit_kg, P);
+  const mln = t => (t * P.hay_price / 1e6).toLocaleString("ru-RU", { maximumFractionDigits: 1 });
+  $("c-over").innerHTML = `${cur.overloaded} <small>→</small> ${pl.overloaded}`;
+  $("c-hay").innerHTML = `${fmt(hayCur)} <small>→</small> ${fmt(hayPl)}`;
+  $("c-money").innerHTML = `${mln(hayCur)} <small>→</small> ${mln(hayPl)} <small>млн</small>`;
+  $("explain").innerHTML =
+    `<b>Сейчас</b> все стада пасутся у села: ближние участки перегружены, а корм на ${fmt(hayCur)} т сена берётся «в долг» у земли — это и есть деградация.
+     <b>План</b> разводит стада по участкам с водой так, чтобы нигде не было больше 100%.` +
+    (hayPl > 0 ? ` Не хватает ещё ${fmt(hayPl)} т — нужен водопой на дальнем участке или сено.` : "");
+  renderHerds(); renderRoutes(); renderWells();
+}
+
+function renderHerds() {
+  const near = plots.filter(p => p.ring === "near").map(p => p.id);
+  const tb = document.querySelector("#herds tbody");
+  tb.innerHTML = herds.map((h, i) => `<tr>
+    <td><input type="text" data-i="${i}" data-k="name" value="${esc(h.name)}"></td>
+    <td><input type="number" min="0" step="50" data-i="${i}" data-k="sheep" value="${h.sheep}"></td>
+    <td><input type="number" min="0" step="5" data-i="${i}" data-k="cattle" value="${h.cattle}"></td>
+    <td><input type="number" min="0" step="5" data-i="${i}" data-k="horses" value="${h.horses}"></td>
+    <td><select data-i="${i}" data-k="home">${near.map(id => `<option ${id === h.home ? "selected" : ""}>${id}</option>`).join("")}</select></td>
+    <td><input type="checkbox" data-i="${i}" data-k="daily_return" ${h.daily_return ? "checked" : ""}></td>
+  </tr>`).join("");
+  tb.querySelectorAll("input,select").forEach(el => el.onchange = () => {
+    const h = herds[+el.dataset.i], k = el.dataset.k;
+    h[k] = el.type === "checkbox" ? el.checked : el.type === "number" ? Math.max(0, +el.value || 0) : el.value;
+    render();
+  });
+}
+
+function renderRoutes() {
+  const S = P.season_days, byId = Object.fromEntries(plots.map(p => [p.id, p]));
+  $("routes").innerHTML = herds.map(h => {
+    const bars = (pl.herdPlans[h.id] || []).map(s => {
+      const cls = s.plot ? byId[s.plot].ring : "gap";
+      return `<span class="${cls}" style="left:${(s.from - 1) / S * 100}%;width:${(s.to - s.from + 1) / S * 100}%" title="${s.plot || "нет корма"}: дни ${s.from}–${s.to}">${s.plot || "нет корма"}</span>`;
+    }).join("");
+    return `<div class="hname">${esc(h.name)} <small>${fmt(J.herdAU(h, P))} УГ</small></div><div class="tl">${bars}</div>`;
+  }).join("") + `<div class="note">Сезон ${S} дней с 1 мая. Зелёный — ближние участки, синий — дальние (жайлау), красный — корма не хватило.</div>`;
+}
+
+function renderWells() {
+  const ws = J.wells(plots, P);
+  $("wells").innerHTML = ws.length ? ws.map((w, i) => `<div class="well">
+      <span><b>${i + 1}. ${w.plot}</b> — откроет корм на ≈ ${fmt(w.sheep)} овец на сезон</span>
+      <button class="btn" data-p="${w.plot}">поставить</button></div>`).join("")
+    : `<div class="note">Все дальние участки уже с водой.</div>`;
+  document.querySelectorAll("#wells button").forEach(b => b.onclick = () => {
+    const p = plots.find(x => x.id === b.dataset.p);
+    p.water = true; p.water_source = "новый водопой (сценарий)"; render();
+  });
+}
+
+function renderParams() {
+  const fields = [["season_days", "Сезон, дней"], ["intake", "Корм на 1 УГ в сутки, кг"], ["util", "Можно стравить, доля"],
+    ["k_ndvi", "Биомасса на ед. NDVI, кг/га"], ["hay_price", "Цена сена, ₸/т (пример)"]];
+  $("params").innerHTML = fields.map(([k, t]) => `<div class="param"><span>${t}</span><input type="number" step="any" data-k="${k}" value="${P[k]}"></div>`).join("");
+  $("params").querySelectorAll("input").forEach(i => i.onchange = () => { P[i.dataset.k] = +i.value; render(); });
+}
+
+function renderSources() {
+  const s = D.source;
+  let trend = "";
+  if (s.base_year) {
+    const avg = ring => { const xs = plots.filter(p => p.ring === ring && p.ndvi != null && p.ndvi_base != null); return xs.reduce((a, p) => a + p.ndvi - p.ndvi_base, 0) / xs.length; };
+    const f = x => (x >= 0 ? "+" : "") + x.toFixed(3);
+    trend = `<br><b>${s.base_year} → ${s.year}:</b> NDVI на ближних участках ${f(avg("near"))}, на дальних ${f(avg("far"))}.
+      У села трава не растёт, хотя дальше от села растёт. Это похоже на перевыпас у села, но два года — не доказательство:
+      нужен ряд за 5–8 лет и проверка на месте.`;
+  }
+  $("sources").innerHTML = `
+    <b>Реальные данные:</b> снимки Sentinel-2 (ESA Copernicus) за ${s.dates.length} безоблачных дней лета ${s.year}
+    (${s.dates.slice().sort().join(", ")}); маска пастбищ — ESA WorldCover (трава, кустарник, редкая растительность).
+    Данные берутся через Microsoft Planetary Computer прямо в браузере.<br>
+    <b>Условно:</b> границы участков (секторы 8 направлений × 2 кольца; в реальности — схема пастбищ акимата),
+    стада (пример), вода на дальних участках (по водоёмам на карте — уточнить у пастухов), коэффициент биомассы, цена сена.${trend}`;
+}
+
+$("mode").querySelectorAll("button").forEach(b => b.onclick = () => {
+  mode = b.dataset.m;
+  $("mode").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+  render();
+});
+$("add").onclick = () => {
+  herds.push({ id: "h" + Date.now(), name: "Новое стадо", sheep: 300, goats: 0, cattle: 0, horses: 0, home: "Б-С", daily_return: false });
+  render();
+};
+
+// ---------- старт: село из ссылки (#lat=..&lon=..&name=..) или Кеген ----------
+renderParams();
+const h = new URLSearchParams(location.hash.slice(1));
+if (h.get("lat") && h.get("lon")) openVillage(h.get("name") || "Село", +h.get("lat"), +h.get("lon"));
+else openVillage(DEFAULT.village.name, DEFAULT.village.lat, DEFAULT.village.lon);
+</script>
+</body>
+</html>

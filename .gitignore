@@ -1,0 +1,5 @@
+.env
+bot_state.json
+node_modules/
+__pycache__/
+.DS_Store
