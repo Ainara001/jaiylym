@@ -62,11 +62,12 @@ const fmt = n => Math.round(n).toLocaleString("ru-RU");
 const pct = x => (isFinite(x) ? Math.round(x * 100) + "%" : "∞");
 const plural = (n, a, b, c) => n % 10 === 1 && n % 100 !== 11 ? a : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? b : c;
 const where = p => `${p.id} (${p.ring === "near" ? "ближний" : "дальний"}, ~${p.dist_km} км на ${p.dir} от села)`;
-const siteLink = v => `${SITE}#lat=${v.data.village.lat}&lon=${v.data.village.lon}&name=${encodeURIComponent(v.data.village.name)}`;
+const siteLink = (v, plotId) => `${SITE}#lat=${v.data.village.lat}&lon=${v.data.village.lon}&name=${encodeURIComponent(v.data.village.name)}` +
+  (plotId ? `&plot=${encodeURIComponent(plotId)}` : "");
 
 const MENU = {
   keyboard: [[{ text: "Сегодня" }, { text: "План" }], [{ text: "Карта села" }, { text: "Водопой" }],
-             [{ text: "📍 Где я?", request_location: true }, { text: "Сменить село" }]],
+             [{ text: "🔔 Участки" }, { text: "📍 Где я?", request_location: true }], [{ text: "Сменить село" }]],
   resize_keyboard: true,
 };
 const ASK_VILLAGE = {
@@ -209,18 +210,175 @@ async function askGemini(question, v, herd) {
   return null;
 }
 
+// ---------- подписки на участки ----------
+// c.subs = ["43.020,79.220|Д-С", ...] — участки, о которых человек получает уведомления
+const subKey = (vk, id) => vk + "|" + id;
+const fmtDate = d => d.slice(8, 10) + "." + d.slice(5, 7);
+const median = xs => { const a = xs.slice().sort((x, y) => x - y), m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
+const subscribers = (vk, id) => Object.entries(state.chats).filter(([, c]) => (c.subs || []).includes(subKey(vk, id))).map(([chat]) => chat);
+const isSubbed = (c, vk, id) => (c.subs || []).includes(subKey(vk, id));
+function toggleSub(c, vk, id, on) {
+  c.subs = (c.subs || []).filter(k => k !== subKey(vk, id));
+  if (on) c.subs.push(subKey(vk, id));
+  c.subs = c.subs.slice(-12);
+  save();
+}
+const ndviWord = x => x == null ? "нет данных" : x < 0.2 ? "🟤 травы мало" : x < 0.3 ? "🟡 средне" : "🟢 хорошо";
+
+function plotLoadLine(v, id) {
+  const { pl, herds } = compute(v);
+  const l = pl.load[id];
+  const names = l.herds.map(x => herds.find(h => h.id === x.herd)).filter(Boolean).length;
+  return names ? `По плану Jaiylym здесь пасётся ${names} ${plural(names, "стадо", "стада", "стад")}, нагрузка ${pct(l.load)}.` : "По плану Jaiylym участок сейчас свободен.";
+}
+
+/** Отчёт по участку: как менялась трава за лето по снимкам. */
+function plotReport(v, p) {
+  const s = p.series || [];
+  let text = `📊 Участок ${where(p)}, ${v.data.village.name}\n\nПастбище ${fmt(p.pasture_ha)} га. Трава за лето ${v.data.source.year} (NDVI по снимкам Sentinel-2):\n`;
+  if (s.length) {
+    text += s.map(x => `${fmtDate(x.d)}  ${"▇".repeat(Math.max(1, Math.round(x.v * 20)))} ${x.v.toFixed(2)}`).join("\n");
+    const ch = (s[s.length - 1].v - s[0].v) / s[0].v * 100;
+    text += `\n\nЗа лето: ${ch >= 0 ? "+" : ""}${ch.toFixed(0)}% ${ch <= -10 ? "📉 трава убывает" : ch >= 10 ? "📈 растёт" : "≈ стабильно"}.`;
+  } else text += `в среднем ${p.ndvi ?? "нет данных"}.`;
+  text += `\nСейчас: ${ndviWord(p.ndvi)}. ${plotLoadLine(v, p.id)}\n\nНа карте: ${siteLink(v, p.id)}`;
+  return text;
+}
+
+/** Текст уведомления о новом снимке. prev — прошлые значения NDVI этого участка. */
+function alertText(v, p, cur, prev, date) {
+  const base = prev.length ? median(prev.slice(-3)) : null;
+  const delta = base == null ? null : cur - base;
+  let head, advice;
+  const rel = delta == null ? 0 : delta / base;
+  if (delta != null && (delta <= -0.05 || rel <= -0.12)) {
+    head = "⚠️ Трава убывает";
+    advice = "Если стадо там или скоро туда идёт — планируйте перегон заранее. Проверьте на месте: иногда снимок портит дымка.";
+  } else if (cur < 0.2) { head = "🟤 Мало травы"; advice = "Долго пасти здесь не стоит."; }
+  else if (delta != null && (delta >= 0.05 || rel >= 0.12)) { head = "🌱 Трава растёт"; advice = "Участок восстанавливается."; }
+  else { head = "ℹ️ Свежий снимок"; advice = "Заметных изменений нет."; }
+  return `${head} — участок ${p.id}, ${v.data.village.name}\n\n` +
+    `Снимок Sentinel-2 от ${fmtDate(date)}: NDVI ${cur.toFixed(2)}` +
+    (base != null ? ` (было ≈ ${base.toFixed(2)}, ${delta >= 0 ? "+" : ""}${(delta / base * 100).toFixed(0)}%)` : "") +
+    `.\n${plotLoadLine(v, p.id)}\n${advice}\n\nКарта участка: ${siteLink(v, p.id)}`;
+}
+
+function plotsKeyboard(c, vk, v) {
+  const rows = [];
+  for (const ring of ["near", "far"]) {
+    const ps = v.data.plots.filter(p => p.ring === ring);
+    for (let i = 0; i < ps.length; i += 4)
+      rows.push(ps.slice(i, i + 4).map(p => ({ text: (isSubbed(c, vk, p.id) ? "✅ " : "") + p.id, callback_data: "s:" + PL.plotCode(p.id) })));
+  }
+  return { inline_keyboard: rows };
+}
+
+function textMySubs(c) {
+  const subs = (c.subs || []).filter(k => state.villages[k.split("|")[0]]);
+  if (!subs.length) return { text: "Вы ещё не подписаны ни на один участок.", kb: null };
+  return {
+    text: "🔔 Ваши участки — с мая по сентябрь пришлю уведомление, когда спутник сделает новый снимок (≈ раз в 5–10 дней):",
+    kb: { inline_keyboard: subs.map(k => {
+      const [vk, id] = k.split("|"), code = PL.plotCode(id), name = state.villages[vk].data.village.name;
+      return [{ text: `📊 ${id} · ${name}`, callback_data: `r:${vk}|${code}` }, { text: "📩 пример", callback_data: `d:${vk}|${code}` }, { text: "✖", callback_data: `u:${vk}|${code}` }];
+    }) },
+  };
+}
+
+// ---------- ежедневная проверка (её запускает GitHub Actions через POST /cron) ----------
+async function runCron(send, now = new Date()) {
+  const month = now.getMonth() + 1, inSeason = month >= 5 && month <= 9;
+  const report = { date: now.toISOString().slice(0, 10), season: inSeason, villages: 0, scenes: 0, alerts: 0, reminders: 0, errors: 0 };
+  if (!inSeason) { report.note = "вне сезона (октябрь–апрель): снег, NDVI не проверяем"; return report; }
+
+  // 1. новые снимки по участкам, на которые кто-то подписан
+  const byVillage = {};
+  for (const c of Object.values(state.chats)) for (const k of c.subs || []) {
+    const [vk, id] = k.split("|"); (byVillage[vk] = byVillage[vk] || new Set()).add(id);
+  }
+  for (const [vk, ids] of Object.entries(byVillage)) {
+    const v = state.villages[vk]; if (!v) continue;
+    report.villages++;
+    v.monitor = v.monitor || { last: null, hist: {} };
+    let scene;
+    try { scene = await PL.latestScene({ lat: v.data.village.lat, lon: v.data.village.lon, after: v.monitor.last, now }); }
+    catch (e) { console.error("cron", vk, e.message); report.errors++; continue; }
+    if (!scene) continue;
+    report.scenes++;
+    v.monitor.last = scene.date;
+    for (const id of ids) {
+      const m = scene.plots[id], p = v.data.plots.find(x => x.id === id);
+      if (!m || !p || m.valid < 0.6 || m.ndvi == null) continue;          // облака закрыли участок
+      // история: свои прошлые проверки, а в начале — снимки этого же лета из расчёта села
+      const seed = v.data.source.year === now.getFullYear() ? (p.series || []).filter(x => x.d < scene.date) : [];
+      const hist = v.monitor.hist[id] = v.monitor.hist[id] || seed.slice(-5);
+      const text = alertText(v, p, m.ndvi, hist.map(h => h.v), scene.date);
+      hist.push({ d: scene.date, v: m.ndvi }); v.monitor.hist[id] = hist.slice(-8);
+      for (const chat of subscribers(vk, id)) { await send(chat, text, MENU); report.alerts++; }
+    }
+  }
+
+  // 2. напоминания о перегоне за 3 дня
+  const day = J.seasonDay(now);
+  for (const [chat, c] of Object.entries(state.chats)) {
+    const v = villageOf(c); if (!v || !c.herd) continue;
+    const herd = herdsOf(v).find(h => h.id === c.herd); if (!herd) continue;
+    const plan = compute(v).pl.herdPlans[herd.id] || [];
+    const i = plan.findIndex(s => s.from === day + 3);
+    if (i <= 0 || c.reminded === report.date) continue;   // не чаще раза в день
+    c.reminded = report.date;
+    const to = plan[i], from = plan[i - 1], p = to.plot && v.data.plots.find(x => x.id === to.plot);
+    await send(chat, `🔔 Через 3 дня по плану перегон стада «${herd.name}»: ${from.plot || "—"} → ` +
+      (p ? `${where(p)}.\nТрава там: ${ndviWord(p.ndvi)} (NDVI ${p.ndvi}). ${p.water_source === "нет" ? "⚠️ Воды нет — возьмите с собой." : "Вода: " + p.water_source + "."}` : "корма по плану не хватает — нужен водопой или сено.") +
+      (p ? `\n\nКарта: ${siteLink(v, p.id)}` : ""), MENU);
+    report.reminders++;
+  }
+  save();
+  return report;
+}
+
 // ---------- обработка сообщений ----------
 async function handle(update, send, today = new Date()) {
   if (update.callback_query) {
     const cq = update.callback_query, chatId = cq.message.chat.id, c = chatOf(chatId);
-    const [kind, arg] = (cq.data || "").split(":");
+    const data = cq.data || "", kind = data.split(":")[0], arg = data.slice(kind.length + 1);
     if (kind === "pick" && c.pending && c.pending[+arg]) {
       const f = c.pending[+arg]; c.pending = null;
       return chooseVillage(chatId, f.name, f.lat, f.lon, send);
     }
     if (kind === "herd") {
       const v = villageOf(c), herd = v && herdsOf(v).find(h => h.id === arg);
-      if (herd) { c.herd = herd.id; save(); return send(chatId, `Готово: вы пастух стада «${herd.name}». Нажмите «Сегодня».`, MENU); }
+      if (herd) { c.herd = herd.id; save(); return send(chatId, `Готово: вы пастух стада «${herd.name}». Нажмите «Сегодня».`, subPlanButton()); }
+    }
+    if (kind === "s") {                                   // подписка/отписка на участок текущего села
+      const v = villageOf(c), id = PL.plotFromCode(arg);
+      if (!v || !id) return;
+      const on = !isSubbed(c, c.village, id);
+      toggleSub(c, c.village, id, on);
+      const p = v.data.plots.find(x => x.id === id);
+      await send(chatId, on ? `🔔 Подписка на ${where(p)} оформлена.
+
+` + plotReport(v, p) : `Вы отписались от участка ${id}.`, MENU);
+      return send(chatId, "Ваши участки отмечены ✅:", plotsKeyboard(c, c.village, v));
+    }
+    if (kind === "sp") {                                  // подписка на все участки маршрута стада
+      const v = villageOf(c), herd = v && herdsOf(v).find(h => h.id === c.herd);
+      if (!herd) return;
+      const ids = [...new Set((compute(v).pl.herdPlans[herd.id] || []).map(s => s.plot).filter(Boolean))];
+      ids.forEach(id => toggleSub(c, c.village, id, true));
+      return send(chatId, `🔔 Подписала вас на участки маршрута: ${ids.join(", ")}. В сезон пришлю уведомление о каждом новом снимке и напомню о перегоне за 3 дня.`, MENU);
+    }
+    if (kind === "r" || kind === "d" || kind === "u") {   // отчёт / пример уведомления / отписка
+      const [vk, code] = arg.split("|"), v = state.villages[vk], id = PL.plotFromCode(code);
+      const p = v && id && v.data.plots.find(x => x.id === id);
+      if (!p) return send(chatId, "Этот участок больше не найден.", MENU);
+      if (kind === "r") return send(chatId, plotReport(v, p), MENU);
+      if (kind === "u") { toggleSub(c, vk, id, false); return send(chatId, `Вы отписались от участка ${id} (${v.data.village.name}).`, MENU); }
+      const s = p.series || [];
+      if (s.length < 2) return send(chatId, "Для примера нужно хотя бы два летних снимка участка.", MENU);
+      const last = s[s.length - 1];
+      return send(chatId, "Так будет выглядеть уведомление в сезон (на реальных снимках прошлого лета):\n\n" +
+        alertText(v, p, last.v, s.slice(0, -1).map(x => x.v), last.d), MENU);
     }
     return;
   }
@@ -230,6 +388,24 @@ async function handle(update, send, today = new Date()) {
   const chatId = msg.chat.id, c = chatOf(chatId);
   const text = (msg.text || "").trim(), low = text.toLowerCase();
   const v = villageOf(c);
+
+  const deep = /^\/start\s+([vp])_(m?\d+)_(m?\d+)(?:_([NF][0-7]))?$/i.exec(text);
+  if (deep) {                                       // пришёл с сайта: открыть село / подписаться на участок
+    const num = x => (x[0] === "m" ? -1 : 1) * +x.replace("m", "") / 1000;
+    const lat = num(deep[2]), lon = num(deep[3]), vk = vkey(lat, lon);
+    const name = state.villages[vk] ? state.villages[vk].data.village.name : await reverseName(lat, lon);
+    const ok = await chooseVillage(chatId, name, lat, lon, send, { quiet: !!deep[4] });
+    const id = deep[4] && PL.plotFromCode(deep[4].toUpperCase());
+    if (ok && id) {
+      toggleSub(c, vk, id, true);
+      const v2 = state.villages[vk], p = v2.data.plots.find(x => x.id === id);
+      return send(chatId, `🔔 Вы подписаны на участок ${where(p)}.
+С мая по сентябрь пришлю уведомление о каждом новом снимке.
+
+` + plotReport(v2, p), MENU);
+    }
+    return;
+  }
 
   if (low.startsWith("/start") || low === "сменить село" || low === "/selo") {
     c.village = null; c.herd = null; save();
@@ -275,9 +451,14 @@ async function handle(update, send, today = new Date()) {
     v.herds.push(herd);
     c.herd = id; save();
     return send(chatId, `Записал: ${parsed.sheep} овец, ${parsed.goats} коз, ${parsed.cattle} КРС, ${parsed.horses} лошадей` +
-      `${parsed.daily_return ? " (дойные, каждый вечер в село)" : ""} = ${fmt(J.herdAU(herd))} условных голов.\n\n` + textPlan(v, herd), MENU);
+      `${parsed.daily_return ? " (дойные, каждый вечер в село)" : ""} = ${fmt(J.herdAU(herd))} условных голов.\n\n` + textPlan(v, herd), subPlanButton());
   }
 
+  if (low === "🔔 участки" || low === "участки" || low === "/plots") {
+    const my = textMySubs(c);
+    if (my.kb) await send(chatId, my.text, my.kb);
+    return send(chatId, `${my.kb ? "Добавить участки" : "Подпишитесь на участки"} села ${v.data.village.name} — нажмите на участок (✅ — уже подписаны):`, plotsKeyboard(c, c.village, v));
+  }
   if (low === "карта села" || low === "/map") return send(chatId, textMap(v), MENU);
   if (low === "водопой" || low === "/water") return send(chatId, textWells(v), MENU);
 
@@ -297,17 +478,26 @@ async function handle(update, send, today = new Date()) {
     "Чтобы записать стадо, напишите, например: «500 овец 30 коров 10 лошадей».", MENU);
 }
 
-async function chooseVillage(chatId, name, lat, lon, send) {
+async function chooseVillage(chatId, name, lat, lon, send, { quiet = false } = {}) {
   const c = chatOf(chatId);
+  const prev = c.village;
   try {
     c.village = await ensureVillage(name, lat, lon, t => send(chatId, t));
   } catch (e) {
-    return send(chatId, `Не получилось посчитать это место: ${e.message}. Попробуйте ещё раз или другое село.`, ASK_VILLAGE);
+    await send(chatId, `Не получилось посчитать это место: ${e.message}. Попробуйте ещё раз или другое село.`, ASK_VILLAGE);
+    return false;
   }
-  c.herd = null; save();
+  if (prev !== c.village) c.herd = null;
+  save();
   const v = villageOf(c);
+  if (quiet) return true;
   await send(chatId, villageSummary(v) + `\n\nКарта: ${siteLink(v)}`, MENU);
-  return askHerd(chatId, v, send);
+  await askHerd(chatId, v, send);
+  return true;
+}
+
+function subPlanButton() {
+  return { inline_keyboard: [[{ text: "🔔 Подписаться на участки маршрута", callback_data: "sp" }]] };
 }
 
 function askHerd(chatId, v, send) {
@@ -315,6 +505,19 @@ function askHerd(chatId, v, send) {
   return send(chatId, `Сколько у вас скота? Напишите, например: «500 овец 30 коров 10 лошадей» (для дойных коров добавьте слово «дойные»).` +
     (demo.length ? `\nИли выберите демо-стадо:` : ""),
     demo.length ? { inline_keyboard: demo.map(h => [{ text: `${h.name} — ${fmt(J.herdAU(h))} УГ`, callback_data: "herd:" + h.id }]) } : MENU);
+}
+
+/** Для сайта: стада, записанные в боте (без имён), и сколько людей подписано на каждый участок. */
+function villageApi(lat, lon) {
+  const vk = vkey(lat, lon), v = state.villages[vk];
+  if (!v) return { herds: [], subs: {} };
+  const subs = {};
+  for (const c of Object.values(state.chats)) for (const k of c.subs || []) {
+    const [kv, id] = k.split("|"); if (kv === vk) subs[id] = (subs[id] || 0) + 1;
+  }
+  const herds = (v.herds || []).map((h, i) => ({ id: "tg" + (i + 1), name: `Пастух из Telegram ${i + 1}`, sheep: h.sheep || 0, goats: h.goats || 0,
+    cattle: h.cattle || 0, horses: h.horses || 0, home: h.home, daily_return: !!h.daily_return, from_bot: true }));
+  return { herds, subs };
 }
 
 // ---------- Telegram ----------
@@ -345,7 +548,7 @@ async function run(token) {
   };
   const info = `Бот @${me.result.username}. Хранилище: ${store.kind}. Gemini: ${GEMINI_KEY ? GEMINI_MODEL : "выключен"}.`;
 
-  if (PUBLIC_URL) return serve(token, api, onUpdate, info);
+  if (PUBLIC_URL) return serve(token, api, onUpdate, info, send);
 
   await api("deleteWebhook");   // иначе Telegram не отдаёт сообщения через getUpdates
   console.log(info + " Режим: long polling.");
@@ -359,7 +562,7 @@ async function run(token) {
   }
 }
 
-function serve(token, api, onUpdate, info) {
+function serve(token, api, onUpdate, info, send) {
   const http = require("http");
   const secret = require("crypto").createHash("sha256").update(token).digest("hex").slice(0, 32);
   const server = http.createServer((req, res) => {
@@ -371,6 +574,20 @@ function serve(token, api, onUpdate, info) {
         res.writeHead(200).end("ok");               // отвечаем сразу, считаем потом
         try { onUpdate(JSON.parse(body)); } catch (e) { console.error("Плохое обновление:", e.message); }
       });
+      return;
+    }
+    if (req.method === "POST" && req.url.startsWith("/cron")) {
+      // Пароль задаётся вручную: CRON_SECRET в Render (Environment) и такой же секрет в GitHub (Settings → Secrets → Actions)
+      if (!process.env.CRON_SECRET) { res.writeHead(503).end("CRON_SECRET не задан"); return; }
+      if (req.headers["x-cron-secret"] !== process.env.CRON_SECRET) { res.writeHead(401).end(); return; }
+      runCron(send).then(r => { console.log("cron", JSON.stringify(r)); res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(r)); })
+        .catch(e => { console.error("cron", e); res.writeHead(500).end(String(e.message)); });
+      return;
+    }
+    if (req.method === "GET" && req.url.startsWith("/api/village")) {
+      const q = new URL(req.url, "http://x").searchParams;
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*", "cache-control": "no-store" })
+        .end(JSON.stringify(villageApi(q.get("lat"), q.get("lon"))));
       return;
     }
     res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }).end("Jaiylym bot работает. Telegram: @" + "JAIYLYM_bot");
@@ -389,27 +606,43 @@ function serve(token, api, onUpdate, info) {
 // ---------- проверка без Telegram ----------
 async function test() {
   TEST = true; state.chats = {};
-  const send = async (chat, text, kb) => {
-    console.log("🤖 " + text + (kb?.inline_keyboard ? "\n   [" + kb.inline_keyboard.map(r => r[0].text).join(" | ") + "]" : ""));
+  const show = (chat, text, kb) => {
+    console.log(`🤖[${chat}] ` + text + (kb?.inline_keyboard ? "\n   [" + kb.inline_keyboard.map(r => r.map(b => b.text).join(" | ")).join(" / ") + "]" : ""));
   };
-  const say = async (text, extra = {}) => {
-    console.log(`\n👤 ${text || JSON.stringify(extra)}`);
-    await handle({ message: Object.assign({ chat: { id: 1 }, from: { first_name: "Тест" }, text }, extra) }, send, new Date(2026, 6, 15));
+  const send = async (chat, text, kb) => show(chat, text, kb);
+  const say = async (text, extra = {}, chat = 1) => {
+    console.log(`\n👤[${chat}] ${text || JSON.stringify(extra)}`);
+    await handle({ message: Object.assign({ chat: { id: chat }, from: { first_name: "Тест" }, text }, extra) }, send, new Date(2026, 6, 15));
   };
-  const tap = async data => { console.log(`\n👤 [кнопка ${data}]`); await handle({ callback_query: { id: "x", data, message: { chat: { id: 1 } } } }, send); };
-  await say("/start");
-  await say("Шелек");
-  if (chatOf(1).pending) await tap("pick:0");
-  await say("Сегодня");
-  await say("600 овец 20 коров 10 лошадей");
-  await say("Сегодня");
-  await say("Карта села");
-  await say("Водопой");
-  await say("Сменить село");
-  await say("", { location: { latitude: 43.02, longitude: 79.22 } });
-  await tap("herd:asan");
-  await say("", { location: { latitude: 43.06, longitude: 79.22 } });
-  await say("Почему мне нельзя пасти рядом с селом?");
+  const tap = async (data, chat = 1) => { console.log(`\n👤[${chat}] [кнопка ${data}]`); await handle({ callback_query: { id: "x", data, message: { chat: { id: chat } } } }, send); };
+
+  // 1) пришёл с сайта по ссылке «Подписаться» на участок Д-С Кегена
+  await say("/start p_43020_79220_F0");
+  // 2) список подписок, подписка ещё на Б-С, отчёт, пример уведомления
+  await say("🔔 Участки");
+  await tap("s:N0");
+  await tap("d:43.020,79.220|F0");
+  // 3) второй человек: стадо и подписка на маршрут
+  await say("/start v_43020_79220", {}, 2);
+  await say("700 овец 30 коров", {}, 2);
+  await tap("sp", 2);
+  // 4) сайт: что видит акимат
+  console.log("\nAPI для сайта:", JSON.stringify(villageApi(43.02, 79.22)));
+  // 5) ежедневная проверка: в ноябре и «31 августа»
+  console.log("\nCRON 21 ноября:", JSON.stringify(await runCron(send, new Date("2026-11-21T04:00:00Z"))));
+  console.log("\nCRON 31 августа:");
+  console.log(JSON.stringify(await runCron(send, new Date("2026-08-31T04:00:00Z"))));
+  console.log("\nCRON 31 августа, повторно (нового снимка нет):", JSON.stringify(await runCron(send, new Date("2026-08-31T05:00:00Z"))));
+  // 6) напоминание о перегоне: найдём день, когда у стада 2 начинается новый отрезок
+  await say("/start v_43020_79220", {}, 3);
+  await tap("herd:village", 3);
+  const v = state.villages["43.020,79.220"], plan = compute(v).pl.herdPlans["village"];
+  console.log("\nплан сельского стада:", JSON.stringify(plan));
+  const seg = plan.find((s, i) => i > 0);
+  if (seg) {
+    const d = new Date(2026, 4, 1 + seg.from - 3 - 1, 9);
+    console.log(`CRON за 3 дня до перегона (${d.toISOString().slice(0, 10)}):`, JSON.stringify(await runCron(send, d)));
+  }
 }
 
 if (require.main === module) {
@@ -418,4 +651,4 @@ if (require.main === module) {
   else { console.log("Нужен TELEGRAM_TOKEN в .env (или проверка: node bot.js --test)"); process.exit(1); }
 }
 
-module.exports = { handle, parseHerd };
+module.exports = { handle, parseHerd, runCron, villageApi };

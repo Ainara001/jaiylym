@@ -118,10 +118,67 @@
     return [];
   }
 
+  // ---------- общие шаги расчёта ----------
+  async function loadLand(bbox) {
+    const N = SIZE * SIZE;
+    const items = (await stac({ collections: ["esa-worldcover"], bbox, limit: 10 }))
+      .filter((f, _, all) => f.id.includes("2021") || !all.some(g => g.id.includes("2021")));
+    const parts = await Promise.all(items.map(it => raster(bbox, "esa-worldcover", it.id, ["map"])));
+    const land = new Uint8Array(N);   // склеиваем тайлы по маске
+    for (const { data } of parts) for (let i = 0; i < N; i++) if (!land[i] && data[N + i]) land[i] = data[i];
+    return land;
+  }
+
+  async function sceneNdvi(bbox, it) {
+    const N = SIZE * SIZE;
+    const { data: d } = await raster(bbox, "sentinel-2-l2a", it.id, ["B04", "B08", "SCL"]);
+    // с processing baseline 04.00 (2022+) ESA добавляет к отражению +1000
+    const off = (it.properties["s2:processing_baseline"] || "00.00") >= "04.00" ? 1000 : 0;
+    const nd = new Float32Array(N).fill(NaN);
+    for (let i = 0; i < N; i++) {
+      if (!d[3 * N + i] || !SCL_OK.includes(d[2 * N + i])) continue;
+      const red = d[i] - off, nir = d[N + i] - off;
+      if (red <= 0 || nir <= 0) continue;
+      nd[i] = (nir - red) / (nir + red);
+    }
+    return nd;
+  }
+
+  /** Для каждого пикселя — номер участка (0..15) или −1; площадь пикселя в га. */
+  function plotIndex(lat, lon, bbox) {
+    const [kx, ky] = kmPerDeg(lat);
+    const idx = new Int8Array(SIZE * SIZE).fill(-1);
+    for (let row = 0; row < SIZE; row++) {
+      const dy = (bbox[3] - (row + 0.5) * (bbox[3] - bbox[1]) / SIZE - lat) * ky;
+      for (let col = 0; col < SIZE; col++) {
+        const dx = (bbox[0] + (col + 0.5) * (bbox[2] - bbox[0]) / SIZE - lon) * kx;
+        const r = Math.hypot(dx, dy);
+        const ring = r >= 0.5 && r < 3 ? 0 : r >= 3 && r < 8 ? 1 : -1;
+        if (ring < 0) continue;
+        let az = Math.atan2(dx, dy) * 180 / Math.PI; if (az < 0) az += 360;
+        idx[row * SIZE + col] = ring * 8 + Math.round(az / 45) % 8;
+      }
+    }
+    const pxHa = ((bbox[2] - bbox[0]) * kx / SIZE) * ((bbox[3] - bbox[1]) * ky / SIZE) * 100;
+    return { idx, pxHa };
+  }
+
+  /** Средний NDVI по пастбищным пикселям каждого участка и доля пикселей без облаков. */
+  function plotMeans(nd, land, idx) {
+    const acc = Array.from({ length: 16 }, () => ({ past: 0, sum: 0, n: 0 }));
+    for (let i = 0; i < nd.length; i++) {
+      const k = idx[i];
+      if (k < 0 || !WC_PASTURE.includes(land[i])) continue;
+      const a = acc[k]; a.past++;
+      if (!Number.isNaN(nd[i])) { a.sum += nd[i]; a.n++; }
+    }
+    return acc.map(a => ({ ndvi: a.n ? +(a.sum / a.n).toFixed(3) : null, valid: a.past ? a.n / a.past : 0 }));
+  }
+
   /**
    * Главная функция. Возвращает объект как web/data/plots.js:
-   * { village, bbox, source, plots: [{ id, ring, dir, dist_km, geometry, area_ha, pasture_ha, ndvi, water, water_source }] }
-   * + ndviGrid (Float32Array SIZE×SIZE) и pastureGrid для картинки слоя.
+   * { village, bbox, source, plots: [{ id, ring, dir, dist_km, geometry, area_ha, pasture_ha, ndvi, series, water, water_source }] }
+   * + grid (NDVI и маска пастбищ) для картинки слоя.
    */
   async function buildVillage({ name, lat, lon, year, onProgress }) {
     const say = m => onProgress && onProgress(m);
@@ -135,33 +192,10 @@
     if (!scenes.length) throw new Error("Нет безоблачных летних снимков для этого места");
 
     say(`Загружаю ${scenes.length} снимков и карту покрытия земли…`);
-    const wcItems = (await stac({ collections: ["esa-worldcover"], bbox, limit: 10 }))
-      .filter((f, _, all) => f.id.includes("2021") || !all.some(g => g.id.includes("2021")));
-
-    const [s2, wc] = await Promise.all([
-      Promise.all(scenes.map(it => raster(bbox, "sentinel-2-l2a", it.id, ["B04", "B08", "SCL"]).then(r => ({ r, it })))),
-      Promise.all(wcItems.map(it => raster(bbox, "esa-worldcover", it.id, ["map"]))),
-    ]);
+    const [per, land] = await Promise.all([Promise.all(scenes.map(it => sceneNdvi(bbox, it))), loadLand(bbox)]);
 
     say("Считаю NDVI и пастбища…");
-    // покрытие земли: склеиваем тайлы по маске
-    const land = new Uint8Array(N);
-    for (const { data } of wc) for (let i = 0; i < N; i++) if (!land[i] && data[N + i]) land[i] = data[i];
-
-    // NDVI по каждому снимку
-    const per = s2.map(({ r, it }) => {
-      const d = r.data, off = (it.properties["s2:processing_baseline"] || "00.00") >= "04.00" ? 1000 : 0;
-      const nd = new Float32Array(N).fill(NaN);
-      for (let i = 0; i < N; i++) {
-        if (!d[3 * N + i] || !SCL_OK.includes(d[2 * N + i])) continue;
-        const red = d[i] - off, nir = d[N + i] - off;
-        if (red <= 0 || nir <= 0) continue;
-        nd[i] = (nir - red) / (nir + red);
-      }
-      return nd;
-    });
-    // медиана
-    const ndvi = new Float32Array(N).fill(NaN), buf = [];
+    const ndvi = new Float32Array(N).fill(NaN), buf = [];   // медиана по снимкам
     for (let i = 0; i < N; i++) {
       buf.length = 0;
       for (const nd of per) if (!Number.isNaN(nd[i])) buf.push(nd[i]);
@@ -171,37 +205,29 @@
       ndvi[i] = buf.length % 2 ? buf[m] : (buf[m - 1] + buf[m]) / 2;
     }
 
-    // участки: для каждого пикселя — кольцо и направление
     const plots = makePlots(lat, lon);
-    const [kx, ky] = kmPerDeg(lat);
-    const pxKmX = (bbox[2] - bbox[0]) * kx / SIZE, pxKmY = (bbox[3] - bbox[1]) * ky / SIZE;
-    const pxHa = pxKmX * pxKmY * 100;
-    const acc = plots.map(() => ({ all: 0, past: 0, sum: 0, n: 0, water: 0 }));
+    const { idx, pxHa } = plotIndex(lat, lon, bbox);
+    const acc = plots.map(() => ({ all: 0, past: 0, water: 0 }));
     const pasture = new Uint8Array(N);
-    for (let row = 0; row < SIZE; row++) {
-      const dy = (bbox[3] - (row + 0.5) * (bbox[3] - bbox[1]) / SIZE - lat) * ky;
-      for (let col = 0; col < SIZE; col++) {
-        const i = row * SIZE + col;
-        const isPast = WC_PASTURE.includes(land[i]);
-        pasture[i] = isPast ? 1 : 0;
-        const dx = (bbox[0] + (col + 0.5) * (bbox[2] - bbox[0]) / SIZE - lon) * kx;
-        const r = Math.hypot(dx, dy);
-        const ringIdx = r >= 0.5 && r < 3 ? 0 : r >= 3 && r < 8 ? 1 : -1;
-        if (ringIdx < 0) continue;
-        let az = Math.atan2(dx, dy) * 180 / Math.PI; if (az < 0) az += 360;
-        const k = ringIdx * 8 + Math.round(az / 45) % 8;
-        const a = acc[k];
-        a.all++;
-        if (land[i] === WC_WATER) a.water++;
-        if (isPast) { a.past++; if (!Number.isNaN(ndvi[i])) { a.sum += ndvi[i]; a.n++; } }
-      }
+    for (let i = 0; i < N; i++) {
+      const isPast = WC_PASTURE.includes(land[i]);
+      pasture[i] = isPast ? 1 : 0;
+      if (idx[i] < 0) continue;
+      const a = acc[idx[i]];
+      a.all++; if (isPast) a.past++; if (land[i] === WC_WATER) a.water++;
     }
+    const med = plotMeans(ndvi, land, idx);
+    const perPlot = per.map(nd => plotMeans(nd, land, idx));
+    const dates = scenes.map(s => s.properties.datetime.slice(0, 10));
     plots.forEach((p, k) => {
       const a = acc[k];
       p.area_ha = Math.round(a.all * pxHa);
       p.pasture_ha = Math.round(a.past * pxHa);
-      p.ndvi = a.n ? +(a.sum / a.n).toFixed(3) : null;
+      p.ndvi = med[k].ndvi;
       p.ndvi_base = null;
+      // NDVI участка на каждом снимке (если облака закрыли меньше половины пастбища)
+      p.series = dates.map((d, j) => ({ d, v: perPlot[j][k].valid >= 0.5 ? perPlot[j][k].ndvi : null }))
+        .filter(x => x.v != null).sort((x, y) => x.d < y.d ? -1 : 1);
       p.water_px = a.water;
       p.water = p.ring === "near" || a.water * pxHa >= 0.5;
       p.water_source = p.ring === "near" ? "село" : (p.water ? "водоём на карте WorldCover" : "нет");
@@ -213,13 +239,40 @@
       source: {
         ndvi: "Sentinel-2 L2A (ESA Copernicus), медиана безоблачных снимков лета",
         landcover: "ESA WorldCover 10 м",
-        base_year: null, year,
-        dates: scenes.map(s => s.properties.datetime.slice(0, 10)),
+        base_year: null, year, dates,
       },
       plots,
       grid: { size: SIZE, ndvi, pasture },
     };
   }
 
-  return { geocode, buildVillage, bboxFor, makePlots, setUserAgent, summerYear, SIZE };
+  /**
+   * Мониторинг: самый свежий снимок новее `after` (YYYY-MM-DD) за последние `days` дней.
+   * Возвращает { id, date, cloud, plots: { "Д-С": { ndvi, valid } } } или null, если нового снимка нет.
+   */
+  async function latestScene({ lat, lon, after, now = new Date(), days = 20 }) {
+    const bbox = bboxFor(lat, lon);
+    const from = new Date(now - days * 864e5).toISOString().slice(0, 10);
+    const items = (await stac({
+      collections: ["sentinel-2-l2a"], bbox, datetime: `${from}/${now.toISOString().slice(0, 10)}T23:59:59Z`,
+      query: { "eo:cloud_cover": { lt: 60 } }, limit: 30,
+    })).filter(it => !after || it.properties.datetime.slice(0, 10) > after)
+      .sort((a, b) => a.properties.datetime < b.properties.datetime ? 1 : -1);
+    if (!items.length) return null;
+    const it = items[0];
+    const [nd, land] = await Promise.all([sceneNdvi(bbox, it), loadLand(bbox)]);
+    const means = plotMeans(nd, land, plotIndex(lat, lon, bbox).idx);
+    const plots = {};
+    makePlots(lat, lon).forEach((p, k) => { plots[p.id] = means[k]; });
+    return { id: it.id, date: it.properties.datetime.slice(0, 10), cloud: it.properties["eo:cloud_cover"], plots };
+  }
+
+  // Код участка для ссылок и кнопок Telegram (только латиница): "Д-С" ↔ "F0"
+  function plotCode(id) { const [r, d] = id.split("-"); return (r === "Б" ? "N" : "F") + DIRS.indexOf(d); }
+  function plotFromCode(code) {
+    const m = /^([NF])([0-7])$/.exec(code || "");
+    return m ? (m[1] === "N" ? "Б" : "Д") + "-" + DIRS[+m[2]] : null;
+  }
+
+  return { geocode, buildVillage, latestScene, plotCode, plotFromCode, bboxFor, makePlots, setUserAgent, summerYear, SIZE };
 });

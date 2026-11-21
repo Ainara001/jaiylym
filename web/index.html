@@ -67,6 +67,10 @@
   .param { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 6px 0; }
   .param input { width: 100px; padding: 3px 5px; border: 1px solid var(--line); border-radius: 5px; font: inherit; }
   .pop b { font-size: 14px; } .pop td { border: 0; padding: 1px 6px 1px 0; }
+  .pop .sub { display: block; margin-top: 8px; padding: 7px 10px; border-radius: 8px; background: #229ED9; color: #fff !important; text-align: center; font-weight: 600; text-decoration: none; }
+  .pop .spark { display: block; margin: 4px 0 2px; }
+  .pop small { color: var(--muted); }
+  .frombot { color: #229ED9; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -78,7 +82,7 @@
     <button class="btn" type="button" id="pick" title="Нажмите на карту, чтобы выбрать центр">📍 На карте</button>
     <ul id="results" hidden></ul>
   </form>
-  <a class="bot" href="https://t.me/JAIYLYM_bot" target="_blank" rel="noopener">Бот для пастуха → @JAIYLYM_bot</a>
+  <a class="bot" id="botlink" href="https://t.me/JAIYLYM_bot" target="_blank" rel="noopener">Бот для пастуха → @JAIYLYM_bot</a>
   <span class="sub" id="sub"></span>
   <div class="status" id="status" hidden></div>
 </header>
@@ -103,7 +107,7 @@
       <thead><tr><th>Хозяин</th><th>Овцы</th><th>КРС</th><th>Лош.</th><th>Где сейчас</th><th title="Дойные: каждый вечер в село">Дойн.</th></tr></thead>
       <tbody></tbody>
     </table>
-    <p><button class="btn" id="add">+ стадо</button> <small style="color:var(--muted)">Стада — пример, замените своими.</small></p>
+    <p><button class="btn" id="add">+ стадо</button> <small style="color:var(--muted)" id="herdnote">Стада — пример, замените своими.</small></p>
 
     <h2>Маршрут на сезон (план)</h2>
     <div id="routes"></div>
@@ -134,6 +138,12 @@
 <script src="data/herds.js"></script>
 <script>
 const J = window.Jaiylym, PL = window.JaiylymPipeline;
+const BOT = "JAIYLYM_bot", BOT_API = "https://jaiylym-bot.onrender.com";
+const coord = x => (x < 0 ? "m" : "") + Math.round(Math.abs(x) * 1000);
+const botLink = (plotId) => `https://t.me/${BOT}?start=` + (plotId
+  ? `p_${coord(D.village.lat)}_${coord(D.village.lon)}_${PL.plotCode(plotId)}`
+  : `v_${coord(D.village.lat)}_${coord(D.village.lon)}`);
+let botSubs = {};          // сколько человек подписано на каждый участок (из бота)
 const DEFAULT = window.JAIYLYM_DATA;            // Кеген, посчитан заранее (ndvi.py)
 let D = null, plots = [];
 let herds = JSON.parse(JSON.stringify(window.JAIYLYM_HERDS));
@@ -198,13 +208,41 @@ function showVillage(data, png) {
   $("sub").textContent = `${D.village.name} · Sentinel-2, лето ${D.source.year} · ${fmt(plots.reduce((s, p) => s + p.pasture_ha, 0))} га пастбищ в радиусе 8 км`;
   $("q").value = D.village.name;
   history.replaceState(null, "", `#lat=${D.village.lat}&lon=${D.village.lon}&name=${encodeURIComponent(D.village.name)}`);
+  $("botlink").href = botLink();
+  herds = herds.filter(h => !h.from_bot);
+  botSubs = {};
   renderSources();
   render();
+  loadBotData();
+  const want = new URLSearchParams(location.hash.slice(1)).get("plot") || pendingPlot;
+  pendingPlot = null;
+  if (want && layers[want]) setTimeout(() => openPlot(plots.find(p => p.id === want), layers[want]), 300);
+}
+let pendingPlot = new URLSearchParams(location.hash.slice(1)).get("plot");
+
+// Связь с ботом: стада, которые пастухи записали в Telegram (без имён), и подписки на участки.
+// Бесплатный сервер может спать — тогда ответ придёт через ~1 минуту, сайт работает и без него.
+async function loadBotData() {
+  const key = D.village.lat + "," + D.village.lon;
+  $("herdnote").textContent = "Стада — пример, замените своими. Загружаю стада из Telegram…";
+  try {
+    const r = await fetch(`${BOT_API}/api/village?lat=${D.village.lat}&lon=${D.village.lon}`, { signal: AbortSignal.timeout(90000) });
+    const d = await r.json();
+    if (key !== D.village.lat + "," + D.village.lon) return;      // пока ждали, выбрали другое село
+    botSubs = d.subs || {};
+    const near = new Set(plots.filter(p => p.ring === "near").map(p => p.id));
+    herds = herds.filter(h => !h.from_bot).concat((d.herds || []).map(h => Object.assign({}, h, { home: near.has(h.home) ? h.home : "Б-С" })));
+    const n = (d.herds || []).length, subs = Object.values(botSubs).reduce((a, b) => a + b, 0);
+    $("herdnote").innerHTML = `Стада — пример, замените своими. Из Telegram: ${n} ${n === 1 ? "стадо" : "стад"}, подписок на участки: ${subs}.`;
+    render();
+  } catch (_) {
+    $("herdnote").textContent = "Стада — пример, замените своими. (Бот сейчас не ответил — стада из Telegram не загружены.)";
+  }
 }
 
 // ---------- выбор села ----------
 function status(msg, err) { const s = $("status"); s.hidden = !msg; s.textContent = msg || ""; s.classList.toggle("err", !!err); }
-const cacheKey = (lat, lon) => `jaiylym:v2:${(+lat).toFixed(3)},${(+lon).toFixed(3)}`;
+const cacheKey = (lat, lon) => `jaiylym:v3:${(+lat).toFixed(3)},${(+lon).toFixed(3)}`;
 
 async function openVillage(name, lat, lon) {
   $("results").hidden = true;
@@ -276,13 +314,34 @@ function openPlot(p, poly) {
       <tr><td>Стада</td><td>${esc(names.join(", ")) || "—"}</td></tr>
       <tr><td>Вода</td><td>${p.water_source}</td></tr>
     </table>
-    ${p.ring === "far" ? `<label><input type="checkbox" id="wchk" ${p.water ? "checked" : ""}> есть водопой</label>` : ""}</div>`).openPopup();
+    ${spark(p.series)}
+    ${p.ring === "far" ? `<label><input type="checkbox" id="wchk" ${p.water ? "checked" : ""}> есть водопой</label>` : ""}
+    <a class="sub" href="${botLink(p.id)}" target="_blank" rel="noopener">🔔 Подписаться в Telegram</a>
+    <small>Пастух получит уведомление, когда спутник увидит, что трава здесь убывает, и напоминание о перегоне.${botSubs[p.id] ? ` Уже подписано: ${botSubs[p.id]}.` : ""}</small></div>`).openPopup();
   const chk = $("wchk");
   if (chk) chk.onchange = () => {
     p.water = chk.checked;
     p.water_source = chk.checked ? (p.water_source === "нет" ? "новый водопой (сценарий)" : p.water_source) : "нет";
     render(); poly.closePopup();
   };
+}
+
+/** Мини-график NDVI участка за лето. */
+function spark(series) {
+  if (!series || series.length < 2) return "";
+  const w = 220, h = 46, vs = series.map(x => x.v), lo = Math.min(...vs) - 0.02, hi = Math.max(...vs) + 0.02;
+  const X = i => 4 + i * (w - 8) / (series.length - 1), Y = v => h - 12 - (v - lo) / (hi - lo) * (h - 18);
+  const pts = series.map((x, i) => `${X(i).toFixed(1)},${Y(x.v).toFixed(1)}`).join(" ");
+  const ch = (vs[vs.length - 1] - vs[0]) / vs[0] * 100;
+  const col = ch <= -10 ? "#c8412b" : ch >= 10 ? "#2f8f46" : "#6b7266";
+  const d = s => s.slice(8, 10) + "." + s.slice(5, 7);
+  return `<small>Трава за лето: <b style="color:${col}">${ch >= 0 ? "+" : ""}${ch.toFixed(0)}%</b></small>
+    <svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+      <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="2"/>
+      ${series.map((x, i) => `<circle cx="${X(i).toFixed(1)}" cy="${Y(x.v).toFixed(1)}" r="2.5" fill="${col}"><title>${d(x.d)}: ${x.v}</title></circle>`).join("")}
+      <text x="2" y="${h - 1}" font-size="10" fill="#6b7266">${d(series[0].d)}</text>
+      <text x="${w - 2}" y="${h - 1}" font-size="10" fill="#6b7266" text-anchor="end">${d(series[series.length - 1].d)}</text>
+    </svg>`;
 }
 
 // ---------- расчёт и отрисовка ----------
@@ -321,7 +380,7 @@ function renderHerds() {
   const near = plots.filter(p => p.ring === "near").map(p => p.id);
   const tb = document.querySelector("#herds tbody");
   tb.innerHTML = herds.map((h, i) => `<tr>
-    <td><input type="text" data-i="${i}" data-k="name" value="${esc(h.name)}"></td>
+    <td><input type="text" data-i="${i}" data-k="name" value="${esc(h.name)}">${h.from_bot ? '<span class="frombot">из Telegram</span>' : ""}</td>
     <td><input type="number" min="0" step="50" data-i="${i}" data-k="sheep" value="${h.sheep}"></td>
     <td><input type="number" min="0" step="5" data-i="${i}" data-k="cattle" value="${h.cattle}"></td>
     <td><input type="number" min="0" step="5" data-i="${i}" data-k="horses" value="${h.horses}"></td>
