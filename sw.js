@@ -1,7 +1,7 @@
 /* Jaiylym — офлайн-кэш интерфейса.
  * Кэшируется только оболочка сайта, данные примера (Кеген) и библиотеки.
  * Спутниковые данные, поиск мест, сервер и подложка карты всегда берутся из сети. */
-const VERSION = "jaiylym-v4";
+const VERSION = "jaiylym-v5";
 const SHELL = [
   "./", "index.html", "css/app.css", "engine.js", "pipeline.js",
   "js/i18n.js", "js/client.js", "js/report.js", "js/app.js",
@@ -36,7 +36,8 @@ self.addEventListener("fetch", e => {
   e.respondWith((async () => {
     const c = await caches.open(VERSION);
     try {
-      const r = await fetch(req);
+      // свои файлы всегда сверяем с сервером (ETag), чтобы обновления сайта приходили сразу
+      const r = await fetch(req, sameOrigin ? { cache: "no-cache" } : undefined);
       if (r && (r.ok || r.type === "opaque")) c.put(req, r.clone());
       return r;
     } catch (_) {
