@@ -1161,7 +1161,8 @@
       село: S.D.village.name, лето_снимков: S.D.source.year, снимков_безоблачных: S.D.source.dates.length,
       пастбища_с_водой_га: Math.round(b.water.reduce((s, p) => s + p.pasture_ha, 0)),
       ёмкость_всех_участков_с_водой_овец_за_сезон_оценка: Math.round(sheepOf(b.capAU)),
-      поголовье_усл_голов: Math.round(b.au), сезон_дней: b.Sd,
+      поголовье_усл_голов: Math.round(b.au), поголовье_в_пересчёте_на_овец: Math.round(sheepOf(b.au)), сезон_дней: b.Sd,
+      хватает_ли_корма: b.deficitT < 1 ? (b.ratio <= 0.7 ? "да, с запасом" : "да, впритык") : "нет, не на весь сезон",
       участки: S.plots.map(p => ({ id: p.id, кольцо: p.ring === "near" ? "ближний" : "дальний", км_от_села: p.dist_km, направление: p.dir,
         пастбище_га_спутник: p.pasture_ha, ndvi_спутник: p.ndvi, трава_за_лето_проц: (p.series || []).length >= 2 ? Math.round((p.series[p.series.length - 1].v - p.series[0].v) / p.series[0].v * 100) : null,
         достоверность: confidence(p), вода: p.water ? (S.added.has(p.id) ? "смоделированный водопой" : "есть") : "нет",
@@ -1171,7 +1172,8 @@
         усл_голов: Math.round(J.herdAU(h, S.P)), дней_корма_по_плану: Math.round((S.pl.coverage || {})[h.id] ?? b.Sd),
         маршрут: (S.pl.herdPlans[h.id] || []).map(s => `${s.plot || "нет корма"} д.${s.from}-${s.to}`).join("; ") })),
       итог: { перегружено_если_все_у_села: S.cur.overloaded, перегружено_по_плану: S.pl.overloaded,
-        сено_сверх_нормы_т_если_все_у_села_оценка: Math.round(J.hayTonnes(S.cur.deficit_kg, S.P)), дефицит_сена_т_по_плану_оценка: Math.round(b.deficitT) },
+        сено_сверх_нормы_т_если_все_у_села_оценка: Math.round(J.hayTonnes(S.cur.deficit_kg, S.P)), дефицит_сена_т_по_плану_оценка: Math.round(b.deficitT),
+        чтобы_корма_хватило_сократить_на_усл_голов: Math.round(b.excessAU), чтобы_корма_хватило_сократить_на_овец: Math.round(sheepOf(b.excessAU)) },
       лучшие_места_для_водопоя: J.wells(S.plots, S.P).slice(0, 3).map(w => ({ участок: w.plot, откроет_корм_овец_оценка: Math.round(w.sheep) })),
       погода: S.wx && !S.wx.fail ? { осадки_30_дней_мм: Math.round(S.wx.rain30), прогноз_7_дней: S.wx.next.map(x => `${x.d}: ${Math.round(x.tmin)}..${Math.round(x.tmax)}°C, ${x.p} мм`) } : null,
       параметры_модели: { кг_биомассы_на_ед_ndvi: S.P.k_ndvi, доля_стравливания: S.P.util, кг_корма_на_голову_в_сутки: S.P.intake, цена_сена_тенге_т: S.P.hay_price },
@@ -1337,6 +1339,6 @@
     return { t, fmt, fmt1, pct, esc, src, J, S, scheme, loadColor, confidence, summary: summary(), trend: trendLine(), lang: I.lang };
   }
 
-  window.JaiylymApp = { S, openVillage, render, summary, confidence, scheme, reportCtx, pickVillageOnMap };   // для отладки и тестов
+  window.JaiylymApp = { S, openVillage, render, summary, confidence, scheme, reportCtx, pickVillageOnMap, aiContext, briefData };   // для отладки и тестов
   init();
 })();
