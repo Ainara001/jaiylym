@@ -1183,7 +1183,7 @@
   function renderAI() {
     const el = $("#aiPage");
     const hist = (() => { try { return JSON.parse(sessionStorage.getItem("jaiylym:chat") || "[]"); } catch (_) { return []; } })();
-    const ctxLine = S.D ? t("ai.ctx", { v: `${esc(S.D.village.name)} · ${S.plots.length} ${t("tab.plots").toLowerCase()} · ${S.herds.length} ${t("sc.herds")}` }) : t("ai.noctx");
+    const ctxLine = S.D ? t("ai.ctx", { v: `${esc(S.D.village.name)} · ${S.plots.length} ${t("ai.plots")} · ${S.herds.length} ${t("sc.herds")}` }) : t("ai.noctx");
     el.innerHTML = `<div class="chat"><div class="chat-head"><h1>${ic("spark")} ${t("ai.title")}</h1><p class="fine" style="margin:0">${t("ai.lead")}</p>
         <span class="chat-ctx">${ic("pin")} ${ctxLine}</span></div>
       <div class="chat-log" id="chatLog" aria-live="polite">${hist.map(m => `<div class="msg ${m.role}">${esc(m.text)}</div>`).join("")}</div>
