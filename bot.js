@@ -215,24 +215,11 @@ async function askGemini(question, v, herd) {
       пастбище_га: p.pasture_ha, ndvi: p.ndvi, вода: p.water_source, нагрузка_сейчас: pct(cur.load[p.id].load), нагрузка_план: pct(pl.load[p.id].load) }));
     if (herd) ctx.стадо = { имя: herd.name, овцы: herd.sheep, козы: herd.goats, крс: herd.cattle, лошади: herd.horses, маршрут: pl.herdPlans[herd.id] };
   } catch (_) {}
-  const prompt = `Ты — помощник пастуха в приложении Jaiylym (Казахстан). Отвечай коротко (до 6 предложений), просто, ` +
-    `на языке вопроса (русский или казахский). Опирайся только на данные ниже и общие знания о выпасе. ` +
-    `Не выдумывай цифры. Если вопрос не про пастбища и скот — вежливо скажи, что помогаешь только с пастбищами.\n\n` +
-    `Данные села (JSON): ${JSON.stringify(ctx)}\n\nВопрос пастуха: ${question}`;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`, {
-        method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(30000),
-        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }] }),
-      });
-      const d = await r.json();
-      const text = d?.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("").trim();
-      if (text) return text;
-      if (r.status !== 503 && r.status !== 429) { console.error("Gemini:", r.status, d?.error?.message); return null; }
-    } catch (e) { console.error("Gemini:", e.message); return null; }   // тайм-аут — не повторяем
-    await new Promise(res => setTimeout(res, 2000));
-  }
-  return null;
+  const system = "Ты — помощник пастуха в сервисе Jaiylym (Казахстан). Отвечай коротко (до 6 предложений), просто, на языке вопроса " +
+    "(русский или казахский). Опирайся только на данные села и общие знания о выпасе. Не выдумывай цифры; ёмкость и нагрузка — оценки модели. " +
+    "Если вопрос не про пастбища и скот — вежливо скажи, что помогаешь только с пастбищами.";
+  const r = await require("./gemini").ask({ system, input: `Данные села (JSON): ${JSON.stringify(ctx)}\n\nВопрос пастуха: ${question}`, maxTokens: 500 });
+  return r.ok ? r.text : null;
 }
 
 // ---------- подписки на участки ----------
@@ -665,7 +652,7 @@ async function run(token) {
     api("sendChatAction", { chat_id: chat, action: "typing" }).catch(() => {});
     handle(u, send).catch(e => { console.error("Ошибка:", e); send(chat, "Что-то пошло не так, попробуйте ещё раз.").catch(() => {}); });
   };
-  const info = `Бот @${me.result.username}. Хранилище: ${store.kind}. Gemini: ${GEMINI_KEY ? GEMINI_MODEL : "выключен"}.`;
+  const info = `Бот @${me.result.username}. Хранилище: ${store.kind}. Gemini: ${GEMINI_KEY ? require("./gemini").MODELS.join(", ") : "выключен"} (Interactions API).`;
 
   if (PUBLIC_URL) return serve(token, api, onUpdate, info, send);
 

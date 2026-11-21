@@ -16,6 +16,29 @@
  */
 const crypto = require("crypto");
 const PL = require("./web/pipeline.js");
+const G = require("./gemini.js");
+
+// ---------- ИИ: инструкции модели ----------
+const AI_DAILY = +process.env.AI_DAILY_LIMIT || 1500;
+const aiDay = { day: "", n: 0 };
+const AI_RULES = "Используй только данные из блока ДАННЫЕ и общие знания о выпасе. Различай: спутниковые измерения (NDVI Sentinel-2, площади), " +
+  "ввод пользователя (поголовье, водопои) и модельные оценки (ёмкость, нагрузка, тонны сена, стоимость) — оценки называй оценками. " +
+  "Не выдумывай чисел, которых нет в данных. Не обещай доходов и экономии. 1 условная голова = 1 корова или лошадь = 5 овец или коз. " +
+  "Пиши простым языком для фермера без терминов; если термин нужен — поясни в скобках. Без таблиц и без markdown-заголовков; можно короткие списки через «—».";
+const AI_SYSTEM = {
+  ru: "Ты — ИИ-помощник сервиса Jaiylym по пастбищам сёл Казахстана. Отвечай по-русски. " + AI_RULES,
+  kk: "Сен — Қазақстан ауылдарының жайылымдары бойынша Jaiylym сервисінің ЖИ-көмекшісісің. Қазақ тілінде жауап бер. " + AI_RULES,
+};
+const AI_SUMMARY = {
+  ru: "Сделай понятную сводку для фермера (до 170 слов): 1) Главное — одной фразой. 2) Что происходит — 2–3 пункта с цифрами из данных. " +
+    "3) Что сделать — 3 конкретных шага. 4) Насколько можно доверять — одна фраза. Если какому-то стаду не хватает корма, объясни почему простыми словами.",
+  kk: "Фермерге түсінікті қорытынды жаса (170 сөзге дейін): 1) Ең бастысы — бір сөйлеммен. 2) Не болып жатыр — деректердегі сандармен 2–3 тармақ. " +
+    "3) Не істеу керек — 3 нақты қадам. 4) Қаншалықты сенуге болады — бір сөйлем. Қай табынға жем жетпесе, себебін қарапайым сөзбен түсіндір.",
+};
+const AI_CHAT = {
+  ru: "Ответь на последний вопрос пользователя коротко и по делу (до 150 слов). Если в данных нет ответа — так и скажи и подскажи, где его взять.",
+  kk: "Пайдаланушының соңғы сұрағына қысқа әрі нақты жауап бер (150 сөзге дейін). Деректерде жауап болмаса — соны айт және қайдан табуға болатынын көрсет.",
+};
 
 const SESSION_TTL = 30 * 24 * 3600;
 const LOGIN_TTL = 600;
@@ -168,11 +191,28 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
     const url = new URL(req.url, "http://x");
     const p = url.pathname;
     if (!p.startsWith("/auth/") && !p.startsWith("/api/me") && !p.startsWith("/api/scenarios") &&
-        !p.startsWith("/api/history") && !p.startsWith("/api/coord") && p !== "/api/village") return false;
+        !p.startsWith("/api/history") && !p.startsWith("/api/coord") && p !== "/api/village" && p !== "/api/ai") return false;
     cors(req, res);
     if (p === "/api/village" && !res.getHeader("Access-Control-Allow-Origin")) res.setHeader("Access-Control-Allow-Origin", "*");
     if (req.method === "OPTIONS") { res.writeHead(204).end(); return true; }
     try {
+      // --- ИИ-помощник (Gemini): сводка по селу и чат. Доступен и гостю, с ограничением частоты ---
+      if (p === "/api/ai" && req.method === "POST") {
+        if (limited(req, "ai", 12, 60e3)) return json(res, 429, { error: "слишком много вопросов подряд, подождите минуту" }), true;
+        const day = new Date().toISOString().slice(0, 10);
+        if (aiDay.day !== day) { aiDay.day = day; aiDay.n = 0; }
+        if (++aiDay.n > AI_DAILY) return json(res, 429, { error: "дневной лимит ИИ исчерпан, попробуйте завтра" }), true;
+        const b = await body(req);
+        const lang = b.lang === "kk" ? "kk" : "ru";
+        const ctx = b.context && typeof b.context === "object" ? JSON.stringify(b.context).slice(0, 24000) : "{}";
+        const msgs = (Array.isArray(b.messages) ? b.messages : []).slice(-12)
+          .map(m => `${m.role === "ai" ? "Помощник" : "Пользователь"}: ${str(m.text, 1200)}`).join("\n");
+        const task = b.mode === "summary" ? AI_SUMMARY[lang] : AI_CHAT[lang];
+        const r = await G.ask({ system: AI_SYSTEM[lang], input: `ДАННЫЕ (JSON):\n${ctx}\n\n${msgs ? "РАЗГОВОР:\n" + msgs + "\n\n" : ""}ЗАДАЧА: ${task}`,
+          maxTokens: b.mode === "summary" ? 600 : 700 });
+        if (!r.ok) return json(res, 503, { error: r.error === "no_key" ? "ИИ не настроен на сервере" : "ИИ сейчас перегружен, попробуйте через минуту" }), true;
+        return json(res, 200, { text: r.text, model: r.model }), true;
+      }
       // --- вход ---
       if (p === "/auth/start" && req.method === "POST") {
         if (limited(req, "start", 10, 60e3)) return json(res, 429, { error: "слишком часто, подождите минуту" }), true;

@@ -82,6 +82,28 @@ test("водопой: в списке только участки без вод�
   assert.ok(before > 0 && after < before, `дефицит ${before} → ${after}`);
 });
 
+test("план никогда не хуже «как сейчас» и использует весь корм, если его не хватает", () => {
+  const waterCap = plots.filter(p => p.water).reduce((s, p) => s + J.plotCapacity(p).au_days, 0);
+  const cases = [
+    [{ id: "aaa", sheep: 48450, home: "Б-С" }],                                    // огромное стадо (как на скриншоте)
+    [{ id: "a", sheep: 20000, home: "Б-С" }, { id: "b", cattle: 900, home: "Б-В", daily_return: true }, { id: "c", horses: 3000, home: "Б-Ю" }],
+    herds.map(h => Object.assign({}, h, { sheep: (h.sheep || 0) * 12 })),
+  ];
+  for (const hs of cases) {
+    const cur = J.current(plots, hs), pl = J.plan(plots, hs);
+    assert.ok(pl.deficit_kg <= cur.deficit_kg + 1, `план ${pl.deficit_kg} хуже, чем сейчас ${cur.deficit_kg}`);
+    const used = Object.values(pl.load).reduce((s, l) => s + l.used, 0);
+    const demand = hs.reduce((s, h) => s + J.herdAU(h) * P.season_days, 0);
+    if (demand > waterCap) {
+      const dailyCap = plots.filter(p => p.water && p.ring === "near").reduce((s, p) => s + J.plotCapacity(p).au_days, 0);
+      assert.ok(used >= Math.min(waterCap, demand) - (hs.some(h => h.daily_return) ? dailyCap : 0) - 1, `использовано ${used} из ${waterCap}`);
+    }
+    for (const id in pl.load) assert.ok(pl.load[id].used <= pl.load[id].cap + 1e-6);
+  }
+  const big = J.plan(plots, cases[0]);
+  assert.ok(big.coverage.aaa > 40 && big.coverage.aaa < 150, "покрытие в днях: " + big.coverage.aaa);
+});
+
 test("сено: перевод сухого вещества в тонны сена", () => {
   assert.ok(Math.abs(J.hayTonnes(850) - 1) < 1e-9);          // 850 кг сухого = 1 т сена при 85 %
 });

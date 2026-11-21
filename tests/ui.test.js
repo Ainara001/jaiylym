@@ -28,7 +28,7 @@ test("все ключи, которые использует интерфейс,
     for (const m of read(f).matchAll(/\bt\("([a-zA-Z.]+)"/g)) used.add(m[1]);
   }
   for (const m of read("web/index.html").matchAll(/data-i18n(?:-ph|-label)?="([a-zA-Z.]+)"/g)) used.add(m[1]);
-  const dynamic = /^(conf|role|herds|src|hist)\./;      // ключи, собираемые из переменной: t("conf." + c)
+  const dynamic = /^(conf|role|herds|src|hist|ab|map\.mode)\./;      // ключи, собираемые из переменной: t("conf." + c)
   const missing = [...used].filter(k => !ru.includes(k) && !dynamic.test(k));
   assert.deepEqual(missing, []);
 });

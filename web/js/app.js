@@ -11,7 +11,7 @@
   const fmt1 = n => (+n).toLocaleString("ru-RU", { maximumFractionDigits: 1 });
   const two = n => String(n).padStart(2, "0");
   const dateStr = (s, time = true) => { const d = new Date(s); if (isNaN(d)) return ""; return `${two(d.getDate())}.${two(d.getMonth() + 1)}.${d.getFullYear()}` + (time ? ` ${two(d.getHours())}:${two(d.getMinutes())}` : ""); };
-  const pct = x => (isFinite(x) ? Math.round(x * 100) + " %" : "∞");
+  const pct = x => (isFinite(x) ? Math.round(x * 100).toLocaleString("ru-RU") + " %" : "∞");
   const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const ic = id => `<svg class="ic"><use href="#i-${id}"/></svg>`;
   const src = k => `<span class="src src-${k}">${t("src." + k)}</span>`;
@@ -20,8 +20,8 @@
 
   // ---------- состояние ----------
   const S = {
-    D: null, plots: [], baseWater: {}, added: new Set(), herds: [], P: J.params(),
-    mode: "plan", tab: "overview", cur: null, pl: null, botSubs: {}, picking: false,
+    D: null, plots: [], baseWater: {}, added: new Set(), herds: [], P: J.params(C.ls.get("jaiylym:params", null) || {}),
+    mode: C.ls.get("jaiylym:mode", "plan"), tab: "brief", cur: null, pl: null, botSubs: {}, picking: false, wx: null, aiBrief: null,
     map: null, layers: {}, group: null, ndviLayer: null, png: null, route: "home", loadingKey: null, histKey: null,
   };
 
@@ -70,7 +70,8 @@
     const h = location.hash.replace(/^#/, "");
     if (/^lat=/.test(h)) return { route: "map", q: new URLSearchParams(h) };          // старые ссылки из бота
     const m = /^\/?([a-z]*)\??(.*)$/.exec(h) || [];
-    return { route: ["home", "map", "scenarios", "profile", "coord", "data"].includes(m[1]) ? m[1] : "home", q: new URLSearchParams(m[2] || "") };
+    const r = m[1] === "data" ? "about" : m[1];      // старая ссылка «О данных» ведёт в «Что это»
+    return { route: ["home", "map", "scenarios", "profile", "coord", "about", "ai", "settings"].includes(r) ? r : "home", q: new URLSearchParams(m[2] || "") };
   }
   function go(route, q) { location.hash = "#/" + route + (q ? "?" + q : ""); }
   function onRoute() {
@@ -102,7 +103,10 @@
     if (route === "scenarios") renderScenarios();
     if (route === "profile") renderProfile();
     if (route === "coord") renderCoord();
-    if (route === "data") renderDataPage();
+    if (route === "about") { renderAbout(); renderDataPage(); }
+    if (route === "ai") renderAI();
+    if (route === "settings") renderSettings();
+    const more = $("#moreDlg"); if (more && more.open) more.close();
     window.scrollTo(0, 0);
   }
 
@@ -351,7 +355,7 @@
     S.added = new Set((opts.water || []).filter(id => S.baseWater[id] === false));
     if (opts.params) Object.assign(S.P, opts.params);
     rebuildPlots();
-    S.herds = opts.herds ? opts.herds.map(h => Object.assign({}, h)) : (isKegen(lat, lon) ? DEMO_HERDS.map(h => Object.assign({ demo: true }, h)) : []);
+    S.herds = opts.herds ? opts.herds.map(h => Object.assign({}, h)) : (isKegen(lat, lon) && C.ls.get("jaiylym:demo", true) ? DEMO_HERDS.map(h => Object.assign({ demo: true }, h)) : []);
     addOwnFarm();
     S.botSubs = {};
     C.ls.set("jaiylym:last", { name: data.village.name, lat: data.village.lat, lon: data.village.lon });
@@ -586,7 +590,7 @@
     $$(".tabs [data-tab]").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === tab));
     $$(".pane").forEach(p => { p.hidden = p.dataset.pane !== tab; });
     const el = $(`.pane[data-pane="${tab}"]`);
-    ({ overview: paneOverview, herds: paneHerds, routes: paneRoutes, water: paneWater, plots: panePlots, data: paneData })[tab](el);
+    ({ brief: paneBrief, overview: paneBrief, herds: paneHerds, routes: paneRoutes, water: paneWater, plots: panePlots, data: paneData })[tab](el);
   }
 
   function kpi(label, a, b, srcs, fmtFn = fmt, lowerIsBetter = true) {
@@ -648,9 +652,9 @@
   function bindParams(el) {
     el.querySelectorAll("[data-param]").forEach(i => i.onchange = () => {
       const v = +i.value; if (!Number.isFinite(v) || v <= 0) { i.value = S.P[i.dataset.param]; return; }
-      S.P[i.dataset.param] = v; render();
+      S.P[i.dataset.param] = v; saveParams(); render();
     });
-    const r = el.querySelector("[data-reset]"); if (r) r.onclick = () => { S.P = J.params(); render(); };
+    const r = el.querySelector("[data-reset]"); if (r) r.onclick = () => { S.P = J.params(); saveParams(); render(); };
   }
 
   function addHerd() {
@@ -697,7 +701,9 @@
         const lab = s.plot || t("routes.nofeed");
         return `<span class="${cls}" style="left:${(s.from - 1) / Sd * 100}%;width:${(s.to - s.from + 1) / Sd * 100}%" title="${esc(lab)}: ${t("common.days")} ${s.from}–${s.to}">${esc(lab)}</span>`;
       }).join("");
-      return `<div class="rname"><span>${esc(h.name)}</span><small>${fmt(J.herdAU(h, S.P))} ${t("herds.au")}</small></div><div class="tl" role="img" aria-label="${esc(h.name)}">${bars}</div>`;
+      const cov = S.pl.coverage ? S.pl.coverage[h.id] : Sd;
+      const why = cov < Sd - 0.5 ? `<p class="note warn" style="margin:-6px 0 14px">${t("routes.short", { d: Math.max(1, Math.round(cov)) })}</p>` : "";
+      return `<div class="rname"><span>${esc(h.name)}</span><small>${fmt(J.herdAU(h, S.P))} ${t("herds.au")}</small></div><div class="tl" role="img" aria-label="${esc(h.name)}">${bars}</div>${why}`;
     }).join("") + `<p class="note">${t("routes.note", { d: Sd })} ${src("model")}</p>`;
   }
 
@@ -1032,11 +1038,231 @@
       <p class="note warn">${t("kpi.costNote")}</p></div>`;
   }
 
+  // ---------- «Главное»: понятная сводка без терминов ----------
+  function saveParams() {
+    C.ls.set("jaiylym:params", { season_days: S.P.season_days, intake: S.P.intake, util: S.P.util, k_ndvi: S.P.k_ndvi, hay_price: S.P.hay_price });
+  }
+  const sheepOf = au => au / S.P.au.sheep;
+  function briefData() {
+    const Sd = S.P.season_days;
+    const water = S.plots.filter(p => p.water);
+    const capAU = water.reduce((s, p) => s + J.plotCapacity(p, S.P).au_season, 0);
+    const au = S.herds.reduce((s, h) => s + J.herdAU(h, S.P), 0);
+    const ratio = capAU > 0 ? au / capAU : Infinity;
+    const worst = S.plots.filter(p => S.cur.load[p.id].load > 1).sort((a, b) => S.cur.load[b.id].load - S.cur.load[a.id].load)[0];
+    const shortHerds = S.herds.filter(h => S.pl.coverage && S.pl.coverage[h.id] < Sd - 0.5);
+    const deficitT = J.hayTonnes(S.pl.deficit_kg, S.P);
+    const excessAU = Object.values(S.pl.unmet || {}).reduce((s, x) => s + x, 0) / Sd;
+    const well = J.wells(S.plots, S.P)[0];
+    const near = S.plots.filter(p => p.ring === "near" && (p.series || []).length >= 2);
+    const trend = near.length ? near.reduce((s, p) => s + (p.series[p.series.length - 1].v - p.series[0].v) / p.series[0].v, 0) / near.length * 100 : null;
+    return { Sd, water, capAU, au, ratio, worst, shortHerds, deficitT, excessAU, well, trend };
+  }
+  function briefHtml() {
+    if (!S.herds.length) return `<div class="brief"><p>${t("brief.noherds")}</p>
+      <p style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn btn-soft btn-sm" id="addDemo">${ic("plus")} ${t("ov.addDemo")}</button>
+      <button class="btn btn-ghost btn-sm" id="addHerd0">${ic("plus")} ${t("herds.add")}</button></p></div>`;
+    const b = briefData();
+    const st = b.ratio <= 0.7 ? ["ok", "brief.ok"] : b.ratio <= 1 && b.deficitT < 1 ? ["tight", "brief.tight"] : ["short", "brief.short"];
+    const lines = [];
+    lines.push(t("brief.cap", { ha: fmt(b.water.reduce((s, p) => s + p.pasture_ha, 0)), sheep: fmt(sheepOf(b.capAU)), au: fmt(b.capAU), myau: fmt(b.au), mysheep: fmt(sheepOf(b.au)) }));
+    lines.push(b.worst ? t("brief.curOver", { n: S.cur.overloaded, id: `<b>${esc(b.worst.id)}</b>`, pct: pct(S.cur.load[b.worst.id].load) }) : t("brief.curOk"));
+    if (b.deficitT < 1) lines.push(t("brief.planOk"));
+    else {
+      lines.push(t("brief.planShort", { t: `<b>${fmt(b.deficitT)}</b>` }));
+      for (const h of b.shortHerds.slice(0, 3)) lines.push(t("brief.herdShort", { name: esc(h.name), d: `<b>${Math.round(S.pl.coverage[h.id])}</b>`, season: b.Sd }));
+      lines.push(t("brief.needLess", { au: fmt(b.excessAU), sheep: fmt(sheepOf(b.excessAU)), t: fmt(b.deficitT) }));
+    }
+    if (b.well) lines.push(t("brief.well", { id: `<b>${esc(b.well.plot)}</b>`, n: fmt(b.well.sheep) }));
+    if (b.trend != null && Math.abs(b.trend) >= 3) lines.push(t("brief.trend", { year: S.D.source.year, dir: b.trend < 0 ? t("brief.trendDown") : t("brief.trendUp"), p: Math.abs(Math.round(b.trend)) }));
+    const todo = [];
+    if (S.cur.overloaded > 0) todo.push(t("brief.do.plan"));
+    if (b.well && (b.deficitT >= 1 || b.ratio > 0.8)) todo.push(t("brief.do.well", { id: esc(b.well.plot) }));
+    if (b.deficitT >= 1) todo.push(t("brief.do.reduce"));
+    todo.push(t("brief.do.bot"));
+    todo.push(t("brief.do.calib"));
+    return `<div class="brief"><span class="brief-status st-${st[0]}">${t(st[1])}</span>
+      ${lines.map(x => `<p>${x}</p>`).join("")}
+      <h3 style="margin:12px 0 2px;font-size:15px">${t("brief.do")}</h3>
+      <ul class="todo">${todo.slice(0, 4).map(x => `<li>${ic("check")}<span>${x}</span></li>`).join("")}</ul>
+      <p class="fine" style="margin-top:10px">${t("brief.trust", { k: S.D.source.dates.length, year: S.D.source.year })} ${src("sat")} ${src("model")}</p></div>
+      <div class="aibox" id="aiBox"><button class="btn btn-green btn-sm" id="aiBriefBtn">${ic("spark")} ${t("brief.ai")}</button>
+        ${S.aiBrief && S.aiBrief.key === briefKey() ? `<p class="aitext">${esc(S.aiBrief.text)}</p><p class="fine">${t("brief.aiNote")}</p>` : ""}</div>`;
+  }
+  const briefKey = () => S.D ? JSON.stringify([S.D.village.lat, S.D.village.lon, S.herds.map(h => [h.sheep, h.goats, h.cattle, h.horses, h.home, h.daily_return]), [...S.added], S.P.k_ndvi, S.P.season_days, I.lang]) : "";
+
+  function movesHtml() {
+    if (!S.herds.length) return "";
+    const day = J.seasonDay(new Date()), Sd = S.P.season_days, items = [];
+    const inSeason = day >= 1 && day <= Sd;
+    for (const h of S.herds) {
+      const plan = S.pl.herdPlans[h.id] || [];
+      if (!inSeason) { const first = plan[0]; if (first && first.plot) items.push({ d: -1, h, s: first }); continue; }
+      for (const s of plan) if (s.plot && s.from >= day && s.from <= day + 14) items.push({ d: s.from - day, h, s });
+    }
+    items.sort((a, b) => a.d - b.d);
+    const rows = items.slice(0, 6).map(x => `<li><span><b>${esc(x.h.name)}</b> ${t("moves.to")} ${esc(x.s.plot)}</span><small>${x.d < 0 ? "01.05" : x.d === 0 ? t("moves.today") : t("moves.in", { d: x.d })}</small></li>`).join("");
+    return `<div class="mini"><h3>${ic("route")} ${t("moves.title")}</h3>${!inSeason ? `<p class="fine" style="margin:0 0 4px">${t("moves.season")}</p>` : ""}
+      ${rows ? `<ul class="list moves">${rows}</ul>` : `<p class="fine" style="margin:0">${t("moves.none")}</p>`}</div>`;
+  }
+
+  // ---------- погода (Open-Meteo, без ключа): осадки за 30 дней и прогноз на неделю ----------
+  async function loadWeather() {
+    if (!S.D || !navigator.onLine) return;
+    const key = S.D.village.lat + "," + S.D.village.lon;
+    if (S.wx && S.wx.key === key) return;
+    try {
+      const u = `https://api.open-meteo.com/v1/forecast?latitude=${S.D.village.lat}&longitude=${S.D.village.lon}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&past_days=30&forecast_days=7&timezone=auto`;
+      const d = await (await fetch(u, { signal: AbortSignal.timeout(15000) })).json();
+      const days = d.daily.time.map((tm, i) => ({ d: tm, tmax: d.daily.temperature_2m_max[i], tmin: d.daily.temperature_2m_min[i], p: d.daily.precipitation_sum[i] || 0 }));
+      const today = new Date().toISOString().slice(0, 10);
+      const past = days.filter(x => x.d < today), next = days.filter(x => x.d >= today).slice(0, 7);
+      S.wx = { key, rain30: past.reduce((s, x) => s + x.p, 0), next, tmean7: next.reduce((s, x) => s + (x.tmax + x.tmin) / 2, 0) / (next.length || 1) };
+    } catch (_) { S.wx = { key, fail: true }; }
+    if (S.tab === "brief" && S.route === "map") renderPane("brief");
+  }
+  function wxHtml() {
+    if (!S.wx) return `<div class="mini"><h3>${ic("cloud")} ${t("wx.title")}</h3><p class="fine" style="margin:0">…</p></div>`;
+    if (S.wx.fail) return `<div class="mini"><h3>${ic("cloud")} ${t("wx.title")}</h3><p class="fine" style="margin:0">${t("wx.fail")}</p></div>`;
+    const w = S.wx, tip = w.tmean7 < 5 ? t("wx.cold") : w.rain30 < 10 ? t("wx.dry") : t("wx.good");
+    const wd = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"], wk = ["Жс", "Дс", "Сс", "Ср", "Бс", "Жм", "Сн"];
+    return `<div class="mini"><h3>${ic("cloud")} ${t("wx.title")} <span class="src src-wx" style="background:#e3eef6;color:#235a7c">${t("src.wx")}</span></h3>
+      <div class="wxsum"><span>${t("wx.rain30")}: <b>${fmt1(w.rain30)}</b> ${t("wx.mm")}</span></div>
+      <div class="wx" aria-label="${t("wx.next7")}">${w.next.map(x => { const dd = new Date(x.d + "T12:00:00"); return `<div>${(I.lang === "kk" ? wk : wd)[dd.getDay()]}<b>${Math.round(x.tmax)}°</b>${Math.round(x.tmin)}°<br><span class="rain">${x.p >= 0.5 ? fmt1(x.p) : "·"}</span></div>`; }).join("")}</div>
+      <p class="fine" style="margin:8px 0 0">${tip} Open-Meteo.</p></div>`;
+  }
+
+  function paneBrief(el) {
+    el.innerHTML = briefHtml() + movesHtml() + wxHtml() +
+      (S.herds.length ? `<details class="more"><summary>${ic("chart")} ${t("brief.details")}</summary><div id="briefDetails"></div></details>` : "");
+    const det = $("#briefDetails", el);
+    if (det) paneOverview(det);
+    const add = $("#addDemo", el); if (add) add.onclick = () => { S.herds = DEMO_HERDS.map(h => Object.assign({ demo: true }, h)); render(); };
+    const add0 = $("#addHerd0", el); if (add0) add0.onclick = () => { addHerd(); renderPane("herds"); };
+    const btn = $("#aiBriefBtn", el);
+    if (btn) btn.onclick = async () => {
+      btn.disabled = true;
+      const box = $("#aiBox", el), k = briefKey();
+      box.insertAdjacentHTML("beforeend", `<p class="fine" id="aiWait">${t("brief.aiWait")}</p>`);
+      try {
+        const r = await C.ai({ mode: "summary", lang: I.lang, context: aiContext() });
+        S.aiBrief = { key: k, text: r.text };
+        if (S.tab === "brief") renderPane("brief");
+      } catch (e) { const w = $("#aiWait", el); if (w) w.textContent = t("brief.aiFail") + ": " + errText(e); btn.disabled = false; }
+    };
+    loadWeather();
+  }
+
+  /** Данные открытого села для ИИ: только то, что видит пользователь, с пометками источника. */
+  function aiContext() {
+    if (!S.D) return { село: null };
+    const b = briefData();
+    return {
+      село: S.D.village.name, лето_снимков: S.D.source.year, снимков_безоблачных: S.D.source.dates.length,
+      пастбища_с_водой_га: Math.round(b.water.reduce((s, p) => s + p.pasture_ha, 0)),
+      ёмкость_всех_участков_с_водой_овец_за_сезон_оценка: Math.round(sheepOf(b.capAU)),
+      поголовье_усл_голов: Math.round(b.au), сезон_дней: b.Sd,
+      участки: S.plots.map(p => ({ id: p.id, кольцо: p.ring === "near" ? "ближний" : "дальний", км_от_села: p.dist_km, направление: p.dir,
+        пастбище_га_спутник: p.pasture_ha, ndvi_спутник: p.ndvi, трава_за_лето_проц: (p.series || []).length >= 2 ? Math.round((p.series[p.series.length - 1].v - p.series[0].v) / p.series[0].v * 100) : null,
+        достоверность: confidence(p), вода: p.water ? (S.added.has(p.id) ? "смоделированный водопой" : "есть") : "нет",
+        ёмкость_овец_оценка: Math.round(sheepOf(J.plotCapacity(p, S.P).au_season)),
+        нагрузка_если_все_у_села_проц: Math.round(S.cur.load[p.id].load * 100), нагрузка_по_плану_проц: Math.round(S.pl.load[p.id].load * 100) })),
+      стада: S.herds.map(h => ({ имя: h.name, овцы: h.sheep || 0, козы: h.goats || 0, крс: h.cattle || 0, лошади: h.horses || 0, дойное: !!h.daily_return,
+        усл_голов: Math.round(J.herdAU(h, S.P)), дней_корма_по_плану: Math.round((S.pl.coverage || {})[h.id] ?? b.Sd),
+        маршрут: (S.pl.herdPlans[h.id] || []).map(s => `${s.plot || "нет корма"} д.${s.from}-${s.to}`).join("; ") })),
+      итог: { перегружено_если_все_у_села: S.cur.overloaded, перегружено_по_плану: S.pl.overloaded,
+        сено_сверх_нормы_т_если_все_у_села_оценка: Math.round(J.hayTonnes(S.cur.deficit_kg, S.P)), дефицит_сена_т_по_плану_оценка: Math.round(b.deficitT) },
+      лучшие_места_для_водопоя: J.wells(S.plots, S.P).slice(0, 3).map(w => ({ участок: w.plot, откроет_корм_овец_оценка: Math.round(w.sheep) })),
+      погода: S.wx && !S.wx.fail ? { осадки_30_дней_мм: Math.round(S.wx.rain30), прогноз_7_дней: S.wx.next.map(x => `${x.d}: ${Math.round(x.tmin)}..${Math.round(x.tmax)}°C, ${x.p} мм`) } : null,
+      параметры_модели: { кг_биомассы_на_ед_ndvi: S.P.k_ndvi, доля_стравливания: S.P.util, кг_корма_на_голову_в_сутки: S.P.intake, цена_сена_тенге_т: S.P.hay_price },
+      мои_пастбища: ((C.user && C.user.pastures) || []).map(q => ({ название: q.name, га: q.area_ha, ndvi: q.stats && q.stats.ndvi })),
+    };
+  }
+
+  // ---------- ИИ-помощник: отдельный чат ----------
+  function renderAI() {
+    const el = $("#aiPage");
+    const hist = (() => { try { return JSON.parse(sessionStorage.getItem("jaiylym:chat") || "[]"); } catch (_) { return []; } })();
+    const ctxLine = S.D ? t("ai.ctx", { v: `${esc(S.D.village.name)} · ${S.plots.length} ${t("tab.plots").toLowerCase()} · ${S.herds.length} ${t("sc.herds")}` }) : t("ai.noctx");
+    el.innerHTML = `<div class="chat"><div class="chat-head"><h1>${ic("spark")} ${t("ai.title")}</h1><p class="fine" style="margin:0">${t("ai.lead")}</p>
+        <span class="chat-ctx">${ic("pin")} ${ctxLine}</span></div>
+      <div class="chat-log" id="chatLog" aria-live="polite">${hist.map(m => `<div class="msg ${m.role}">${esc(m.text)}</div>`).join("")}</div>
+      <div class="chips-q">${["ai.q1", "ai.q2", "ai.q3", "ai.q4"].map(k => `<button type="button" data-q="${esc(t(k))}">${t(k)}</button>`).join("")}</div>
+      <form class="chat-form" id="chatForm"><textarea id="chatIn" rows="1" placeholder="${t("ai.ph")}" aria-label="${t("ai.ph")}"></textarea>
+        <button class="btn btn-primary">${ic("send")} <span>${t("ai.send")}</span></button></form></div>
+      <p class="fine" style="margin-top:10px">${t("ai.disclaimer")} ${hist.length ? `<button class="linkbtn" id="chatClear">${t("ai.clear")}</button>` : ""}</p>`;
+    const log = $("#chatLog"), inp = $("#chatIn");
+    log.scrollTop = log.scrollHeight;
+    const send = async text => {
+      text = text.trim(); if (!text) return;
+      hist.push({ role: "user", text });
+      log.insertAdjacentHTML("beforeend", `<div class="msg user">${esc(text)}</div><div class="msg ai" id="aiTyping">${t("ai.thinking")}</div>`);
+      log.scrollTop = log.scrollHeight; inp.value = "";
+      try {
+        const r = await C.ai({ mode: "chat", lang: I.lang, context: aiContext(), messages: hist.slice(-10) });
+        hist.push({ role: "ai", text: r.text });
+        $("#aiTyping").outerHTML = `<div class="msg ai">${esc(r.text)}</div>`;
+      } catch (e) {
+        hist.pop();
+        $("#aiTyping").outerHTML = `<div class="msg ai err">${esc(t("brief.aiFail") + ": " + errText(e))}</div>`;
+      }
+      try { sessionStorage.setItem("jaiylym:chat", JSON.stringify(hist.slice(-30))); } catch (_) {}
+      log.scrollTop = log.scrollHeight;
+    };
+    $("#chatForm").onsubmit = e => { e.preventDefault(); send(inp.value); };
+    inp.onkeydown = e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(inp.value); } };
+    $$(".chips-q button", el).forEach(b => b.onclick = () => send(b.dataset.q));
+    const clr = $("#chatClear"); if (clr) clr.onclick = () => { try { sessionStorage.removeItem("jaiylym:chat"); } catch (_) {} renderAI(); };
+  }
+
+  // ---------- настройки ----------
+  function renderSettings() {
+    const f = [["season_days", "params.season"], ["intake", "params.intake"], ["util", "params.util"], ["k_ndvi", "params.k"], ["hay_price", "params.hay"]];
+    $("#setPage").innerHTML = `<div class="card">
+        <div class="setrow"><span>${t("set.lang")}</span><div class="seg"><button data-l="ru" class="${I.lang === "ru" ? "on" : ""}">Русский</button><button data-l="kk" class="${I.lang === "kk" ? "on" : ""}">Қазақша</button></div></div>
+        <div class="setrow"><span>${t("set.mode")}</span><div class="seg">${["current", "plan", "ndvi"].map(m => `<button data-m="${m}" class="${S.mode === m ? "on" : ""}">${t("map.mode." + m)}</button>`).join("")}</div></div>
+        <div class="setrow"><span>${t("set.demo")}</span><label class="switch"><input type="checkbox" id="setDemo" ${C.ls.get("jaiylym:demo", true) ? "checked" : ""}><span></span></label></div></div>
+      <div class="card"><h2>${ic("chart")} ${t("set.model")} ${src("model")}</h2><p class="fine">${t("set.modelNote")}</p>
+        <div class="params">${f.map(([k, l]) => `<label class="field">${t(l)}<input type="number" step="any" min="0" data-param="${k}" value="${S.P[k]}"></label>`).join("")}</div>
+        <button class="btn btn-ghost btn-sm" id="setReset">${t("params.reset")}</button></div>
+      <div class="card"><h2>${ic("send")} ${t("set.notify")}</h2><p>${t("set.notifyD")}</p><a class="btn btn-tg" href="https://t.me/JAIYLYM_bot" target="_blank" rel="noopener">${ic("send")} @JAIYLYM_bot</a></div>
+      <div class="card"><h2>${ic("save")} ${t("set.data")}</h2><p style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost btn-sm" id="setClear">${t("set.clear")}</button>
+        <button class="btn btn-ghost btn-sm" id="setGuest">${t("set.clearGuest")}</button></p><p class="fine">${t("set.version")}: 2026.11 · ${esc(navigator.onLine ? "online" : "offline")}</p></div>`;
+    $$("#setPage [data-l]").forEach(b => b.onclick = () => setLang(b.dataset.l));
+    $$("#setPage [data-m]").forEach(b => b.onclick = () => { S.mode = b.dataset.m; C.ls.set("jaiylym:mode", S.mode); if (S.D) paintMap(); renderSettings(); });
+    $("#setDemo").onchange = e => C.ls.set("jaiylym:demo", e.target.checked);
+    $$("#setPage [data-param]").forEach(i => i.onchange = () => { const v = +i.value; if (!Number.isFinite(v) || v <= 0) { i.value = S.P[i.dataset.param]; return; } S.P[i.dataset.param] = v; saveParams(); if (S.D) render(); });
+    $("#setReset").onclick = () => { S.P = J.params(); saveParams(); if (S.D) render(); renderSettings(); };
+    $("#setClear").onclick = () => { try { Object.keys(localStorage).filter(k => k.startsWith("jaiylym:v")).forEach(k => localStorage.removeItem(k)); } catch (_) {} toast(t("set.cleared")); };
+    $("#setGuest").onclick = () => { C.ls.del("jaiylym:guest:scenarios"); C.ls.del("jaiylym:guest:history"); toast(t("set.cleared")); };
+  }
+
+  // ---------- «Что это»: о продукте, как пользоваться, словарь, вопросы ----------
+  function renderAbout() {
+    $("#aboutPage").innerHTML = `<div class="about-hero"><h1>${t("ab.title")}</h1><p>${t("ab.lead")}</p>
+        <p style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap"><a class="btn btn-primary" href="#/map">${ic("map")} ${t("nav.map")}</a><a class="btn btn-soft" href="#/ai">${ic("spark")} ${t("nav.ai")}</a></p></div>
+      <div class="grid2"><div class="card"><h2>${t("ab.how")}</h2><ol class="howto"><li>${t("ab.h1")}</li><li>${t("ab.h2")}</li><li>${t("ab.h3")}</li><li>${t("ab.h4")}</li></ol></div>
+        <div class="card"><h2>${t("ab.gloss")}</h2><dl class="gloss">${["ndvi", "au", "cap", "load", "jailau"].map(k => { const [a, ...rest] = t("ab.g." + k).split(" — "); return `<dt>${a}</dt><dd>${rest.join(" — ")}</dd>`; }).join("")}</dl></div></div>
+      <div class="card faq"><h2>${t("ab.faq")}</h2>${[1, 2, 3].map(i => `<details><summary>${t("ab.f" + i + "q")}</summary><p>${t("ab.f" + i + "a")}</p></details>`).join("")}</div>
+      <h2 style="margin-top:24px">${t("data.title")}</h2>`;
+  }
+
   // ---------- главная ----------
+  let heroMap = null;
   function renderHome() {
     const plots = DEFAULT.plots.map(p => Object.assign({}, p));
     const pl = J.plan(plots, DEMO_HERDS);
-    $("#heroScheme").innerHTML = scheme(plots, p => loadColor(pl.load[p.id].load), p => (pl.load[p.id].used ? pct(pl.load[p.id].load) : ""), { size: 320, dark: true });
+    if (window.L && !heroMap) {
+      heroMap = L.map("heroMap", { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, touchZoom: false, tap: false });
+      L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 17 }).addTo(heroMap);
+      const smooth = PL.makePlots(DEFAULT.village.lat, DEFAULT.village.lon, 48);
+      const g = L.featureGroup().addTo(heroMap);
+      smooth.forEach(p => L.polygon(p.geometry.coordinates[0].map(([x, y]) => [y, x]), { color: "#ffffff", weight: 1.2, opacity: .85, fillColor: loadColor(pl.load[p.id].load), fillOpacity: 0.42, interactive: false }).addTo(g));
+      setTimeout(() => { heroMap.invalidateSize(); heroMap.fitBounds(g.getBounds(), { padding: [20, 20] }); }, 60);
+    } else if (!window.L) {
+      $("#heroScheme").hidden = false;
+      $("#heroScheme").innerHTML = scheme(plots, p => loadColor(pl.load[p.id].load), p => (pl.load[p.id].used ? pct(pl.load[p.id].load) : ""), { size: 320, dark: true });
+    } else setTimeout(() => heroMap.invalidateSize(), 60);
     const ha = plots.reduce((s, p) => s + p.pasture_ha, 0);
     $("#heroStats").innerHTML = `<div><b>${plots.length}</b><span>${t("home.stat.plots")}</span></div><div><b>${DEFAULT.source.dates.length}</b><span>${t("home.stat.scenes")}</span></div><div><b>${fmt(ha)}</b><span>${t("home.stat.ha")}</span></div>`;
     $("#heroStatNote").textContent = `${t("home.stat.note")} ${DEFAULT.source.year}. ${t("map.mode.plan")}: ${t("herds.demo").toLowerCase()}.`;
@@ -1093,6 +1319,9 @@
       catch (e) { toast(t("rep.printFallback"), true); }
     };
     $("#accountBtn").onclick = () => (C.loggedIn ? go("profile") : openLogin());
+    const more = $("#moreDlg");
+    $("#moreBtn").onclick = () => more.showModal();
+    more.addEventListener("click", e => { if (e.target === more || e.target.closest("a")) more.close(); });
     $("#loginDlg").addEventListener("close", () => clearTimeout(pollTimer));
     window.addEventListener("hashchange", onRoute);
     window.addEventListener("online", netState); window.addEventListener("offline", netState);

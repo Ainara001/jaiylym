@@ -89,11 +89,14 @@
   // ---------- данные бота по селу (публично; свои стада помечены, чужие — без имён) ----------
   const villageData = (lat, lon) => req("GET", `/api/village?lat=${lat}&lon=${lon}`, null, { timeout: 90000 });
 
+  // ---------- ИИ-помощник (Gemini через сервер; ключ хранится только на сервере) ----------
+  const ai = body => req("POST", "/api/ai", body, { timeout: 90000 });
+
   window.Client = {
     API, ApiError, ls,
     get user() { return user; }, get loggedIn() { return !!token; },
     startLogin, pollLogin, logout, me, saveFarm, deleteAccount, addPasture, deletePasture,
     listScenarios, saveScenario, deleteScenario, listHistory, addHistory,
-    coordAddVillage, coordRemoveVillage, coordFarms, villageData,
+    coordAddVillage, coordRemoveVillage, coordFarms, villageData, ai,
   };
 })();

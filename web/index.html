@@ -5,13 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Jaiylym — пастбища села по спутнику</title>
 <meta name="description" content="Jaiylym: спутниковый мониторинг пастбищ Sentinel-2, расчёт нагрузки, план выпаса и водопоев для сёл Казахстана.">
-<meta name="theme-color" content="#24543f">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2324543f'/%3E%3Cpath d='M4 23c5-6 9-6 12-2s7 4 12-3v10H4z' fill='%238fc79a'/%3E%3Ccircle cx='22' cy='10' r='4' fill='%23e3b25c'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#1e4634">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%231e4634'/%3E%3Cpath d='M16 26V13.5' stroke='%23a8dcae' stroke-width='2.4' stroke-linecap='round'/%3E%3Cpath d='M16 21.5c-1.2-4.2-4.2-6.3-7.6-6.6.1 3.7 2.9 6.6 7.6 6.6z' fill='%23a8dcae'/%3E%3Cpath d='M16 18c1.2-4.2 4.2-6.3 7.6-6.6-.1 3.7-2.9 6.6-7.6 6.6z' fill='%236fbf7d'/%3E%3Cpath d='M6.5 26h19' stroke='%23e8b45a' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='24.5' cy='7.5' r='2.3' fill='%23e8b45a'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="css/app.css?v=7">
+<link rel="stylesheet" href="css/app.css?v=9">
 </head>
 <body>
 <a class="skip" href="#main" data-i18n="nav.map">Карта</a>
@@ -45,6 +45,10 @@
     <symbol id="i-leaf" viewBox="0 0 24 24"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.5 19 2c1 2 2 4.2 2 8 0 5.5-4.8 10-10 10z"/><path d="M2 21c0-3 1.9-5.4 5.1-6 2.4-.5 4.9-2 5.9-3"/></symbol>
     <symbol id="i-wifioff" viewBox="0 0 24 24"><path d="M2 2l20 20M8.5 16.4a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.7M19 12.9a10 10 0 0 0-2.5-1.7M12 20h.01"/></symbol>
     <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.8 4.6L18.5 9.5l-4.7 1.9L12 16l-1.8-4.6L5.5 9.5l4.7-1.9z"/><path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></symbol>
+    <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M17.5 19a4.5 4.5 0 0 0 0-9 6 6 0 0 0-11.6 1.5A3.8 3.8 0 0 0 6.5 19z"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
     <symbol id="i-pen" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
     <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></symbol>
   </defs>
@@ -52,22 +56,23 @@
 
 <header class="topbar">
   <a class="brand" href="#/home" aria-label="Jaiylym">
-    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#24543f"/><path d="M3 23c5-6 9-6 12.5-2s7.5 4 13.5-3v11H3z" fill="#8fc79a"/><path d="M3 26c6-4 11-3 15 0s7 2 11-1v6H3z" fill="#5fa877"/><circle cx="22" cy="10" r="4" fill="#e3b25c"/></svg>
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#1e4634"/><path d="M16 26V13.5" stroke="#a8dcae" stroke-width="2.4" stroke-linecap="round"/><path d="M16 21.5c-1.2-4.2-4.2-6.3-7.6-6.6.1 3.7 2.9 6.6 7.6 6.6z" fill="#a8dcae"/><path d="M16 18c1.2-4.2 4.2-6.3 7.6-6.6-.1 3.7-2.9 6.6-7.6 6.6z" fill="#6fbf7d"/><path d="M6.5 26h19" stroke="#e8b45a" stroke-width="2.2" stroke-linecap="round"/><circle cx="24.5" cy="7.5" r="2.3" fill="#e8b45a"/><path d="M19.5 5.2a7 7 0 0 1 9.3 3.8" stroke="#e8b45a" stroke-width="1.2" fill="none" stroke-linecap="round" opacity=".7"/></svg>
     <span><b>Jaiylym</b><small data-i18n="brand.tag">Пастбища села по спутнику</small></span>
   </a>
   <nav class="mainnav" aria-label="Разделы">
     <a href="#/home" data-route="home"><svg class="ic"><use href="#i-home"/></svg><span data-i18n="nav.home">Главная</span></a>
     <a href="#/map" data-route="map"><svg class="ic"><use href="#i-map"/></svg><span data-i18n="nav.map">Карта</span></a>
+    <a href="#/ai" data-route="ai"><svg class="ic"><use href="#i-spark"/></svg><span data-i18n="nav.ai">ИИ-помощник</span></a>
     <a href="#/scenarios" data-route="scenarios"><svg class="ic"><use href="#i-layers"/></svg><span data-i18n="nav.scenarios">Сценарии</span></a>
-    <a href="#/profile" data-route="profile"><svg class="ic"><use href="#i-user"/></svg><span data-i18n="nav.profile">Профиль</span></a>
     <a href="#/coord" data-route="coord" class="coord-only" hidden><svg class="ic"><use href="#i-users"/></svg><span data-i18n="nav.coord">Координатор</span></a>
-    <a href="#/data" data-route="data"><svg class="ic"><use href="#i-info"/></svg><span data-i18n="nav.data">О данных</span></a>
+    <a href="#/about" data-route="about"><svg class="ic"><use href="#i-info"/></svg><span data-i18n="nav.about">Что это</span></a>
   </nav>
   <div class="topactions">
     <div class="langsw" role="group" aria-label="Язык / Тіл">
       <button type="button" data-lang="ru" aria-pressed="true">RU</button>
       <button type="button" data-lang="kk" aria-pressed="false">KZ</button>
     </div>
+    <a class="btn btn-icon" href="#/settings" id="setTop" aria-label="Настройки" data-i18n-label="nav.settings"><svg class="ic"><use href="#i-gear"/></svg></a>
     <a class="btn btn-tg" id="tgTop" href="https://t.me/JAIYLYM_bot" target="_blank" rel="noopener"><svg class="ic"><use href="#i-send"/></svg><span data-i18n="tg.open">Telegram-бот</span></a>
     <button type="button" class="btn btn-ghost account" id="accountBtn"><svg class="ic"><use href="#i-user"/></svg><span id="accountLabel" class="lbl-long" data-i18n="auth.login">Вход / Регистрация</span><span id="accountShort" class="lbl-short" data-i18n="auth.loginShort">Войти</span></button>
   </div>
@@ -95,13 +100,14 @@
         </div>
         <p class="fine"><svg class="ic"><use href="#i-shield"/></svg><span data-i18n="home.noSignup"></span></p>
       </div>
-      <div class="hero-visual" aria-hidden="true">
-        <div class="hero-card">
-          <div class="hero-card-head"><svg class="ic"><use href="#i-sat"/></svg><span>Sentinel-2 · NDVI</span></div>
-          <div id="heroScheme"></div>
+      <div class="hero-visual">
+        <div class="hero-photo">
+          <div id="heroMap" aria-hidden="true"></div>
+          <div id="heroScheme" hidden></div>
+          <div class="hero-badge"><svg class="ic"><use href="#i-sat"/></svg><span>Sentinel-2 · Кеген</span></div>
           <div class="hero-stats" id="heroStats"></div>
-          <p class="fine" id="heroStatNote"></p>
         </div>
+        <p class="fine" id="heroStatNote"></p>
       </div>
     </div>
 
@@ -167,7 +173,7 @@
           <a class="btn btn-ghost btn-sm" id="tgVillage" target="_blank" rel="noopener"><svg class="ic"><use href="#i-send"/></svg><span data-i18n="tg.openVillage"></span></a>
         </div>
         <div class="tabs" role="tablist" aria-label="Разделы анализа">
-          <button role="tab" data-tab="overview" aria-selected="true"><svg class="ic"><use href="#i-chart"/></svg><span data-i18n="tab.overview"></span></button>
+          <button role="tab" data-tab="brief" aria-selected="true"><svg class="ic"><use href="#i-spark"/></svg><span data-i18n="tab.brief"></span></button>
           <button role="tab" data-tab="herds" aria-selected="false"><svg class="ic"><use href="#i-users"/></svg><span data-i18n="tab.herds"></span></button>
           <button role="tab" data-tab="routes" aria-selected="false"><svg class="ic"><use href="#i-route"/></svg><span data-i18n="tab.routes"></span></button>
           <button role="tab" data-tab="water" aria-selected="false"><svg class="ic"><use href="#i-drop"/></svg><span data-i18n="tab.water"></span></button>
@@ -175,7 +181,7 @@
           <button role="tab" data-tab="data" aria-selected="false"><svg class="ic"><use href="#i-info"/></svg><span data-i18n="tab.data"></span></button>
         </div>
         <div class="tabpanes">
-          <div class="pane" data-pane="overview" role="tabpanel"></div>
+          <div class="pane" data-pane="brief" role="tabpanel"></div>
           <div class="pane" data-pane="herds" role="tabpanel" hidden></div>
           <div class="pane" data-pane="routes" role="tabpanel" hidden></div>
           <div class="pane" data-pane="water" role="tabpanel" hidden></div>
@@ -204,9 +210,19 @@
     <div class="page"><h1 data-i18n="co.title">Координатор</h1><div id="coPage"></div></div>
   </section>
 
-  <!-- О ДАННЫХ -->
-  <section class="view view-page" data-view="data" hidden>
-    <div class="page"><h1 data-i18n="data.title">Источники данных и достоверность</h1><div id="dataPage"></div></div>
+  <!-- ИИ-ПОМОЩНИК -->
+  <section class="view view-page" data-view="ai" hidden>
+    <div class="page page-chat"><div id="aiPage"></div></div>
+  </section>
+
+  <!-- ЧТО ЭТО (о продукте, словарь, данные) -->
+  <section class="view view-page" data-view="about" hidden>
+    <div class="page"><div id="aboutPage"></div><div id="dataPage"></div></div>
+  </section>
+
+  <!-- НАСТРОЙКИ -->
+  <section class="view view-page" data-view="settings" hidden>
+    <div class="page"><h1 data-i18n="set.title">Настройки</h1><div id="setPage"></div></div>
   </section>
 </main>
 
@@ -214,11 +230,19 @@
 <nav class="bottomnav" aria-label="Разделы">
   <a href="#/home" data-route="home"><svg class="ic"><use href="#i-home"/></svg><span data-i18n="nav.home">Главная</span></a>
   <a href="#/map" data-route="map"><svg class="ic"><use href="#i-map"/></svg><span data-i18n="nav.map">Карта</span></a>
+  <a href="#/ai" data-route="ai"><svg class="ic"><use href="#i-spark"/></svg><span data-i18n="nav.ai">ИИ</span></a>
   <a href="#/scenarios" data-route="scenarios"><svg class="ic"><use href="#i-layers"/></svg><span data-i18n="nav.scenarios">Сценарии</span></a>
-  <a href="#/coord" data-route="coord" class="coord-only" hidden><svg class="ic"><use href="#i-users"/></svg><span data-i18n="nav.coord">Координатор</span></a>
-  <a href="#/profile" data-route="profile"><svg class="ic"><use href="#i-user"/></svg><span data-i18n="nav.profile">Профиль</span></a>
-  <a href="#/data" data-route="data"><svg class="ic"><use href="#i-info"/></svg><span data-i18n="nav.data">О данных</span></a>
+  <button type="button" id="moreBtn" data-route="more"><svg class="ic"><use href="#i-more"/></svg><span data-i18n="nav.menu">Ещё</span></button>
 </nav>
+
+<!-- меню «Ещё» на смартфоне -->
+<dialog class="sheet" id="moreDlg" aria-label="Меню">
+  <a href="#/profile"><svg class="ic"><use href="#i-user"/></svg><span data-i18n="nav.profile">Профиль</span></a>
+  <a href="#/coord" class="coord-only" hidden><svg class="ic"><use href="#i-users"/></svg><span data-i18n="nav.coord">Координатор</span></a>
+  <a href="#/about"><svg class="ic"><use href="#i-info"/></svg><span data-i18n="nav.about">Что это</span></a>
+  <a href="#/settings"><svg class="ic"><use href="#i-gear"/></svg><span data-i18n="nav.settings">Настройки</span></a>
+  <a href="https://t.me/JAIYLYM_bot" target="_blank" rel="noopener"><svg class="ic"><use href="#i-send"/></svg><span data-i18n="tg.open">Telegram-бот</span></a>
+</dialog>
 
 <!-- вход -->
 <dialog class="modal" id="loginDlg" aria-labelledby="loginTitle">
@@ -231,13 +255,13 @@
 <div id="report" class="report" aria-hidden="true"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="engine.js?v=7"></script>
-<script src="pipeline.js?v=7"></script>
-<script src="data/plots.js?v=7"></script>
-<script src="data/herds.js?v=7"></script>
-<script src="js/i18n.js?v=7"></script>
-<script src="js/client.js?v=7"></script>
-<script src="js/report.js?v=7"></script>
-<script src="js/app.js?v=7"></script>
+<script src="engine.js?v=9"></script>
+<script src="pipeline.js?v=9"></script>
+<script src="data/plots.js?v=9"></script>
+<script src="data/herds.js?v=9"></script>
+<script src="js/i18n.js?v=9"></script>
+<script src="js/client.js?v=9"></script>
+<script src="js/report.js?v=9"></script>
+<script src="js/app.js?v=9"></script>
 </body>
 </html>

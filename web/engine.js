@@ -107,11 +107,12 @@
     const load = emptyLoad(plots, p);
     const order = herds.slice().sort((a, b) =>
       (b.daily_return ? 1 : 0) - (a.daily_return ? 1 : 0) || herdAU(a, p) - herdAU(b, p));
-    const herdPlans = {}, unmet = {};
+    const herdPlans = {}, unmet = {}, coverage = {};
     let deficitAUd = 0;
 
     for (const h of order) {
       const au = herdAU(h, p);
+      if (au <= 0) { herdPlans[h.id] = []; coverage[h.id] = p.season_days; continue; }
       let need = au * p.season_days;
       const home = byId[h.home] || plots[0];
       // отары сначала идут на дальние участки (жайлау), ближние — дойному скоту и на отдых
@@ -120,22 +121,35 @@
         .filter(pl => pl.water && (!h.daily_return || pl.ring === "near"))
         .sort((a, b) => farFirst(a) - farFirst(b) || dist(home, a) - dist(home, b));
       const segs = [];
+      const take = (pl, x) => {
+        const l = load[pl.id];
+        l.used += x;
+        const hh = l.herds.find(z => z.herd === h.id); if (hh) hh.au_days += x; else l.herds.push({ herd: h.id, au_days: x });
+        const s = segs.find(z => z.plot === pl.id);
+        if (s) { s.days += x / au; s.au_days += x; } else segs.push({ plot: pl.id, ring: pl.ring, days: x / au, au_days: x });
+        need -= x;
+      };
+      // 1) крупные куски: стадо целиком хотя бы на 2 недели (меньше — не гоняем)
       for (const pl of allowed) {
         if (need <= 0.5) break;
-        const l = load[pl.id];
-        const take = Math.min(need, Math.max(0, l.cap - l.used));
-        if (take < au && take < need) continue;      // меньше дня — не гоняем стадо
-        if (take < need && take < au * 14) continue; // огрызок < 2 недель — ищем участок побольше
-        l.used += take;
-        l.herds.push({ herd: h.id, au_days: take });
-        segs.push({ plot: pl.id, ring: pl.ring, days: take / au, au_days: take });
-        need -= take;
+        const l = load[pl.id], x = Math.min(need, Math.max(0, l.cap - l.used));
+        if (x < au && x < need) continue;
+        if (x < need && x < au * 14) continue;
+        take(pl, x);
+      }
+      // 2) если корма не хватило — добираем остатки со всех участков с водой
+      //    (большое стадо в жизни делят на отары; без этого шага план мог оказаться хуже «как сейчас»)
+      for (const pl of allowed) {
+        if (need <= 0.5) break;
+        const l = load[pl.id], x = Math.min(need, Math.max(0, l.cap - l.used));
+        if (x > 0.5) take(pl, x);
       }
       herdPlans[h.id] = schedule(segs, p.season_days);
       if (need > 0.5) { unmet[h.id] = need; deficitAUd += need; }
+      coverage[h.id] = Math.max(0, p.season_days - Math.max(0, need) / au);   // на сколько дней сезона хватает корма
     }
     const s = finishLoad(load, p);
-    return Object.assign({ load, herdPlans, unmet, deficit_kg: deficitAUd * p.intake }, s);
+    return Object.assign({ load, herdPlans, unmet, coverage, deficit_kg: deficitAUd * p.intake }, s);
   }
 
   /** Раскладка по календарю: весна — ближние, лето — дальние (жайлау), осень — снова ближние. */
