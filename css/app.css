@@ -93,7 +93,7 @@ button, input, select { font: inherit; color: inherit; }
   border-radius: 13px; padding: 5px 5px 5px 12px; min-width: 0; }
 .search:focus-within { border-color: var(--primary-2); box-shadow: 0 0 0 3px rgba(47, 107, 79, .15); }
 .search > .ic { color: var(--muted); }
-.search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; padding: 8px 2px; font-size: 16px; }
+.search input { flex: 1; width: 0; min-width: 0; border: 0; outline: 0; background: transparent; padding: 8px 2px; font-size: 16px; }  /* width:0 — иначе Safari на iPhone не даёт полю сжаться и строка вылезает за экран */
 .results { position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 1200; list-style: none; margin: 0; padding: 6px;
   background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); max-height: 320px; overflow: auto; }
 .results li { padding: 10px 12px; border-radius: 9px; cursor: pointer; }
@@ -348,7 +348,8 @@ details[open] > summary::before { content: "–"; }
   .bottomnav a span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 2px; }
   .bottomnav a .ic { width: 22px; height: 22px; }
   .bottomnav a[aria-current="page"] { color: var(--primary); }
-  .hero { grid-template-columns: 1fr; padding: 28px 16px 20px; gap: 24px; }
+  .hero { grid-template-columns: minmax(0, 1fr); padding: 28px 16px 20px; gap: 24px; }
+  .hero-text, .hero-visual { min-width: 0; }
   .hero h1 { font-size: 32px; }
   .lead { font-size: 16px; }
   .band { padding: 20px 16px; }
@@ -544,4 +545,15 @@ details.more { margin-top: 12px; background: var(--surface); border: 1px solid v
   .chat-log { max-height: none; }
   .msg { max-width: 92%; }
   .wx { grid-template-columns: repeat(7, minmax(40px, 1fr)); overflow-x: auto; }
+}
+
+/* узкие телефоны (iPhone SE, маленькие Android): шапка должна помещаться в экран */
+@media (max-width: 400px) {
+  .topbar { gap: 6px; padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+  .account .lbl-long, .account .lbl-short { display: none; }
+  .topbar .account { padding: 0; width: 40px; min-height: 40px; justify-content: center; }
+  .langsw button { padding: 6px 8px; }
+}
+@media (max-width: 360px) {
+  .brand > span { display: none; }
 }
