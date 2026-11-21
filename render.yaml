@@ -1,0 +1,29 @@
+# Render Blueprint: бот + хранилище. Запуск: https://render.com/deploy?repo=https://github.com/Ainara001/jaiylym
+services:
+  - type: web
+    name: jaiylym-bot
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm install
+    startCommand: node bot.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: TELEGRAM_TOKEN
+        sync: false          # Render попросит вставить токен от @BotFather
+      - key: GEMINI_API_KEY
+        sync: false          # необязательно; можно оставить пустым
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: jaiylym-state
+          property: connectionString
+
+  - type: keyvalue
+    name: jaiylym-state
+    plan: free
+    region: frankfurt
+    maxmemoryPolicy: noeviction
+    ipAllowList: []          # доступ только изнутри Render

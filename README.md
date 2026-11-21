@@ -51,6 +51,22 @@ node bot.js            # нужен Node 20+
 node bot.js --test     # проверка без Telegram
 ```
 
+## Бот круглосуточно: Render (бесплатно)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Ainara001/jaiylym)
+
+`render.yaml` создаёт два сервиса во Франкфурте:
+- **jaiylym-bot**: веб-сервис. Бот работает через webhook: Telegram сам присылает сообщения и будит сервер;
+- **jaiylym-state**: Key Value (Redis), где хранятся выбранные сёла и стада, чтобы они не пропадали, когда сервер засыпает.
+
+При создании Render попросит вставить `TELEGRAM_TOKEN` и (по желанию) `GEMINI_API_KEY`.
+Бесплатный сервер засыпает через 15 минут тишины, поэтому **первый ответ после паузы приходит через ~1 минуту**.
+Перед показом жюри откройте https://jaiylym-bot.onrender.com/health, чтобы разбудить бота заранее.
+
+⚠️ Пока бот работает на Render, не запускайте `node bot.js` на своём компьютере: локальный запуск
+отключает webhook, и сообщения перестанут доходить до Render. Если всё-таки запустили, перезапустите
+сервис на Render (Manual Deploy → Restart), и он вернёт webhook.
+
 ## Что реальное, а что условное
 
 **Реальное:** NDVI по снимкам Sentinel-2, маска пастбищ ESA WorldCover, площади пастбищ, поиск сёл.

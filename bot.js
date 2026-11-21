@@ -25,19 +25,35 @@ const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
 const UA = "Jaiylym-hackathon-bot/1.0 (+https://github.com/Ainara001/jaiylym)";
 PL.setUserAgent(UA);
 
-// ---------- состояние ----------
-const STATE_FILE = path.join(__dirname, "bot_state.json");
+// ---------- состояние (Render Key Value или файл — см. store.js) ----------
+const store = require("./store").createStore();
 let TEST = false;
 let state = { chats: {}, villages: {} };
-try { state = Object.assign(state, JSON.parse(fs.readFileSync(STATE_FILE, "utf8"))); } catch (_) {}
-const save = () => { if (!TEST) try { fs.writeFileSync(STATE_FILE, JSON.stringify(state)); } catch (_) {} };
+let saveTimer = null;
+const save = () => {
+  if (TEST) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => store.save(persistable()).catch(e => console.error("Не сохранилось:", e.message)), 300);
+};
+// Данные и демо-стада Кегена не храним — они всегда берутся из web/data
+function persistable() {
+  const villages = {};
+  for (const [k, v] of Object.entries(state.villages)) villages[k] = v.demo ? { herds: v.herds || [] } : v;
+  return { chats: state.chats, villages };
+}
 
 const KEGEN = loadPlots();
 const vkey = (lat, lon) => `${(+lat).toFixed(3)},${(+lon).toFixed(3)}`;
-// Кеген посчитан заранее и с демо-стадами
-state.villages[vkey(KEGEN.village.lat, KEGEN.village.lon)] = Object.assign(
-  { herds: [] }, state.villages[vkey(KEGEN.village.lat, KEGEN.village.lon)] || {},
-  { data: KEGEN, demo: loadHerds() });
+const KEGEN_KEY = vkey(KEGEN.village.lat, KEGEN.village.lon);
+function attachKegen() {
+  state.villages[KEGEN_KEY] = Object.assign({ herds: [] }, state.villages[KEGEN_KEY] || {}, { data: KEGEN, demo: loadHerds() });
+}
+async function loadState() {
+  try { const s = await store.load(); if (s) state = Object.assign({ chats: {}, villages: {} }, s); }
+  catch (e) { console.error("Хранилище недоступно, работаю без него:", e.message); }
+  attachKegen();
+}
+attachKegen();
 
 const chatOf = id => (state.chats[id] = state.chats[id] || {});
 const villageOf = c => c.village && state.villages[c.village];
@@ -301,33 +317,73 @@ function askHerd(chatId, v, send) {
     demo.length ? { inline_keyboard: demo.map(h => [{ text: `${h.name} — ${fmt(J.herdAU(h))} УГ`, callback_data: "herd:" + h.id }]) } : MENU);
 }
 
-// ---------- Telegram long polling ----------
+// ---------- Telegram ----------
+// На сервере (Render) — webhook: Telegram сам присылает сообщения и «будит» уснувший сервер.
+// На своём компьютере — long polling: бот сам спрашивает Telegram о новых сообщениях.
+const PUBLIC_URL = process.env.WEBHOOK_URL || process.env.RENDER_EXTERNAL_URL || "";
+
 async function run(token) {
   const api = (m, body) => fetch(`https://api.telegram.org/bot${token}/${m}`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}),
+    signal: AbortSignal.timeout(m === "getUpdates" ? 40000 : 20000),
   }).then(r => r.json());
   const me = await api("getMe");
   if (!me.ok) { console.error("Токен не подошёл:", me.description); process.exit(1); }
+  await loadState();
   await api("setMyCommands", { commands: [
     { command: "start", description: "Выбрать село" }, { command: "today", description: "Где пасти сегодня" },
     { command: "plan", description: "Маршрут на сезон" }, { command: "map", description: "Карта села" },
     { command: "water", description: "Где нужен водопой" },
   ] });
-  console.log(`Бот @${me.result.username} запущен. Gemini: ${GEMINI_KEY ? GEMINI_MODEL : "выключен"}.`);
   const send = (chat_id, text, reply_markup) => api("sendMessage", { chat_id, text, reply_markup, disable_web_page_preview: true });
+  const onUpdate = u => {
+    if (u.callback_query) api("answerCallbackQuery", { callback_query_id: u.callback_query.id }).catch(() => {});
+    const chat = u.message?.chat.id ?? u.callback_query?.message.chat.id;
+    if (chat == null) return;
+    api("sendChatAction", { chat_id: chat, action: "typing" }).catch(() => {});
+    handle(u, send).catch(e => { console.error("Ошибка:", e); send(chat, "Что-то пошло не так, попробуйте ещё раз.").catch(() => {}); });
+  };
+  const info = `Бот @${me.result.username}. Хранилище: ${store.kind}. Gemini: ${GEMINI_KEY ? GEMINI_MODEL : "выключен"}.`;
+
+  if (PUBLIC_URL) return serve(token, api, onUpdate, info);
+
+  await api("deleteWebhook");   // иначе Telegram не отдаёт сообщения через getUpdates
+  console.log(info + " Режим: long polling.");
   let offset = 0;
   for (;;) {
     try {
       const r = await api("getUpdates", { offset, timeout: 30 });
-      for (const u of r.result || []) {
-        offset = u.update_id + 1;
-        if (u.callback_query) api("answerCallbackQuery", { callback_query_id: u.callback_query.id });
-        const chat = u.message?.chat.id ?? u.callback_query?.message.chat.id;
-        api("sendChatAction", { chat_id: chat, action: "typing" }).catch(() => {});
-        handle(u, send).catch(e => { console.error("Ошибка:", e); send(chat, "Что-то пошло не так, попробуйте ещё раз."); });
-      }
-    } catch (e) { console.error("Сеть, повтор через 3 с:", e.message); await new Promise(r => setTimeout(r, 3000)); }
+      if (!r.ok) { console.error("getUpdates:", r.description); await new Promise(res => setTimeout(res, 5000)); continue; }
+      for (const u of r.result) { offset = u.update_id + 1; onUpdate(u); }
+    } catch (e) { console.error("Сеть, повтор через 3 с:", e.message); await new Promise(res => setTimeout(res, 3000)); }
   }
+}
+
+function serve(token, api, onUpdate, info) {
+  const http = require("http");
+  const secret = require("crypto").createHash("sha256").update(token).digest("hex").slice(0, 32);
+  const server = http.createServer((req, res) => {
+    if (req.method === "POST" && req.url === "/tg") {
+      if (req.headers["x-telegram-bot-api-secret-token"] !== secret) { res.writeHead(401).end(); return; }
+      let body = "";
+      req.on("data", c => { body += c; if (body.length > 1e6) req.destroy(); });
+      req.on("end", () => {
+        res.writeHead(200).end("ok");               // отвечаем сразу, считаем потом
+        try { onUpdate(JSON.parse(body)); } catch (e) { console.error("Плохое обновление:", e.message); }
+      });
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }).end("Jaiylym bot работает. Telegram: @" + "JAIYLYM_bot");
+  });
+  const port = +process.env.PORT || 10000;
+  server.listen(port, async () => {
+    console.log(info + ` Режим: webhook, порт ${port}.`);
+    if (process.env.SKIP_SET_WEBHOOK) return;
+    const url = PUBLIC_URL.replace(/\/$/, "") + "/tg";
+    const r = await api("setWebhook", { url, secret_token: secret, allowed_updates: ["message", "callback_query"] });
+    console.log("setWebhook", url, r.ok ? "OK" : r.description);
+  });
+  return server;
 }
 
 // ---------- проверка без Telegram ----------

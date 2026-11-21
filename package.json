@@ -1,0 +1,15 @@
+{
+  "name": "jaiylym",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Jaiylym — пастбища села по спутнику: сайт для акимата и Telegram-бот для пастуха",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "test": "node bot.js --test",
+    "site": "python3 -m http.server 8765 --directory web"
+  },
+  "engines": {
+    "node": ">=20.12"
+  }
+}
