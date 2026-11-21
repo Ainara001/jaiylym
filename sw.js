@@ -1,7 +1,7 @@
 /* Jaiylym — офлайн-кэш интерфейса.
  * Кэшируется только оболочка сайта, данные примера (Кеген) и библиотеки.
  * Спутниковые данные, поиск мест, сервер и подложка карты всегда берутся из сети. */
-const VERSION = "jaiylym-v7";
+const VERSION = "jaiylym-v8";
 const SHELL = [
   "./", "index.html", "css/app.css", "engine.js", "pipeline.js",
   "js/i18n.js", "js/client.js", "js/report.js", "js/app.js",

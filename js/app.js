@@ -675,7 +675,7 @@
           <label class="check"><input type="checkbox" data-k="daily_return" ${h.daily_return ? "checked" : ""} ${h.mine || h.from_bot ? "disabled" : ""}> ${t("herds.daily")}</label>
           <span class="au">${fmt(J.herdAU(h, S.P))} ${t("herds.au")} ${src("input")}</span>
         </div></div>`).join("") +
-      `<button class="btn btn-soft" id="addHerd">${ic("plus")} ${t("herds.add")}</button><p class="note">${t("herds.note")}</p>`;
+      `<button class="btn btn-soft" id="addHerd">${ic("plus")} ${t("herds.add")}</button><p class="note">${t("herds.note")}</p><p class="note">${t("herds.codes")}</p>`;
     $$(".herd", el).forEach(card => {
       const h = S.herds[+card.dataset.i];
       card.querySelectorAll("[data-k]").forEach(inp => inp.onchange = () => {
@@ -1244,7 +1244,7 @@
     $("#aboutPage").innerHTML = `<div class="about-hero"><h1>${t("ab.title")}</h1><p>${t("ab.lead")}</p>
         <p style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap"><a class="btn btn-primary" href="#/map">${ic("map")} ${t("nav.map")}</a><a class="btn btn-soft" href="#/ai">${ic("spark")} ${t("nav.ai")}</a></p></div>
       <div class="grid2"><div class="card"><h2>${t("ab.how")}</h2><ol class="howto"><li>${t("ab.h1")}</li><li>${t("ab.h2")}</li><li>${t("ab.h3")}</li><li>${t("ab.h4")}</li></ol></div>
-        <div class="card"><h2>${t("ab.gloss")}</h2><dl class="gloss">${["ndvi", "au", "cap", "load", "jailau"].map(k => { const [a, ...rest] = t("ab.g." + k).split(" — "); return `<dt>${a}</dt><dd>${rest.join(" — ")}</dd>`; }).join("")}</dl></div></div>
+        <div class="card"><h2>${t("ab.gloss")}</h2><dl class="gloss">${["ndvi", "au", "cap", "load", "jailau", "plots"].map(k => { const [a, ...rest] = t("ab.g." + k).split(" — "); return `<dt>${a}</dt><dd>${rest.join(" — ")}</dd>`; }).join("")}</dl></div></div>
       <div class="card faq"><h2>${t("ab.faq")}</h2>${[1, 2, 3].map(i => `<details><summary>${t("ab.f" + i + "q")}</summary><p>${t("ab.f" + i + "a")}</p></details>`).join("")}</div>
       <h2 style="margin-top:24px">${t("data.title")}</h2>`;
   }
