@@ -29,6 +29,7 @@
   const S = {
     D: null, plots: [], baseWater: {}, added: new Set(), forbidden: new Set(), waterSet: {}, herds: [],
     userP: C.ls.get("jaiylym:params", null) || {}, calib: C.ls.get("jaiylym:calibration", null), P: null, t0: 0,
+    algo: C.ls.get("jaiylym:algo", "optimized") === "greedy" ? "greedy" : "optimized",
     mode: C.ls.get("jaiylym:mode", "plan"), tab: "brief", cur: null, pl: null, botSubs: {}, picking: false, wx: null, aiBrief: null,
     map: null, layers: {}, group: null, ndviLayer: null, png: null, route: "home", loadingKey: null, histKey: null,
   };
@@ -57,6 +58,8 @@
   const sheepCap = c => (c.known ? fmt(c.au_season / S.P.au.sheep) : "—");
   const wsLabel = p => t("ws." + M.waterStatus(p));
   const loadOf = (r, id) => r.load[id];
+  // алгоритм плана: «optimized» — справедливое распределение + минимум перегона (по умолчанию), «greedy» — прежний быстрый
+  const solve = (plots, herds, P) => J.solve(plots, herds, P || S.P, { algorithm: S.algo });
   const botLink = plotId => `https://t.me/${BOT}?start=` + (S.D ? (plotId
     ? `p_${coord(S.D.village.lat)}_${coord(S.D.village.lon)}_${PL.plotCode(plotId)}`
     : `v_${coord(S.D.village.lat)}_${coord(S.D.village.lon)}`) : "");
@@ -455,7 +458,7 @@
 
   // ---------- расчёт и отрисовка ----------
   function summary() {
-    const cur = S.cur || J.current(S.plots, S.herds, S.P), pl = S.pl || J.plan(S.plots, S.herds, S.P);
+    const cur = S.cur || J.current(S.plots, S.herds, S.P), pl = S.pl || solve(S.plots, S.herds);
     return { overloaded_before: cur.overloaded, overloaded_after: pl.overloaded, status: pl.status,
       excess_t: +J.hayTonnes(cur.deficit_kg, S.P).toFixed(1), deficit_t: +J.hayTonnes(pl.deficit_kg, S.P).toFixed(1),
       herds: S.herds.length, herds_short: (pl.herds_short || []).length, demo: S.herds.some(h => h.demo),
@@ -467,7 +470,7 @@
     if (!S.D) return;
     try {
       S.cur = J.current(S.plots, S.herds, S.P);
-      S.pl = J.plan(S.plots, S.herds, S.P);
+      S.pl = solve(S.plots, S.herds);
     } catch (e) { status(t("err.calc") + ": " + e.message, { err: true }); return; }
     const past = S.plots.reduce((s, p) => s + p.pasture_ha, 0);
     $("#vtitle").innerHTML = `<b>${esc(S.D.village.name)}</b> · Sentinel-2, ${S.D.source.year} · ${fmt(past)} ${t("common.ha")} ${src("sat")}${freshness()}`;
@@ -811,7 +814,7 @@
         h[k] = inp.type === "checkbox" ? inp.checked : inp.type === "number" ? Math.max(0, Math.round(+inp.value || 0)) : inp.value;
         if (inp.type === "number") inp.value = h[k];
         if (h.demo) h.demo_edited = true;                  // изменённое демо-стадо остаётся демо-стадом
-        S.cur = J.current(S.plots, S.herds, S.P); S.pl = J.plan(S.plots, S.herds, S.P); paintMap();
+        S.cur = J.current(S.plots, S.herds, S.P); S.pl = solve(S.plots, S.herds); paintMap();
         card.querySelector(".au").innerHTML = `${fmt(J.herdAU(h, S.P))} ${t("herds.au")} ${src("input")}`;
       });
       card.querySelectorAll("[data-rp]").forEach(chk => chk.onchange = () => {
@@ -847,7 +850,7 @@
     const ws = J.wells(S.plots, S.P);
     const added = [...S.added];
     const baseOnly = S.plots.map(p => (S.added.has(p.id) ? Object.assign({}, p, { water: false, water_status: "unknown" }) : p));
-    const before = J.plan(baseOnly, S.herds, S.P);
+    const before = solve(baseOnly, S.herds);
     const statusList = `<h3>${ic("drop")} ${t("water.status")}</h3><div class="tablewrap"><table><tbody>${S.plots.map(p => `<tr><td><b>${esc(p.id)}</b></td>
       <td style="white-space:normal">${esc(wsLabel(p))} ${src(["confirmed", "absent"].includes(p.water_status) || S.added.has(p.id) ? "input" : p.water_status === "satellite" ? "sat" : "model")}</td></tr>`).join("")}</tbody></table></div>`;
     let sim = "";
@@ -930,13 +933,15 @@
     if (v.type === "add_water") return t("wi.v.well", { id: esc(v.plot) });
     if (v.type === "exclude_plot") return t("wi.v.exclude", { id: esc(v.plot) });
     if (v.type === "params") return t("wi.v." + v.name);
+    if (v.type === "algorithm") return t("wi.v.algo." + v.name);
     return t("wi.v." + v.id);
   }
   const violText = v => t("vt." + v.type, { id: esc(v.plot || "") });
   function paneWhatIf(el) {
     if (!S.herds.length) { el.innerHTML = `<p class="empty">${t("ov.noherds")}</p>`; return; }
     let rows;
-    try { rows = J.compareScenarios(S.plots, S.herds, S.P, J.defaultVariants(S.plots, S.herds, S.P)); }
+    const wopts = { algorithm: S.algo };
+    try { rows = J.compareScenarios(S.plots, S.herds, S.P, J.defaultVariants(S.plots, S.herds, S.P, wopts), wopts); }
     catch (e) { el.innerHTML = `<p class="note warn">${esc(e.message)}</p>`; return; }
     const plan = rows.find(r => r.id === "plan");
     const dT = r => J.hayTonnes(r.deficit_kg, r.result && r.result.kind ? S.P : S.P);
@@ -944,10 +949,11 @@
       <td><b>${variantName(r)}</b>${r.status && r.type !== "current" ? `<br><small>${t("wi.st." + r.status)}</small>` : ""}</td>
       <td class="num">${fmt(dT(r))}${r.id !== "plan" && plan ? `<br><small class="${dT(r) > dT(plan) + 0.5 ? "worse" : dT(r) < dT(plan) - 0.5 ? "better" : ""}">${dT(r) - dT(plan) >= 0 ? "+" : ""}${fmt(dT(r) - dT(plan))}</small>` : ""}</td>
       <td class="num">${r.overloaded}</td><td class="num">${r.type === "current" ? "—" : r.herds_full}</td><td class="num">${r.type === "current" ? "—" : r.herds_short}</td>
+      <td class="num">${r.min_share == null ? "—" : pct(r.min_share)}</td>
       <td style="white-space:normal;min-width:120px"><small>${r.violations.length ? r.violations.slice(0, 4).map(violText).join(", ") + (r.violations.length > 4 ? " …" : "") : t("wi.violNone")}</small></td></tr>`).join("");
     // чувствительность и сценарии допущений
     const sens = (key, a, b) => {
-      const s2 = J.sensitivity(S.plots, S.herds, S.P, key, [a, b]);
+      const s2 = J.sensitivity(S.plots, S.herds, S.P, key, [a, b], { algorithm: S.algo });
       if (s2.some(x => x.error)) return "";
       const c0 = s2[0].capacity_sheep, c1 = s2[1].capacity_sheep;
       return t(key === "util" ? "wi.sensUtil" : "wi.sensK", { a, b, c: fmt(c0), d: fmt(c1), p: (c0 ? ((c1 / c0 - 1) * 100).toFixed(0) : "0") + " %" });
@@ -955,14 +961,14 @@
     const ass = ["cautious", "base", "optimistic"].map(n => {
       const pp = M.scenarioParams(S.P, n);
       const cap = J.totalCapacity(S.plots, pp).au_season / pp.au.sheep;
-      const pl2 = J.plan(S.plots, S.herds, pp);
+      const pl2 = solve(S.plots, S.herds, pp);
       return `<tr><td><b>${t("wi.a." + n)}</b><br><small>util ${pp.util}, k_ndvi ${pp.k_ndvi}</small></td><td class="num">${fmt(cap)}</td><td class="num">${fmt(J.hayTonnes(pl2.deficit_kg, pp))}</td></tr>`;
     }).join("");
     const b = S.pl.bound;
     el.innerHTML = `<h3>${ic("layers")} ${t("wi.title")} ${src("model")}</h3>
       <div class="tablewrap"><table class="wi"><thead><tr><th>${t("wi.c.variant")}</th><th class="num">${t("wi.c.deficit")}</th><th class="num">${t("wi.c.over")}</th>
-        <th class="num">${t("wi.c.full")}</th><th class="num">${t("wi.c.short")}</th><th>${t("wi.c.viol")}</th></tr></thead><tbody>${tr}</tbody></table></div>
-      <p class="note">${t("wi.note")}</p>
+        <th class="num">${t("wi.c.full")}</th><th class="num">${t("wi.c.short")}</th><th class="num">${t("wi.c.minShare")}</th><th>${t("wi.c.viol")}</th></tr></thead><tbody>${tr}</tbody></table></div>
+      <p class="note">${t(S.algo === "greedy" ? "wi.noteGreedy" : "wi.noteOpt")}</p>
       <p class="fine">${t("wi.bound", { b: fmt(J.hayTonnes(b.min_deficit_au_days * S.P.intake, S.P)), g: fmt(J.hayTonnes(S.pl.deficit_kg, S.P)), d: fmt(J.hayTonnes(S.pl.gap_au_days * S.P.intake, S.P)) })}</p>
       <h3>${ic("chart")} ${t("wi.sens")}</h3><p>${sens("util", 0.5, 0.4)}</p><p>${sens("k_ndvi", S.P.k_ndvi, Math.round(S.P.k_ndvi * 0.75))}</p>
       <h3>${t("wi.assump")}</h3><div class="tablewrap"><table><thead><tr><th></th><th class="num">${t("wi.c.cap")}</th><th class="num">${t("wi.c.deficit")}</th></tr></thead><tbody>${ass}</tbody></table></div>
@@ -1407,11 +1413,27 @@
       <p class="res-head">${ic(ok ? "check" : "info")} <b>${head}</b></p>
       ${ok ? "" : `<h4>${t("res.why")}</h4><ul>${why}</ul><h4>${t("res.where")}</h4><p>${t("res.whereLine", { t: fmt(J.hayTonnes(pl.deficit_kg, S.P)), names: short.map(h => esc(h.name)).join(", ") })} ${src("model")}</p>
         <h4>${t("res.change")}</h4><ul>${sg}</ul>`}
+      ${!ok && pl.bottleneck && pl.bottleneck.groups.length ? bottleneckHtml(pl.bottleneck.groups[0]) : ""}
+      <h4>${t("res.algo")}</h4><p>${algoLine(pl)}</p>
       <h4>${t("res.used")}</h4><p>${t("res.usedLine", { k: meta.imagery_count, year: meta.year ?? "—", lc: meta.landcover_year || "", n: S.herds.length, v: M.MODEL_VERSION })}</p>
       <h4>${t("res.trust")}</h4><p>${t("res.trustLine", { h: q.high, m: q.medium, l: q.low, n: q.none })}</p>
       ${wr ? `<details class="more"><summary>${t("res.warnings")} (${(pl.warnings || []).length})</summary><ul>${wr}</ul></details>` : ""}
       <p style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button type="button" class="btn btn-soft btn-sm" data-how="${esc(worst)}">${ic("info")} ${t("pop.how")} (${esc(worst)})</button>
         <button type="button" class="btn btn-ghost btn-sm" data-goto="whatif">${ic("layers")} ${t("tab.whatif")}</button></p></div>`;
+  }
+  const herdName = id => { const h = S.herds.find(x => x.id === id); return h ? esc(h.name) : esc(id); };
+  /** Доказательство узкого места (минимальный разрез): кому, где и сколько не хватает — можно проверить сложением. */
+  function bottleneckHtml(g) {
+    const exc = Object.entries(g.excluded || {}).filter(([, ids]) => ids.length).map(([r, ids]) => `${t("rsn." + r)}: ${plotIds(ids)}`).join("; ");
+    return `<h4>${t("res.bottleneck")}</h4><p>${t("bn.line", { herds: g.herds.map(herdName).join(", "), plots: plotIds(g.plots) || "—",
+      need: fmt(g.demand_au_days), cap: fmt(g.capacity_au_days), short: fmt(g.shortfall_au_days), t: fmt(J.hayTonnes(g.shortfall_au_days * S.P.intake, S.P)) })}
+      ${g.window_limited_au_days > 0.5 ? t("bn.window", { w: fmt(g.window_limited_au_days) }) : ""} ${exc ? t("bn.excluded", { r: exc }) : ""} ${src("model")}</p>`;
+  }
+  function algoLine(pl) {
+    if (pl.algorithm !== "fair-optimal-v1") return t("algo.greedyLine");
+    const H = S.herds.filter(h => J.herdAU(h, S.P) > 0 && pl.diagnostics[h.id] && pl.diagnostics[h.id].candidates.length);
+    const minS = H.length ? Math.min(...H.map(h => 1 - (pl.unmet[h.id] || 0) / (J.herdAU(h, S.P) * S.P.season_days))) : 1;
+    return t(pl.status === "feasible" ? "algo.optLineOk" : "algo.optLine", { p: pct(minS) }) + (pl.gap_au_days > 1 ? " " + t("algo.gap", { t: fmt(J.hayTonnes(pl.gap_au_days * S.P.intake, S.P)) }) : "");
   }
   function demoBanner() {
     const n = S.herds.filter(h => h.demo).length;
@@ -1501,7 +1523,13 @@
       ёмкость_всех_участков_с_водой_овец_за_сезон_оценка: Math.round(sheepOf(b.capAU)),
       поголовье_усл_голов: Math.round(b.au), поголовье_в_пересчёте_на_овец: Math.round(sheepOf(b.au)), сезон_дней: b.Sd,
       хватает_ли_корма: b.deficitT < 1 ? (b.ratio <= 0.7 ? "да, с запасом" : "да, впритык") : "нет, не на весь сезон",
-      статус_плана: S.pl.status, алгоритм: "жадная эвристика (не оптимизатор)", версия_модели: M.MODEL_VERSION,
+      статус_плана: S.pl.status, версия_модели: M.MODEL_VERSION,
+      алгоритм: S.pl.algorithm === "fair-optimal-v1" ? "оптимизация: 1) у всех хозяйств одинаковая доля обеспеченности, насколько позволяют ограничения (max-min); 2) при этом максимум корма; 3) при этом минимум перегона; затем календарь"
+        : "жадная эвристика (не оптимизатор)",
+      доли_обеспеченности_проц: S.pl.shares ? Object.fromEntries(S.herds.filter(h => S.pl.shares[h.id] != null).map(h => [h.name, Math.round(S.pl.shares[h.id] * 100)])) : null,
+      узкое_место: S.pl.bottleneck && S.pl.bottleneck.groups.length ? (g => ({ стада: g.herds.map(id => (S.herds.find(h => h.id === id) || {}).name || id),
+        доступные_им_участки: g.plots, потребность_усл_гол_сут: Math.round(g.demand_au_days), ёмкость_этих_участков_усл_гол_сут: Math.round(g.capacity_au_days),
+        не_хватает_усл_гол_сут: Math.round(g.shortfall_au_days), почему_другие_участки_недоступны: g.excluded }))(S.pl.bottleneck.groups[0]) : null,
       модель_проверена_в_поле: M.fieldValidated(S.P), демо_стада: S.herds.some(h => h.demo),
       метаданные: M.metaOf(S.D),
       причины_дефицита: S.herds.filter(h => S.pl.unmet[h.id]).map(h => ({ стадо: h.name, причина: S.pl.diagnostics[h.id].reason,
@@ -1572,6 +1600,7 @@
     $("#setPage").innerHTML = `<div class="card">
         <div class="setrow"><span>${t("set.lang")}</span><div class="seg"><button data-l="ru" class="${I.lang === "ru" ? "on" : ""}">Русский</button><button data-l="kk" class="${I.lang === "kk" ? "on" : ""}">Қазақша</button></div></div>
         <div class="setrow"><span>${t("set.mode")}</span><div class="seg">${["current", "plan", "ndvi"].map(m => `<button data-m="${m}" class="${S.mode === m ? "on" : ""}">${t("map.mode." + m)}</button>`).join("")}</div></div>
+        <div class="setrow"><span>${t("set.algo")}</span><div class="seg">${["optimized", "greedy"].map(a => `<button data-algo="${a}" class="${S.algo === a ? "on" : ""}">${t("algo." + a)}</button>`).join("")}</div></div>
         <div class="setrow"><span>${t("set.demo")}</span><label class="switch"><input type="checkbox" id="setDemo" ${C.ls.get("jaiylym:demo", true) ? "checked" : ""}><span></span></label></div></div>
       <div class="card"><h2>${ic("chart")} ${t("set.model")} ${src("model")}</h2><p class="fine">${t("set.modelNote")}</p>
         <p>${t("set.modelVer")}: <b>${M.MODEL_VERSION}</b> · ${t("set.field")}: <b>${M.fieldValidated(S.P) ? t("how.yes") : t("how.no")}</b></p>
@@ -1591,6 +1620,7 @@
     $$("#setPage [data-l]").forEach(b => b.onclick = () => setLang(b.dataset.l));
     $$("#setPage [data-m]").forEach(b => b.onclick = () => { S.mode = b.dataset.m; C.ls.set("jaiylym:mode", S.mode); if (S.D) paintMap(); renderSettings(); });
     $("#setDemo").onchange = e => C.ls.set("jaiylym:demo", e.target.checked);
+    $$("#setPage [data-algo]").forEach(b => b.onclick = () => { S.algo = b.dataset.algo; C.ls.set("jaiylym:algo", S.algo); if (S.D) render(); renderSettings(); });
     $$("#setPage [data-param]").forEach(i => i.onchange = () => { if (setParam(i.dataset.param, i.value, i, $("#setPage")) && S.D) render(); });
     $("#setVeg").onchange = e => { S.userP = Object.assign({}, S.userP, { vegetation_type: e.target.value }); S.P = resolveParams(S.userP, S.calib); saveParams(); };
     $("#setReset").onclick = () => { S.userP = {}; S.P = resolveParams({}, S.calib); saveParams(); if (S.D) render(); renderSettings(); };
@@ -1622,7 +1652,7 @@
   let heroMap = null;
   function renderHome() {
     const plots = DEFAULT.plots.map(p => Object.assign({}, p));
-    const pl = J.plan(plots, DEMO_HERDS);
+    const pl = J.solve(plots, DEMO_HERDS);
     if (window.L && !heroMap) {
       heroMap = L.map("heroMap", { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, touchZoom: false, tap: false });
       L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 17 }).addTo(heroMap);
@@ -1706,9 +1736,9 @@
   // данные для PDF-отчёта
   function reportCtx() {
     let scen = [];
-    try { scen = S.herds.length ? J.compareScenarios(S.plots, S.herds, S.P, J.defaultVariants(S.plots, S.herds, S.P)) : []; } catch (_) {}
+    try { const o = { algorithm: S.algo }; scen = S.herds.length ? J.compareScenarios(S.plots, S.herds, S.P, J.defaultVariants(S.plots, S.herds, S.P, o), o) : []; } catch (_) {}
     return { t, fmt, fmt1, pct, esc, src, J, M, S, scheme, loadColor, confidence, summary: summary(), trend: trendLine(), lang: I.lang,
-      meta: M.metaOf(S.D), scenarios: scen, variantName, sgText, wrText, whyHerd, dateStr };
+      meta: M.metaOf(S.D), scenarios: scen, variantName, sgText, wrText, whyHerd, dateStr, algoLine, bottleneckHtml };
   }
 
   window.JaiylymApp = { S, openVillage, render, summary, confidence, scheme, reportCtx, pickVillageOnMap, aiContext, briefData, openHow, renderPane, rebuildPlots };   // для отладки и тестов
