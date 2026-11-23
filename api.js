@@ -287,11 +287,16 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
     const url = new URL(req.url, "http://x");
     const p = url.pathname;
     if (!p.startsWith("/auth/") && !p.startsWith("/api/me") && !p.startsWith("/api/scenarios") &&
-        !p.startsWith("/api/history") && !p.startsWith("/api/coord") && p !== "/api/village" && p !== "/api/ai") return false;
+        !p.startsWith("/api/history") && !p.startsWith("/api/coord") && p !== "/api/village" && p !== "/api/ai" && p !== "/api/ai/status") return false;
     cors(req, res);
-    if (p === "/api/village" && !res.getHeader("Access-Control-Allow-Origin")) res.setHeader("Access-Control-Allow-Origin", "*");
+    if ((p === "/api/village" || p === "/api/ai/status") && !res.getHeader("Access-Control-Allow-Origin")) res.setHeader("Access-Control-Allow-Origin", "*");
     if (req.method === "OPTIONS") { res.writeHead(204).end(); return true; }
     try {
+      // --- состояние ИИ: есть ли ключ, какие модели доступны, последние ошибки (без ключа) ---
+      if (p === "/api/ai/status" && req.method === "GET") {
+        if (limited(req, "aistatus", 6, 60e3)) return json(res, 429, { error: "слишком часто" }), true;
+        return json(res, 200, await G.status()), true;
+      }
       // --- ИИ-помощник (Gemini): сводка по селу и чат. Доступен и гостю, с ограничением частоты ---
       if (p === "/api/ai" && req.method === "POST") {
         if (limited(req, "ai", 12, 60e3)) return json(res, 429, { error: "слишком много вопросов подряд, подождите минуту" }), true;
@@ -308,7 +313,12 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         const input = `ДАННЫЕ (JSON):\n${ctx}\n\nПРОБЛЕМЫ_ДАННЫХ: ${issues.length ? issues.join(" ") : "нет"}\n\n` +
           `${msgs ? "РАЗГОВОР:\n" + msgs + "\n\n" : ""}ЗАДАЧА: ${task}`;
         const r = await G.ask({ system: AI_SYSTEM[lang], input, maxTokens: b.mode === "summary" ? 600 : 700 });
-        if (!r.ok) return json(res, 503, { error: r.error === "no_key" ? "ИИ не настроен на сервере" : r.error === "timeout" ? "ИИ не ответил вовремя, попробуйте ещё раз" : "ИИ сейчас перегружен, попробуйте через минуту", issues }), true;
+        if (!r.ok) {
+          const ERR = { no_key: "ИИ не настроен на сервере", timeout: "ИИ не ответил вовремя, попробуйте ещё раз",
+            quota: "у ИИ закончился лимит запросов Google, попробуйте позже", key: "ключ ИИ на сервере не принят Google",
+            model_not_found: "модели ИИ из настроек сервера недоступны" };
+          return json(res, 503, { error: ERR[r.error] || "ИИ сейчас перегружен, попробуйте через минуту", reason: r.error, issues }), true;
+        }
         return json(res, 200, { text: r.text, model: r.model, issues, note: "Ответ ИИ — пояснение расчёта, а не заключение агронома или госоргана." }), true;
       }
       // --- вход ---
