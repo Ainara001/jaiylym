@@ -16,6 +16,7 @@
  */
 const crypto = require("crypto");
 const PL = require("./web/pipeline.js");
+const M = require("./web/model.js");
 const G = require("./gemini.js");
 
 // ---------- ИИ: инструкции модели ----------
@@ -27,6 +28,11 @@ const AI_RULES = "Используй только данные из блока �
   "Пиши простым языком для фермера без терминов; если термин нужен — поясни в скобках. Без таблиц, без markdown (без звёздочек и решёток); можно короткие списки через «—». " +
   "Числа пиши только цифрами, точно как в данных (например 15 384), никогда не словами; готовые итоги в поле «итог» уже посчитаны — не пересчитывай их. " +
   "Не путай единицы: поля «…_овец» — это число овец, поля «…усл_голов» — условные головы. Водопой открывает доступ к корму, а не «даёт воду овцам». " +
+  "Числа (ёмкость, число овец, дефицит, нагрузка) бери ТОЛЬКО из данных: сам их не считай и не придумывай. Если нужного числа нет — прямо скажи, что его нет в расчёте. " +
+  "Чтобы объяснить, откуда число, используй поле «как_рассчитано» (шаги формулы) — перескажи шаги с их числами. " +
+  "Право пользования участком в данных — только ввод пользователя, его НЕ проверяли по госреестру; никогда не утверждай, что право подтверждено. " +
+  "Вода «по карте WorldCover» — это водоём на снимке, а не проверенный водопой. Ёмкость не подтверждена полевыми измерениями. " +
+  "Если в блоке ПРОБЛЕМЫ_ДАННЫХ что-то указано — начни ответ с этого. Ты не агроном и не госорган: твой ответ — пояснение расчёта, а не заключение. " +
   "Если вопрос не о пастбищах, скоте, погоде для выпаса или работе сервиса — вежливо скажи, что помогаешь только с этим.";
 const AI_SYSTEM = {
   ru: "Ты — ИИ-помощник сервиса Jaiylym по пастбищам сёл Казахстана. Отвечай по-русски. " + AI_RULES,
@@ -53,6 +59,43 @@ const sha = s => crypto.createHash("sha256").update(String(s)).digest("hex");
 const rnd = n => crypto.randomBytes(n).toString("base64url");
 
 const num = (x, max = 1e6) => { const v = Math.round(+x); return Number.isFinite(v) ? Math.min(Math.max(v, 0), max) : 0; };
+const bad = msg => Object.assign(new Error(msg), { code: 400 });
+/** Поголовье: пусто → 0; отрицательное, дробное, нечисловое или больше лимита — ошибка 400 (а не тихое обнуление). */
+function count(x, name, max = 1e6) {
+  if (x == null || x === "") return 0;
+  const v = +x;
+  if (!Number.isFinite(v)) throw bad(`${name}: не число`);
+  if (v < 0) throw bad(`${name}: поголовье не может быть отрицательным`);
+  if (Math.round(v) !== v) throw bad(`${name}: нужно целое число`);
+  if (v > max) throw bad(`${name}: больше ${max}`);
+  return v;
+}
+const SPECIES_RU = { sheep: "овцы", goats: "козы", cattle: "КРС", horses: "лошади" };
+const MAX_HERDS = 60;
+
+/**
+ * Проверка данных села, которые сайт передаёт ИИ: чего не хватает и что противоречит друг другу.
+ * Возвращает список строк; ИИ обязан сначала сказать о них.
+ */
+function aiContextIssues(ctx) {
+  const out = [];
+  if (!ctx || typeof ctx !== "object" || !ctx["село"]) { out.push("Село не открыто: данных участков и стад нет."); return out; }
+  const plots = Array.isArray(ctx["участки"]) ? ctx["участки"] : [];
+  const herds = Array.isArray(ctx["стада"]) ? ctx["стада"] : [];
+  if (!plots.length) out.push("Нет данных участков.");
+  if (!herds.length) out.push("Стада не введены: план и дефицит не считались.");
+  const noNdvi = plots.filter(p => p && (p.ndvi_спутник == null)).map(p => p.id);
+  if (noNdvi.length) out.push("Нет NDVI (ёмкость неизвестна) для участков: " + noNdvi.slice(0, 16).join(", ") + ".");
+  const it = ctx["итог"] || {};
+  const st = ctx["статус_плана"];
+  const def = it["дефицит_сена_т_по_плану_оценка"];
+  if (st === "feasible" && def > 0) out.push("Противоречие: статус «распределение возможно», но указан дефицит " + def + " т.");
+  if ((st === "partially_feasible" || st === "infeasible") && def === 0) out.push("Противоречие: план неполный, но дефицит указан как 0.");
+  for (const p of plots) if (p && p.нагрузка_по_плану_проц > 100) { out.push("Противоречие: план превышает 100 % на участке " + p.id + "."); break; }
+  for (const h of herds) if (h && [h.овцы, h.козы, h.крс, h.лошади].some(v => v != null && (!Number.isFinite(+v) || +v < 0))) { out.push("Неверное поголовье у стада «" + h.имя + "»."); break; }
+  if (ctx["демо_стада"]) out.push("В расчёте есть условные демо-стада — это пример, а не реальные хозяйства.");
+  return out;
+}
 const str = (x, max = 80) => String(x == null ? "" : x).replace(/[\u0000-\u001f<>]/g, "").trim().slice(0, max);
 const coordOk = (lat, lon) => Number.isFinite(+lat) && Number.isFinite(+lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
 const PLOT_RE = /^[БД]-(С|СВ|В|ЮВ|Ю|ЮЗ|З|СЗ)$/;
@@ -114,60 +157,107 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
 
   function cleanFarm(b) {
     const v = b.village || {};
-    if (!coordOk(v.lat, v.lon)) throw Object.assign(new Error("укажите село"), { code: 400 });
+    if (!coordOk(v.lat, v.lon)) throw bad("укажите село");
+    if (b.home != null && b.home !== "" && !(PLOT_RE.test(b.home) && b.home.startsWith("Б"))) throw bad("домашний участок — только ближний (Б-…)");
+    if (b.plots != null && !Array.isArray(b.plots)) throw bad("участки: нужен список");
+    const plots = b.plots || [];
+    const badPlots = plots.filter(p => !PLOT_RE.test(p));
+    if (badPlots.length) throw bad("неизвестные участки: " + badPlots.map(x => str(x, 10)).join(", "));
     return {
       name: str(b.name, 60) || "Хозяйство",
       village: { name: str(v.name, 80) || "Село", lat: +(+v.lat).toFixed(5), lon: +(+v.lon).toFixed(5) },
-      sheep: num(b.sheep), goats: num(b.goats), cattle: num(b.cattle), horses: num(b.horses),
+      sheep: count(b.sheep, SPECIES_RU.sheep), goats: count(b.goats, SPECIES_RU.goats), cattle: count(b.cattle, SPECIES_RU.cattle), horses: count(b.horses, SPECIES_RU.horses),
       daily_return: !!b.daily_return,
-      home: PLOT_RE.test(b.home) && b.home.startsWith("Б") ? b.home : "Б-С",
-      plots: Array.isArray(b.plots) ? [...new Set(b.plots.filter(p => PLOT_RE.test(p)))].slice(0, 16) : [],
+      home: b.home || "Б-С",
+      // участки, которыми хозяйство пользуется по своим словам; это НЕ проверка по госреестру
+      plots: [...new Set(plots)].slice(0, 16), rights_source: "user_entered",
       updated: new Date().toISOString(),
     };
   }
-  /** Своё пастбище: контур проверяется и площадь пересчитывается на сервере; NDVI посчитан в браузере по Sentinel-2. */
-  function cleanPasture(b) {
+  /**
+   * Своё пастбище: контур проверяется и площадь пересчитывается на сервере.
+   * NDVI и состав покрова посчитаны В БРАУЗЕРЕ: сервер их не проверял, поэтому они хранятся с пометкой
+   * provenance = "client_reported", verified = false. Подтверждённые сервером значения появляются только
+   * после проверки снимка на сервере (ежедневная проверка, observations с source = "server").
+   */
+  function cleanPasture(b, existing) {
     const g = b.geometry || {};
     let ring = g.type === "Polygon" && Array.isArray(g.coordinates) ? g.coordinates[0] : null;
     if (!Array.isArray(ring) || ring.length < 3 || ring.length > 201) throw Object.assign(new Error("контур: от 3 до 200 точек"), { code: 400 });
     ring = ring.map(p => [+(+p[0]).toFixed(6), +(+p[1]).toFixed(6)]);
     if (!ring.every(([x, y]) => coordOk(y, x))) throw Object.assign(new Error("неверные координаты"), { code: 400 });
     ring = PL.closeRing(ring);
+    if (PL.ringSelfIntersects(ring)) throw bad("границы пересекают сами себя");
     const xs = ring.map(p => p[0]), ys = ring.map(p => p[1]);
     if (Math.max(...xs) - Math.min(...xs) > 0.45 || Math.max(...ys) - Math.min(...ys) > 0.3) throw Object.assign(new Error("участок больше 30 км"), { code: 400 });
     const area = PL.polygonAreaHa(ring);
     if (area < 1) throw Object.assign(new Error("участок меньше 1 га"), { code: 400 });
+    const key = JSON.stringify(ring.slice(0, -1).map(p => p.map(v => +v.toFixed(5))).sort());
+    if ((existing || []).some(q => q.ring_key === key)) throw Object.assign(new Error("такое пастбище уже сохранено"), { code: 409 });
     const s = b.stats || {};
     const nd = x => (Number.isFinite(+x) && x !== null && Math.abs(+x) <= 1 ? +(+x).toFixed(3) : null);
     const series = (Array.isArray(s.series) ? s.series : []).slice(0, 12)
       .filter(x => x && /^\d{4}-\d{2}-\d{2}$/.test(x.d) && nd(x.v) != null).map(x => ({ d: x.d, v: nd(x.v) }));
+    const ha = x => Math.min(Math.round(area * 10) / 10, Math.max(0, +x || 0));
+    const frac = x => (Number.isFinite(+x) && x !== null ? Math.min(1, Math.max(0, +x)) : null);
     return {
       id: rnd(8), name: str(b.name, 60) || "Пастбище",
-      geometry: { type: "Polygon", coordinates: [ring] },
+      geometry: { type: "Polygon", coordinates: [ring] }, ring_key: key,
       area_ha: Math.round(area * 10) / 10,
       water: !!b.water,                                        // ввод фермера: есть ли вода
+      water_status: b.water ? "confirmed" : (s.water_on_map ? "satellite" : "unknown"),
       stats: {
         ndvi: nd(s.ndvi), series,
-        pasture_ha: Math.min(Math.round(area * 10) / 10, Math.max(0, +s.pasture_ha || 0)),
+        pasture_ha: ha(s.pasture_ha), excluded_ha: ha(s.excluded_ha), uncertain_ha: ha(s.uncertain_ha),
         wc_pasture_share: Math.min(1, Math.max(0, +s.wc_pasture_share || 0)),
+        valid_fraction: frac(s.valid_fraction), obs_count: series.length,
         water_on_map: !!s.water_on_map, year: num(s.year, 3000),
+        provenance: "client_reported", verified: false,           // посчитано в браузере, сервер не проверял
       },
       created: new Date().toISOString(),
     };
   }
+  function plotList(x, name) {
+    if (x == null) return [];
+    if (!Array.isArray(x)) throw bad(name + ": нужен список участков");
+    const badIds = x.filter(p => !PLOT_RE.test(p));
+    if (badIds.length) throw bad(name + ": неизвестные участки " + badIds.map(v => str(v, 10)).join(", "));
+    return [...new Set(x)].slice(0, 16);
+  }
   function cleanScenario(b, u) {
     const v = b.village || {};
-    if (!coordOk(v.lat, v.lon)) throw Object.assign(new Error("в сценарии нет села"), { code: 400 });
-    const herds = (Array.isArray(b.herds) ? b.herds : []).slice(0, 60).map((h, i) => ({
-      id: str(h.id, 40) || "h" + i, name: str(h.name, 60) || "Стадо", sheep: num(h.sheep), goats: num(h.goats),
-      cattle: num(h.cattle), horses: num(h.horses), home: PLOT_RE.test(h.home) ? h.home : "Б-С", daily_return: !!h.daily_return,
-    }));
-    const params = {};
-    for (const k of ["season_days", "intake", "util", "k_ndvi", "hay_price"]) if (b.params && Number.isFinite(+b.params[k])) params[k] = +b.params[k];
+    if (!coordOk(v.lat, v.lon)) throw bad("в сценарии нет села");
+    if (b.herds != null && !Array.isArray(b.herds)) throw bad("стада: нужен список");
+    if ((b.herds || []).length > MAX_HERDS) throw bad(`слишком большой сценарий: больше ${MAX_HERDS} стад`);
+    const ids = new Set();
+    const herds = (b.herds || []).map((h, i) => {
+      if (!h || typeof h !== "object") throw bad("стадо " + (i + 1) + ": неверные данные");
+      const id = str(h.id, 40) || "h" + i;
+      if (ids.has(id)) throw bad("стадо повторяется: " + id);
+      ids.add(id);
+      if (h.home != null && h.home !== "" && !PLOT_RE.test(h.home)) throw bad("стадо " + (i + 1) + ": неизвестный участок " + str(h.home, 10));
+      return { id, name: str(h.name, 60) || "Стадо", sheep: count(h.sheep, SPECIES_RU.sheep), goats: count(h.goats, SPECIES_RU.goats),
+        cattle: count(h.cattle, SPECIES_RU.cattle), horses: count(h.horses, SPECIES_RU.horses), home: h.home || "Б-С", daily_return: !!h.daily_return,
+        allowed_plots: plotList(h.allowed_plots, "разрешённые участки"), demo: !!h.demo };
+    });
+    let params = {};
+    if (b.params != null) {
+      const r = M.validate(b.params);
+      if (!r.ok) throw bad("параметры модели: " + r.errors.map(e => `${e.key} ${e.reason}`).join("; "));
+      params = r.values;
+    }
+    const ws = b.water_status && typeof b.water_status === "object" ? b.water_status : {};
+    const water_status = {};
+    for (const [id, st] of Object.entries(ws)) {
+      if (!PLOT_RE.test(id) || !["confirmed", "absent", "unknown"].includes(st)) throw bad("статус водопоя: " + str(id, 10) + " = " + str(st, 20));
+      water_status[id] = st;
+    }
     return {
       id: rnd(9), name: str(b.name, 80) || "Сценарий", owner: u.uid, ownerName: u.name,
       village: { name: str(v.name, 80), lat: +(+v.lat).toFixed(5), lon: +(+v.lon).toFixed(5) },
-      herds, water: (Array.isArray(b.water) ? b.water : []).filter(p => PLOT_RE.test(p)).slice(0, 16), params,
+      herds, water: plotList(b.water, "водопои"), forbidden: plotList(b.forbidden, "закрытые участки"), water_status, params,
+      model_version: M.MODEL_VERSION,
+      request_id: /^[A-Za-z0-9_-]{8,64}$/.test(b.request_id || "") ? b.request_id : null,
       summary: b.summary && typeof b.summary === "object" ? JSON.parse(JSON.stringify(b.summary).slice(0, 2000)) : null,
       created: new Date().toISOString(),
     };
@@ -210,14 +300,16 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         if (++aiDay.n > AI_DAILY) return json(res, 429, { error: "дневной лимит ИИ исчерпан, попробуйте завтра" }), true;
         const b = await body(req);
         const lang = b.lang === "kk" ? "kk" : "ru";
+        const issues = aiContextIssues(b.context);
         const ctx = b.context && typeof b.context === "object" ? JSON.stringify(b.context).slice(0, 24000) : "{}";
         const msgs = (Array.isArray(b.messages) ? b.messages : []).slice(-12)
           .map(m => `${m.role === "ai" ? "Помощник" : "Пользователь"}: ${str(m.text, 1200)}`).join("\n");
         const task = b.mode === "summary" ? AI_SUMMARY[lang] : AI_CHAT[lang];
-        const r = await G.ask({ system: AI_SYSTEM[lang], input: `ДАННЫЕ (JSON):\n${ctx}\n\n${msgs ? "РАЗГОВОР:\n" + msgs + "\n\n" : ""}ЗАДАЧА: ${task}`,
-          maxTokens: b.mode === "summary" ? 600 : 700 });
-        if (!r.ok) return json(res, 503, { error: r.error === "no_key" ? "ИИ не настроен на сервере" : "ИИ сейчас перегружен, попробуйте через минуту" }), true;
-        return json(res, 200, { text: r.text, model: r.model }), true;
+        const input = `ДАННЫЕ (JSON):\n${ctx}\n\nПРОБЛЕМЫ_ДАННЫХ: ${issues.length ? issues.join(" ") : "нет"}\n\n` +
+          `${msgs ? "РАЗГОВОР:\n" + msgs + "\n\n" : ""}ЗАДАЧА: ${task}`;
+        const r = await G.ask({ system: AI_SYSTEM[lang], input, maxTokens: b.mode === "summary" ? 600 : 700 });
+        if (!r.ok) return json(res, 503, { error: r.error === "no_key" ? "ИИ не настроен на сервере" : r.error === "timeout" ? "ИИ не ответил вовремя, попробуйте ещё раз" : "ИИ сейчас перегружен, попробуйте через минуту", issues }), true;
+        return json(res, 200, { text: r.text, model: r.model, issues, note: "Ответ ИИ — пояснение расчёта, а не заключение агронома или госоргана." }), true;
       }
       // --- вход ---
       if (p === "/auth/start" && req.method === "POST") {
@@ -286,7 +378,7 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
       // --- свои пастбища (контур рисует фермер) ---
       if (p === "/api/me/pastures" && req.method === "POST") {
         if ((u.pastures || []).length >= 10) return json(res, 400, { error: "не больше 10 пастбищ на хозяйство" }), true;
-        const past = cleanPasture(await body(req));
+        const past = cleanPasture(await body(req), u.pastures);
         u.pastures = (u.pastures || []).concat([past]);
         save();
         return json(res, 200, pubUser(u)), true;
@@ -307,7 +399,10 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         return json(res, 200, { own: u.scenarios || [], shared }), true;
       }
       if (p === "/api/scenarios" && req.method === "POST") {
-        const b = await body(req), s = cleanScenario(b, u);
+        const b = await body(req);
+        const dup = b && b.request_id && (u.scenarios || []).concat(...Object.values(st().villagePlans)).find(x => x.request_id === b.request_id && x.owner === u.uid);
+        if (dup) return json(res, 200, Object.assign({ duplicate: true }, dup)), true;    // повторная отправка того же запроса
+        const s = cleanScenario(b, u);
         if (b.shared) {
           const vk = vkey(s.village.lat, s.village.lon);
           if (roleOf(u) !== "coordinator" || !(u.villages || []).some(v => v.vk === vk))
@@ -371,7 +466,8 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
           const farms = Object.values(st().users).filter(x => farmVk(x) === vk).map(x => ({
             uid: x.uid, owner: x.name, name: x.farm.name, sheep: x.farm.sheep, goats: x.farm.goats, cattle: x.farm.cattle,
             horses: x.farm.horses, daily_return: x.farm.daily_return, home: x.farm.home, plots: x.farm.plots, updated: x.farm.updated,
-            pastures: (x.pastures || []).map(q => ({ id: q.id, name: q.name, geometry: q.geometry, area_ha: q.area_ha, water: q.water, ndvi: q.stats && q.stats.ndvi })),
+            pastures: (x.pastures || []).map(q => ({ id: q.id, name: q.name, geometry: q.geometry, area_ha: q.area_ha, water: q.water, ndvi: q.stats && q.stats.ndvi,
+              ndvi_provenance: (q.stats && q.stats.provenance) || "client_reported" })),
           }));
           return json(res, 200, { vk, farms }), true;
         }
@@ -385,4 +481,4 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
   return { handle, confirmLogin, loginInfo, roleOf };
 }
 
-module.exports = { createApi };
+module.exports = { createApi, aiContextIssues };

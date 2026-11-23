@@ -10,7 +10,13 @@ process.env.BOT_STATE_FILE = path.join(os.tmpdir(), `jaiylym-test-${process.pid}
 process.env.COORDINATOR_IDS = "333";
 delete process.env.REDIS_URL;
 const bot = require("../bot.js");
+const PL = require("../web/pipeline.js");
+const G = require("../gemini.js");
 bot.setTest();
+// Сеть в тестах не используется: снимок для ежедневной проверки подставляем сами (реальный вызов — npm run test:net)
+let fakeScene = null;
+PL.latestPolygonScene = async () => fakeScene;
+PL.latestScene = async () => null;
 
 const SITE = "http://localhost:8765";
 let base, server;
@@ -80,24 +86,34 @@ test("без токена или с поддельным токеном — 401"
   assert.equal((await call("GET", "/api/me", { token: farmer })).data.name, "Айгерим");
 });
 
-test("профиль хозяйства: проверка данных и связь со стадом в боте", async () => {
+test("профиль хозяйства: неверные данные отклоняются с понятной ошибкой, а не обнуляются", async () => {
   assert.equal((await call("PUT", "/api/me/farm", { token: farmer, body: { name: "Нет села" } })).status, 400);
+  const neg = await call("PUT", "/api/me/farm", { token: farmer, body: { name: "КХ", village: KEGEN, sheep: 450, horses: -5 } });
+  assert.equal(neg.status, 400);
+  assert.match(neg.data.error, /отрицательн/);
+  assert.equal((await call("PUT", "/api/me/farm", { token: farmer, body: { village: KEGEN, sheep: 1.5 } })).status, 400, "дробное поголовье");
+  assert.equal((await call("PUT", "/api/me/farm", { token: farmer, body: { village: KEGEN, sheep: "много" } })).status, 400, "не число");
+  assert.equal((await call("PUT", "/api/me/farm", { token: farmer, body: { village: KEGEN, home: "Д-С" } })).status, 400, "домашний — только ближний");
+  assert.equal((await call("PUT", "/api/me/farm", { token: farmer, body: { village: KEGEN, plots: ["Б-С", "плохое"] } })).status, 400, "неизвестный участок");
+  assert.equal((await call("PUT", "/api/me/farm", { token: farmer, body: { village: { lat: 95, lon: 79 } } })).status, 400, "неверные координаты");
   const r = await call("PUT", "/api/me/farm", { token: farmer, body: {
-    name: "КХ <b>Ак</b>", village: KEGEN, sheep: 450, cattle: 12, horses: -5, home: "Д-С", plots: ["Б-С", "Д-С", "плохое"] } });
+    name: "КХ <b>Ак</b>", village: KEGEN, sheep: 450, cattle: 12, home: "Б-С", plots: ["Б-С", "Д-С", "Д-С"] } });
   assert.equal(r.status, 200);
   assert.equal(r.data.farm.name, "КХ bАк/b", "теги вырезаются");
-  assert.equal(r.data.farm.horses, 0, "отрицательное поголовье обнуляется");
-  assert.equal(r.data.farm.home, "Б-С", "домашний участок только ближний");
-  assert.deepEqual(r.data.farm.plots, ["Б-С", "Д-С"]);
+  assert.equal(r.data.farm.horses, 0, "не указано — 0");
+  assert.deepEqual(r.data.farm.plots, ["Б-С", "Д-С"], "повторы убраны");
+  assert.equal(r.data.farm.rights_source, "user_entered", "право пользования — ввод пользователя, не реестр");
   const v = bot.getState().villages["43.020,79.220"];
   assert.ok(v.herds.some(h => h.id === "tg111" && h.sheep === 450), "стадо появилось в боте");
 });
 
 test("сценарии: свои видны только владельцу, чужие нельзя удалить", async () => {
   other = (await login(222, "Ерлан")).poll.data.token;
-  const s = await call("POST", "/api/scenarios", { token: farmer, body: { name: "Мой план", village: KEGEN, herds: [{ name: "A", sheep: 100 }], water: ["Д-З", "x"] } });
+  assert.equal((await call("POST", "/api/scenarios", { token: farmer, body: { name: "x", village: KEGEN, water: ["Д-З", "x"] } })).status, 400, "неизвестный участок");
+  const s = await call("POST", "/api/scenarios", { token: farmer, body: { name: "Мой план", village: KEGEN, herds: [{ name: "A", sheep: 100 }], water: ["Д-З"] } });
   assert.equal(s.status, 200);
   assert.deepEqual(s.data.water, ["Д-З"]);
+  assert.equal(s.data.model_version, "2.0.0");
   assert.equal((await call("GET", "/api/scenarios", { token: farmer })).data.own.length, 1);
   assert.equal((await call("GET", "/api/scenarios", { token: other })).data.own.length, 0);
   assert.equal((await call("DELETE", "/api/scenarios/" + s.data.id, { token: other })).status, 404);
@@ -150,12 +166,21 @@ test("свои пастбища: проверка контура, площадь
   const f = await call("GET", "/api/coord/farms?vk=43.020,79.220", { token: coord });
   assert.equal(f.data.farms[0].pastures[0].name, "Летнее");
 
-  for (let i = 0; i < 9; i++) await call("POST", "/api/me/pastures", { token: farmer, body });
-  assert.equal((await call("POST", "/api/me/pastures", { token: farmer, body })).status, 400, "не больше 10");
+  assert.equal(past.stats.provenance, "client_reported", "NDVI с сайта помечен как непроверенный");
+  assert.equal(past.stats.verified, false);
+  assert.equal((await call("POST", "/api/me/pastures", { token: farmer, body })).status, 409, "то же пастбище второй раз не сохраняется");
+  const bow = [[lon, lat], [lon + dx, lat + dy], [lon + dx, lat], [lon, lat + dy]];        // «бантик»: рёбра пересекаются
+  assert.equal((await call("POST", "/api/me/pastures", { token: farmer, body: { geometry: { type: "Polygon", coordinates: [bow] } } })).status, 400, "самопересечение");
+  for (let i = 1; i < 10; i++) {
+    const r2 = ring.map(([x, y]) => [x + i * 0.02, y]);
+    assert.equal((await call("POST", "/api/me/pastures", { token: farmer, body: Object.assign({}, body, { geometry: { type: "Polygon", coordinates: [r2] } }) })).status, 200);
+  }
+  const r11 = ring.map(([x, y]) => [x + 0.5, y]);
+  assert.equal((await call("POST", "/api/me/pastures", { token: farmer, body: { geometry: { type: "Polygon", coordinates: [r11] } } })).status, 400, "не больше 10");
   assert.equal((await call("DELETE", "/api/me/pastures/" + past.id, { token: farmer })).status, 200);
 });
 
-test("бот: подписка на своё пастбище только владельцу, уведомление по реальному снимку", async () => {
+test("бот: подписка на своё пастбище только владельцу, уведомление по снимку без дублей", async () => {
   const q = bot.getState().users["111"].pastures[0];
   sent.length = 0;
   await bot.handle({ message: { chat: { id: 222 }, from: { id: 222 }, text: "/start m_" + q.id } }, send);
@@ -164,10 +189,21 @@ test("бот: подписка на своё пастбище только вл�
   assert.match(sent[1].text, /Вы подписаны на своё пастбище «Летнее»/);
   assert.match(sent[1].text, /pasture=/, "ссылка ведёт на пастбище на сайте");
   sent.length = 0;
+  fakeScene = { id: "S2B_TEST_20260829", date: "2026-08-29", cloud: 3, ndvi: 0.205, valid: 0.97 };
   const r = await bot.runCron(send, new Date("2026-08-31T04:00:00Z"));
   const mine = sent.filter(m => m.chat === "111" && /ваше пастбище «Летнее»/.test(m.text));
   assert.equal(mine.length, 1, JSON.stringify(r));
   assert.match(mine[0].text, /Снимок Sentinel-2 от 29\.08: NDVI 0\.\d\d/);
+  assert.ok(!/Внимание: трава убывает/.test(mine[0].text), "одно наблюдение — не повод для тревоги");
+  const obs = bot.getState().users["111"].pastures[0].observations;
+  assert.equal(obs[obs.length - 1].source, "server", "снимок, проверенный сервером, сохранён отдельно");
+  // планировщик запустили повторно с тем же снимком — второго сообщения нет
+  bot.getState().users["111"].pastures[0].monitor.last = null;
+  sent.length = 0;
+  const r2 = await bot.runCron(send, new Date("2026-08-31T05:00:00Z"));
+  assert.equal(sent.filter(m => m.chat === "111").length, 0, JSON.stringify(r2));
+  assert.equal(r2.duplicates, 1);
+  fakeScene = null;
 });
 
 test("выход и удаление аккаунта", async () => {
@@ -176,6 +212,74 @@ test("выход и удаление аккаунта", async () => {
   assert.equal((await call("DELETE", "/api/me", { token: farmer })).status, 200);
   assert.equal(bot.getState().users["111"], undefined);
   assert.ok(!bot.getState().villages["43.020,79.220"].herds.some(h => h.id === "tg111"), "стадо удалено и из бота");
+});
+
+test("сценарии: неверные параметры, слишком большой сценарий, повторная отправка", async () => {
+  const tok = (await login(555, "Бота")).poll.data.token;
+  const base = { name: "П", village: KEGEN, herds: [{ id: "a", sheep: 10 }] };
+  for (const params of [{ util: 1.5 }, { util: -0.1 }, { season_days: 0 }, { season_days: -10 }, { k_ndvi: 1e9 }, { intake: "abc" }, { bogus: 1 }]) {
+    const r = await call("POST", "/api/scenarios", { token: tok, body: Object.assign({}, base, { params }) });
+    assert.equal(r.status, 400, JSON.stringify(params));
+    assert.match(r.data.error, /параметры модели/);
+  }
+  assert.equal((await call("POST", "/api/scenarios", { token: tok, body: Object.assign({}, base, { params: { util: 0.4, season_days: 120 } }) })).status, 200);
+  const many = Array.from({ length: 61 }, (_, i) => ({ id: "h" + i, sheep: 1 }));
+  assert.equal((await call("POST", "/api/scenarios", { token: tok, body: Object.assign({}, base, { herds: many }) })).status, 400, "больше 60 стад");
+  assert.equal((await call("POST", "/api/scenarios", { token: tok, body: Object.assign({}, base, { herds: [{ id: "a", sheep: 1 }, { id: "a", sheep: 2 }] }) })).status, 400, "повтор стада");
+  assert.equal((await call("POST", "/api/scenarios", { token: tok, body: Object.assign({}, base, { herds: [{ id: "a", sheep: -1 }] }) })).status, 400, "отрицательное поголовье");
+  assert.equal((await call("POST", "/api/scenarios", { token: tok, body: Object.assign({}, base, { water_status: { "Д-З": "есть" } }) })).status, 400, "неизвестный статус водопоя");
+  const once = Object.assign({}, base, { request_id: "req-0123456789" });
+  const a = await call("POST", "/api/scenarios", { token: tok, body: once });
+  const b = await call("POST", "/api/scenarios", { token: tok, body: once });
+  assert.equal(b.status, 200);
+  assert.equal(b.data.duplicate, true);
+  assert.equal(b.data.id, a.data.id, "повторный запрос не создаёт второй сценарий");
+  assert.equal((await call("GET", "/api/scenarios", { token: tok })).data.own.filter(x => x.request_id === "req-0123456789").length, 1);
+});
+
+test("чужие данные: чужой сценарий не виден и не удаляется, чужое хозяйство не меняется", async () => {
+  const a = (await login(601, "А")).poll.data.token, b = (await login(602, "Б")).poll.data.token;
+  const s = await call("POST", "/api/scenarios", { token: a, body: { name: "секрет", village: KEGEN } });
+  assert.ok(!(await call("GET", "/api/scenarios", { token: b })).data.own.some(x => x.id === s.data.id));
+  assert.equal((await call("DELETE", "/api/scenarios/" + s.data.id, { token: b })).status, 404);
+  await call("PUT", "/api/me/farm", { token: a, body: { name: "Ферма А", village: KEGEN, sheep: 10 } });
+  await call("PUT", "/api/me/farm", { token: b, body: { name: "Ферма Б", village: KEGEN, sheep: 99, uid: "601" } });
+  assert.equal(bot.getState().users["601"].farm.sheep, 10, "поле uid в теле запроса не позволяет писать в чужой профиль");
+  assert.equal((await call("POST", "/api/scenarios", { token: b, body: { name: "план", village: KEGEN, shared: true } })).status, 403, "общий план без роли координатора");
+});
+
+test("повреждённый JSON и слишком большой запрос", async () => {
+  const r = await fetch(base + "/api/scenarios", { method: "POST", headers: { authorization: "Bearer " + coord, "content-type": "application/json", origin: SITE }, body: "{не json" });
+  assert.equal(r.status, 400);
+  const big = await fetch(base + "/api/scenarios", { method: "POST", headers: { authorization: "Bearer " + coord, "content-type": "application/json", origin: SITE }, body: "{\"x\":\"" + "a".repeat(300 * 1024) + "\"}" }).catch(e => ({ status: "reset" }));
+  assert.ok(big.status === 413 || big.status === "reset", "больше 256 КБ отклоняется: " + big.status);
+});
+
+test("ИИ: ключ не нужен браузеру, проблемы данных передаются модели, ошибки обрабатываются", async () => {
+  const orig = G.ask;
+  let seen = null;
+  G.ask = async args => { seen = args; return { ok: true, text: "ответ", model: "test" }; };
+  try {
+    const r = await call("POST", "/api/ai", { ip: "10.7.7.1", body: { mode: "chat", lang: "ru", context: {}, messages: [{ role: "user", text: "сколько овец?" }] } });
+    assert.equal(r.status, 200);
+    assert.match(seen.input, /ПРОБЛЕМЫ_ДАННЫХ: Село не открыто/);
+    assert.ok(r.data.issues.length >= 1);
+    assert.match(r.data.note, /не заключение агронома/);
+    const ctx = { "село": "Кеген", "статус_плана": "feasible", "итог": { "дефицит_сена_т_по_плану_оценка": 12 },
+      "участки": [{ id: "Б-С", ndvi_спутник: null, нагрузка_по_плану_проц: 130 }], "стада": [{ имя: "А", овцы: -5 }], "демо_стада": true };
+    const r2 = await call("POST", "/api/ai", { ip: "10.7.7.2", body: { mode: "summary", lang: "kk", context: ctx } });
+    assert.equal(r2.status, 200);
+    const all = r2.data.issues.join(" ");
+    for (const re of [/Нет NDVI/, /Противоречие: статус/, /превышает 100/, /Неверное поголовье/, /демо-стада/]) assert.match(all, re);
+    assert.match(seen.system, /ТЕК қазақ/);
+    assert.match(seen.system, /не агроном/);
+    G.ask = async () => ({ ok: false, error: "timeout" });
+    const r3 = await call("POST", "/api/ai", { ip: "10.7.7.3", body: { mode: "chat", context: ctx } });
+    assert.equal(r3.status, 503);
+    assert.match(r3.data.error, /не ответил вовремя/);
+    G.ask = async () => ({ ok: false, error: "no_key" });
+    assert.match((await call("POST", "/api/ai", { ip: "10.7.7.4", body: {} })).data.error, /не настроен/);
+  } finally { G.ask = orig; }
 });
 
 test("ограничение частоты запросов на вход", async () => {
