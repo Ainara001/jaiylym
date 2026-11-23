@@ -127,7 +127,7 @@
   function ensureMap() {
     if (S.map || S.noLeaflet) return;
     if (!window.L) { S.noLeaflet = true; $("#map").hidden = true; $("#schemeMap").hidden = false; return; }
-    S.map = L.map("map", { zoomControl: true, attributionControl: true, maxZoom: 19 }).setView([DEFAULT.village.lat, DEFAULT.village.lon], 12);
+    S.map = L.map("map", { zoomControl: true, attributionControl: true, maxZoom: 19, zoomSnap: 0.25 }).setView([DEFAULT.village.lat, DEFAULT.village.lon], 12);
     // снимки Esri есть до 17 уровня; дальше карта увеличивает их, чтобы можно было точнее ставить точки
     const tiles = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
       maxNativeZoom: 17, maxZoom: 19, attribution: "Esri World Imagery · Sentinel-2 ESA Copernicus · © OpenStreetMap",
@@ -136,7 +136,16 @@
     tiles.on("tileerror", () => { if (++tileErrors === 6 && !navigator.onLine) toast(t("map.fallback"), true); });
     S.group = L.layerGroup().addTo(S.map);
     S.pastGroup = L.layerGroup().addTo(S.map);
-    new ResizeObserver(() => S.map.invalidateSize()).observe($("#map"));
+    // поворот телефона или заметная смена формы окна: размер пересчитать и, если человек не двигал карту, снова навести на село
+    let lastBox = null;
+    new ResizeObserver(([e]) => {
+      S.map.invalidateSize();
+      const { width: w, height: h } = e.contentRect, prev = lastBox;
+      lastBox = { w, h };
+      if (prev && S.vBounds && !S.mapMoved && w && h && (Math.abs(w / h - prev.w / prev.h) > 0.25 || Math.abs(w - prev.w) > 80))
+        { S.fitting = true; S.map.fitBounds(S.vBounds, { padding: [12, 12], animate: false }); S.fitting = false; }
+    }).observe($("#map"));
+    S.map.on("dragstart zoomstart", e => { if (!S.fitting) S.mapMoved = true; });
     S.map.on("click", e => {
       if (S.draw) { addDrawPoint(e.latlng); return; }
       if (!S.picking) return;
@@ -164,12 +173,13 @@
     for (const p of S.plots) {
       const geom = smooth[p.id] || p.geometry;
       const poly = L.polygon(geom.coordinates[0].map(([x, y]) => [y, x]), { weight: 1.5, color: "#fff", fillOpacity: 0.45, smoothFactor: 0.5 }).addTo(S.group);
-      poly.bindTooltip("", { permanent: true, direction: "center", className: "plabel" });
+      poly.bindTooltip("", { permanent: true, direction: "center", className: p.ring === "near" ? "plabel plabel-near" : "plabel" });
       poly.on("click", () => { if (!S.picking && !S.draw) openPlot(p.id); });
       S.layers[p.id] = poly;
     }
     const b = L.latLngBounds(S.plots.flatMap(p => p.geometry.coordinates[0].map(([x, y]) => [y, x])));
-    S.map.invalidateSize(); S.map.fitBounds(b, { padding: [12, 12] });
+    S.vBounds = b; S.mapMoved = false;
+    S.fitting = true; S.map.invalidateSize(); S.map.fitBounds(b, { padding: [12, 12], animate: false }); S.fitting = false;
     drawPastures();
   }
 
@@ -216,6 +226,7 @@
   function openPasture(id) {
     const q = ((C.user && C.user.pastures) || []).find(x => x.id === id), lay = S.pastLayers && S.pastLayers[id];
     if (!q || !lay) return;
+    if (phone()) { cardDialog(pastureHtml(q)); return; }
     L.popup({ maxWidth: 300, maxHeight: Math.max(220, $("#map").clientHeight - 120), autoPanPaddingTopLeft: [16, 70] })
       .setLatLng(lay.getBounds().getCenter()).setContent(pastureHtml(q)).openOn(S.map);
   }
@@ -492,10 +503,13 @@
   function plotLabel(p) {
     const r = S.mode === "current" ? S.cur : S.pl, l = r.load[p.id];
     const small = window.matchMedia("(max-width: 860px)").matches;
-    if (S.mode === "ndvi") return `${p.id}<br>${p.ndvi ?? "?"}`;
-    if (!l.known) return `${p.id}<br>?`;
-    if (p.forbidden) return `${p.id}<br>${t("pop.closedTag")}`;
-    return l.used ? `${p.id}<br>${pct(l.load)}` : (small ? p.id : `${p.id}<br>${t("map.free")}`);
+    // на телефоне внутреннее кольцо узкое: только направление (кольцо и так видно) и процент без пробела — иначе подписи наезжают
+    const id = small && p.ring === "near" ? p.dir : p.id;
+    const pc = v => (small ? pct(v).replace(/\s/g, "") : pct(v));
+    if (S.mode === "ndvi") return `${id}<br>${p.ndvi ?? "?"}`;
+    if (!l.known) return `${id}<br>?`;
+    if (p.forbidden) return `${id}<br>${t("pop.closedTag")}`;
+    return l.used ? `${id}<br>${pc(l.load)}` : (small ? id : `${p.id}<br>${t("map.free")}`);
   }
   function plotFill(p) {
     const r = S.mode === "current" ? S.cur : S.pl;
@@ -618,13 +632,13 @@
     root.querySelectorAll("[data-closed]").forEach(chk => chk.onchange = () => {
       const id = chk.dataset.closed;
       chk.checked ? S.forbidden.add(id) : S.forbidden.delete(id);
-      rebuildPlots(); render(); if (S.map) S.map.closePopup();
+      rebuildPlots(); render(); closePlotCard();
       toast((chk.checked ? t("pop.closedOn") : t("pop.closedOff")) + ": " + id);
     });
     root.querySelectorAll("[data-ws]").forEach(sel => sel.onchange = () => {
       const id = sel.dataset.ws;
       if (sel.value) { S.waterSet[id] = sel.value; S.added.delete(id); } else delete S.waterSet[id];
-      rebuildPlots(); render(); if (S.map) S.map.closePopup();
+      rebuildPlots(); render(); closePlotCard();
     });
   }
 
@@ -658,21 +672,31 @@
     d.addEventListener("close", () => d.remove());
     d.showModal();
   }
+  // на телефоне карточка участка — нижняя шторка во весь экран: всплывашка Leaflet там обрезается краем карты и перекрывается кнопками
+  const phone = () => matchMedia("(max-width: 860px)").matches;
   let plotDlg;
+  function closePlotCard() { if (S.map) S.map.closePopup(); if (plotDlg && plotDlg.open) plotDlg.close(); }
+  function cardDialog(html) {
+    plotDlg = plotDlg || Object.assign(document.createElement("dialog"), { className: "modal plot-sheet" });
+    if (!plotDlg.isConnected) {
+      document.body.appendChild(plotDlg);
+      plotDlg.addEventListener("click", e => { if (e.target === plotDlg) plotDlg.close(); });   // нажатие на затемнение закрывает
+    }
+    plotDlg.innerHTML = `<form method="dialog" class="modal-x"><button aria-label="${t("common.close")}">${ic("x")}</button></form>` + html;
+    if (!plotDlg.open) plotDlg.showModal();
+    plotDlg.scrollTop = 0;
+    return plotDlg;
+  }
   function openPlot(id) {
     const p = S.plots.find(x => x.id === id); if (!p) return;
-    if (!S.noLeaflet && S.layers[id]) {
+    if (!S.noLeaflet && S.layers[id] && !phone()) {
       const h = $("#map").clientHeight;
       const pop = L.popup({ maxWidth: 300, maxHeight: Math.max(220, h - 120), autoPanPaddingTopLeft: [16, 70], autoPanPaddingBottomRight: [16, 16] })
         .setLatLng(S.layers[id].getBounds().getCenter()).setContent(plotHtml(p)).openOn(S.map);
       bindPlotHtml(pop.getElement());
       return;
     }
-    plotDlg = plotDlg || Object.assign(document.createElement("dialog"), { className: "modal" });
-    if (!plotDlg.isConnected) document.body.appendChild(plotDlg);
-    plotDlg.innerHTML = `<form method="dialog" class="modal-x"><button aria-label="${t("common.close")}">${ic("x")}</button></form>` + plotHtml(p);
-    bindPlotHtml(plotDlg);
-    plotDlg.showModal();
+    bindPlotHtml(cardDialog(plotHtml(p)));
   }
   function focusPlot(id) {
     if (!S.plots.some(p => p.id === id)) return;
@@ -695,6 +719,21 @@
     $$(".pane").forEach(p => { p.hidden = p.dataset.pane !== tab; });
     const el = $(`.pane[data-pane="${tab}"]`);
     ({ brief: paneBrief, overview: paneBrief, herds: paneHerds, routes: paneRoutes, water: paneWater, plots: panePlots, data: paneData, whatif: paneWhatIf })[tab](el);
+    tabsEdge(true);
+  }
+  /** Полоса вкладок на телефоне шире экрана: выбранная вкладка прокручивается в видимую часть, края с затуханием показывают, что есть ещё. */
+  function tabsEdge(reveal) {
+    const bar = $(".tabs");
+    if (!bar) return;
+    if (!bar.dataset.edge) { bar.dataset.edge = "1"; bar.addEventListener("scroll", () => tabsEdge(false), { passive: true }); addEventListener("resize", () => tabsEdge(false)); }
+    const sel = bar.querySelector('[aria-selected="true"]');
+    if (reveal && sel && bar.scrollWidth > bar.clientWidth) {
+      const b = bar.getBoundingClientRect(), s = sel.getBoundingClientRect();
+      if (s.left < b.left + 24 || s.right > b.right - 24)
+        bar.scrollLeft += (s.left - b.left) - (b.width - s.width) / 2;
+    }
+    bar.classList.toggle("more-left", bar.scrollLeft > 4);
+    bar.classList.toggle("more-right", bar.scrollLeft + bar.clientWidth < bar.scrollWidth - 4);
   }
 
   function kpi(label, a, b, srcs, fmtFn = fmt, lowerIsBetter = true) {
@@ -880,11 +919,11 @@
     el.innerHTML = `<div class="tablewrap"><table class="plots-t"><thead><tr><th>${t("plots.id")}</th><th class="num">${t("plots.ha")}</th>${hasComp ? `<th class="num">${t("plots.comp")}</th>` : ""}<th class="num">${t("plots.ndvi")}</th>
       <th class="num">${t("plots.cap")}</th><th class="num">${t("plots.load")}</th><th>${t("plots.quality")}</th><th>${t("plots.forage")}</th><th>${t("plots.water")}</th></tr></thead><tbody>
       ${S.plots.map(p => { const ld = S.pl.load[p.id], c = capOf(p);
-        return `<tr data-plot="${p.id}" tabindex="0" style="cursor:pointer"><td><b>${esc(p.id)}</b> ${p.water ? ic("drop") : ""}${p.forbidden ? ` <span class="tag tag-closed">${t("pop.closedTag")}</span>` : ""}</td><td class="num">${fmt(p.pasture_ha)}</td>
-        ${hasComp ? `<td class="num">${fmt(p.excluded_ha || 0)} / ${fmt(p.uncertain_ha || 0)}</td>` : ""}
-        <td class="num">${p.ndvi ?? "—"}</td><td class="num">${sheepCap(c)}</td>
-        <td class="num"><span class="loadpill" style="background:${ld.known ? loadColor(ld.load) : loadColor(null)}">${!ld.known ? "?" : ld.used ? pct(ld.load) : "—"}</span></td><td>${confTag(p)}</td><td>${fcTag(p)}</td>
-        <td style="white-space:normal;min-width:110px"><small>${esc(wsLabel(p))}</small></td></tr>`; }).join("")}
+        return `<tr data-plot="${p.id}" tabindex="0" style="cursor:pointer"><td class="pt-id"><b>${esc(p.id)}</b> ${p.water ? ic("drop") : ""}${p.forbidden ? ` <span class="tag tag-closed">${t("pop.closedTag")}</span>` : ""}</td><td class="num" data-l="${esc(t("plots.ha"))}">${fmt(p.pasture_ha)}</td>
+        ${hasComp ? `<td class="num" data-l="${esc(t("plots.comp"))}">${fmt(p.excluded_ha || 0)} / ${fmt(p.uncertain_ha || 0)}</td>` : ""}
+        <td class="num" data-l="${esc(t("plots.ndvi"))}">${p.ndvi ?? "—"}</td><td class="num" data-l="${esc(t("plots.cap"))}">${sheepCap(c)}</td>
+        <td class="num pt-load" data-l="${esc(t("plots.load"))}"><span class="loadpill" style="background:${ld.known ? loadColor(ld.load) : loadColor(null)}">${!ld.known ? "?" : ld.used ? pct(ld.load) : "—"}</span></td><td data-l="${esc(t("plots.quality"))}">${confTag(p)}</td><td data-l="${esc(t("plots.forage"))}">${fcTag(p)}</td>
+        <td class="pt-water" data-l="${esc(t("plots.water"))}" style="white-space:normal;min-width:110px"><small>${esc(wsLabel(p))}</small></td></tr>`; }).join("")}
       </tbody></table></div><p class="srcrow" style="margin-top:10px">${t("plots.ha")}, NDVI: ${src("sat")} &nbsp; ${t("plots.cap")}, ${t("plots.load")}: ${src("model")} &nbsp; ${t("plots.water")}: ${src("sat")} ${src("input")} ${src("model")}</p>
       <p class="fine">${t("plots.qualityNote")}</p>${hasComp ? `<p class="fine">${t("plots.compNote")}</p>` : ""}`;
     el.querySelectorAll("tr[data-plot]").forEach(r => {
