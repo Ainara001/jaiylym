@@ -23,7 +23,7 @@ async function wake() {
 /** Данные Кегена в том же виде, в каком их передаёт сайт (сокращённо). */
 function context() {
   const D = loadPlots(), H = loadHerds().map(h => Object.assign({ demo: true }, h)), P = J.params();
-  const pl = J.plan(D.plots, H, P), cur = J.current(D.plots, H, P);
+  const pl = J.solve(D.plots, H, P), cur = J.current(D.plots, H, P);
   return {
     село: D.village.name, лето_снимков: D.source.year, статус_плана: pl.status, версия_модели: M.MODEL_VERSION, демо_стада: true,
     модель_проверена_в_поле: false,
