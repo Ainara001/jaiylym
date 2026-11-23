@@ -15,7 +15,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="css/app.css?v=13">
+<link rel="stylesheet" href="css/app.css?v=14">
 </head>
 <body>
 <a class="skip" href="#main" data-i18n="nav.map">Карта</a>
@@ -115,6 +115,16 @@
       </div>
     </div>
 
+    <div class="band band-need">
+      <h2 data-i18n="home.need.t">Что нужно и что вы получите</h2>
+      <ol class="need">
+        <li><b data-i18n="home.need.1t">Выбрать село</b><span data-i18n="home.need.1"></span></li>
+        <li><b data-i18n="home.need.2t">Указать стада</b><span data-i18n="home.need.2"></span></li>
+        <li><b data-i18n="home.need.3t">Получить план</b><span data-i18n="home.need.3"></span></li>
+        <li class="approx"><b data-i18n="home.need.4t">Что приблизительно</b><span data-i18n="home.need.4"></span></li>
+      </ol>
+    </div>
+
     <div class="band">
       <h2 data-i18n="home.how">Как это работает</h2>
       <div class="steps">
@@ -181,6 +191,7 @@
           <button role="tab" data-tab="herds" aria-selected="false"><svg class="ic"><use href="#i-users"/></svg><span data-i18n="tab.herds"></span></button>
           <button role="tab" data-tab="routes" aria-selected="false"><svg class="ic"><use href="#i-route"/></svg><span data-i18n="tab.routes"></span></button>
           <button role="tab" data-tab="water" aria-selected="false"><svg class="ic"><use href="#i-drop"/></svg><span data-i18n="tab.water"></span></button>
+          <button role="tab" data-tab="whatif" aria-selected="false"><svg class="ic"><use href="#i-layers"/></svg><span data-i18n="tab.whatif"></span></button>
           <button role="tab" data-tab="plots" aria-selected="false"><svg class="ic"><use href="#i-grid"/></svg><span data-i18n="tab.plots"></span></button>
           <button role="tab" data-tab="data" aria-selected="false"><svg class="ic"><use href="#i-info"/></svg><span data-i18n="tab.data"></span></button>
         </div>
@@ -189,6 +200,7 @@
           <div class="pane" data-pane="herds" role="tabpanel" hidden></div>
           <div class="pane" data-pane="routes" role="tabpanel" hidden></div>
           <div class="pane" data-pane="water" role="tabpanel" hidden></div>
+          <div class="pane" data-pane="whatif" role="tabpanel" hidden></div>
           <div class="pane" data-pane="plots" role="tabpanel" hidden></div>
           <div class="pane" data-pane="data" role="tabpanel" hidden></div>
         </div>
@@ -224,6 +236,11 @@
     <div class="page"><div id="aboutPage"></div><div id="dataPage"></div></div>
   </section>
 
+  <!-- ИССЛЕДОВАНИЕ: интервью и пилотные показатели -->
+  <section class="view view-page" data-view="research" hidden>
+    <div class="page"><h1 data-i18n="rs.title">Интервью и пилотные показатели</h1><div id="rsPage"></div></div>
+  </section>
+
   <!-- НАСТРОЙКИ -->
   <section class="view view-page" data-view="settings" hidden>
     <div class="page"><h1 data-i18n="set.title">Настройки</h1><div id="setPage"></div></div>
@@ -245,6 +262,7 @@
   <a href="#/coord" class="coord-only" hidden><svg class="ic"><use href="#i-users"/></svg><span data-i18n="nav.coord">Координатор</span></a>
   <a href="#/about"><svg class="ic"><use href="#i-info"/></svg><span data-i18n="nav.about">Что это</span></a>
   <a href="#/settings"><svg class="ic"><use href="#i-gear"/></svg><span data-i18n="nav.settings">Настройки</span></a>
+  <a href="#/research"><svg class="ic"><use href="#i-file"/></svg><span data-i18n="nav.research">Исследование</span></a>
   <a href="https://t.me/JAIYLYM_bot" target="_blank" rel="noopener"><svg class="ic"><use href="#i-send"/></svg><span data-i18n="tg.open">Telegram-бот</span></a>
 </dialog>
 
@@ -259,13 +277,14 @@
 <div id="report" class="report" aria-hidden="true"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="engine.js?v=13"></script>
-<script src="pipeline.js?v=13"></script>
-<script src="data/plots.js?v=13"></script>
-<script src="data/herds.js?v=13"></script>
-<script src="js/i18n.js?v=13"></script>
-<script src="js/client.js?v=13"></script>
-<script src="js/report.js?v=13"></script>
-<script src="js/app.js?v=13"></script>
+<script src="model.js?v=14"></script>
+<script src="engine.js?v=14"></script>
+<script src="pipeline.js?v=14"></script>
+<script src="data/plots.js?v=14"></script>
+<script src="data/herds.js?v=14"></script>
+<script src="js/i18n.js?v=14"></script>
+<script src="js/client.js?v=14"></script>
+<script src="js/report.js?v=14"></script>
+<script src="js/app.js?v=14"></script>
 </body>
 </html>
