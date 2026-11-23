@@ -6,7 +6,11 @@
 npm test            # модульные и интеграционные тесты без сети (Node 22)
 npm run test:e2e    # путь пользователя в Chromium (Playwright), ПК и телефон; внешние запросы подменены
 npm run test:net    # живые запросы к Planetary Computer — нужен интернет
+npm run live-check  # проверка работающей системы (сайт, Render, ИИ с настоящим ключом, бот)
 ```
+
+В GitHub Actions (`.github/workflows/tests.yml`) на каждом pull request запускаются `npm test`, e2e в Chromium **и WebKit**
+(движок Safari на iPhone) со скачиванием настоящего PDF, и `test:net` с реальными снимками.
 
 | Набор | Что проверяет | Результат в этой работе |
 |---|---|---|
@@ -18,7 +22,8 @@ npm run test:net    # живые запросы к Planetary Computer — нуж
 | `tests/gemini.test.js` | без ключа, переход на другую модель, тайм-аут, пустой ответ, ключ не в сайте | пройдено (сеть подменена) |
 | `tests/bot.test.js` | тревога по двум снимкам, демо помечены, статус плана, неизвестная команда | пройдено |
 | `tests/ui.test.js` | полнота словарей ru/kk, тексты для всех кодов, совпадение правила достоверности в README и коде, без смайликов | пройдено |
-| `tests/e2e/site.e2e.js` | 10 шагов пути пользователя на ПК и iPhone 13 | пройдено |
+| `tests/cron.test.js` | доступ к /cron: токен GitHub OIDC принимается, подделка, чужой репозиторий, другой workflow, ветка, аудитория, просрочка — отклоняются; запасной CRON_SECRET | пройдено |
+| `tests/e2e/site.e2e.js` | 10 шагов пути пользователя на ПК и iPhone 13, включая скачивание PDF (файл `jaiylym-kegen-ГГГГ-ММ-ДД.pdf`, начинается с `%PDF-`) | пройдено в Chromium; WebKit — в GitHub Actions |
 | `tests/net/pipeline.net.js` | реальные снимки | **не запускался** — сеть закрыта |
 
 Не проверено: сайт на GitHub Pages, Telegram, сервер на Render, реальные модели Gemini, генерация PDF библиотекой html2pdf
