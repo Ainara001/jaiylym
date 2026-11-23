@@ -310,7 +310,10 @@
     } else parts = segs.map(s => ({ plot: s.plot, days: s.days, window: w(s) }));
     let free = [[0, season]];
     const pieces = [], unplaced = {};
-    for (const part of parts) {
+    // сначала куски с самыми узкими окнами (иначе участок без ограничений займёт их дни), затем остальные по порядку
+    const wlen = part => part.window[1] - part.window[0] + 1;
+    const order = parts.map((part, k) => ({ part, k })).sort((x, y) => (wlen(x.part) < season || wlen(y.part) < season ? wlen(x.part) - wlen(y.part) : 0) || x.k - y.k).map(x => x.part);
+    for (const part of order) {
       let rest = part.days;
       const a = part.window[0] - 1, b = part.window[1];
       const next = [];
@@ -465,6 +468,295 @@
     return { method: "max-flow (Dinic), без календарных правил", demand_au_days: demand, max_allocated_au_days: flow, min_deficit_au_days: Math.max(0, demand - flow) };
   }
 
+  // ======================================================================================
+  // Оптимизатор распределения (fair-optimal-v1)
+  // Задача: стада h с потребностью d_h (усл. гол.·сут), участки p с ёмкостью C_p (× max_load),
+  // допустимые пары (h, p) — те же ограничения, что у жадного плана; на паре не больше au_h × длина окна.
+  // Шаг 1. Справедливость: лексикографический max-min по доле обеспеченности s_h = x_h / d_h
+  //        (прогрессивное заполнение: всем поднимаем долю одновременно, пока кто-то не упрётся в ограничение;
+  //        упёршиеся фиксируем, остальным поднимаем дальше). Множество достижимых x — полиматроид, поэтому
+  //        такое распределение одновременно максимизирует общий объём корма (= точной границе max-flow).
+  // Шаг 2. При тех же x_h — минимум перегона: поток минимальной стоимости, стоимость пары = км от домашнего
+  //        участка (+ штраф NEAR_PENALTY км, если не дойное стадо занимает ближний участок — их берегут).
+  //        Решение вершинное: положительных пар не больше H + P − 1, поэтому стада не дробятся по многим участкам.
+  // Шаг 3. Календарь — та же раскладка schedule(); что не встало в окна — возвращается в дефицит.
+  // Оптимальность доказуема для шагов 1–2 (задача без правила «2 недели» и календаря); календарь проверяется инвариантами.
+  // ======================================================================================
+  const NEAR_PENALTY = 10;         // км: «цена» занять ближний участок не дойным стадом (ближние — дойным и на отдых)
+  const MIN_STAY = 14;             // сут: короче — перегон не оправдан (то же правило, что у жадного плана)
+
+  /** Граф для потоков: Dinic (максимальный поток) и SSP с Беллманом–Фордом (поток мин. стоимости). */
+  function Graph(n) {
+    const g = Array.from({ length: n }, () => []);
+    return {
+      g,
+      add(u, v, c, w = 0) { const a = { v, c, w, r: g[v].length, c0: c }, b = { v: u, c: 0, w: -w, r: g[u].length, c0: 0 }; g[u].push(a); g[v].push(b); return a; },
+      maxflow(S, T) {
+        let flow = 0;
+        const level = new Array(n), it = new Array(n);
+        const bfs = () => { level.fill(-1); level[S] = 0; const q = [S]; for (let i = 0; i < q.length; i++) { const u = q[i]; for (const e of g[u]) if (e.c > 1e-9 && level[e.v] < 0) { level[e.v] = level[u] + 1; q.push(e.v); } } return level[T] >= 0; };
+        const dfs = (u, f) => { if (u === T) return f; for (; it[u] < g[u].length; it[u]++) { const e = g[u][it[u]]; if (e.c > 1e-9 && level[e.v] === level[u] + 1) { const d = dfs(e.v, Math.min(f, e.c)); if (d > 1e-9) { e.c -= d; g[e.v][e.r].c += d; return d; } } } return 0; };
+        while (bfs()) { it.fill(0); let f; while ((f = dfs(S, Infinity)) > 1e-9) flow += f; }
+        return flow;
+      },
+      reachable(S) { const seen = new Array(n).fill(false); seen[S] = true; const q = [S]; for (let i = 0; i < q.length; i++) for (const e of g[q[i]]) if (e.c > 1e-7 && !seen[e.v]) { seen[e.v] = true; q.push(e.v); } return seen; },
+      mincost(S, T, need) {
+        let flow = 0, cost = 0;
+        while (flow < need - 1e-6) {
+          const dist = new Array(n).fill(Infinity), pv = new Array(n), pe = new Array(n), inq = new Array(n).fill(false);
+          dist[S] = 0; const q = [S]; inq[S] = true;
+          while (q.length) { const u = q.shift(); inq[u] = false; g[u].forEach((e, i) => { if (e.c > 1e-9 && dist[u] + e.w < dist[e.v] - 1e-12) { dist[e.v] = dist[u] + e.w; pv[e.v] = u; pe[e.v] = i; if (!inq[e.v]) { inq[e.v] = true; q.push(e.v); } } }); }
+          if (dist[T] === Infinity) break;
+          let f = need - flow;
+          for (let v = T; v !== S; v = pv[v]) f = Math.min(f, g[pv[v]][pe[v]].c);
+          for (let v = T; v !== S; v = pv[v]) { const e = g[pv[v]][pe[v]]; e.c -= f; g[v][e.r].c += f; }
+          flow += f; cost += f * dist[T];
+        }
+        return { flow, cost };
+      },
+    };
+  }
+
+  /** Модель задачи потока: стада, участки, допустимые пары. */
+  function flowModel(plots, herds, p, opts) {
+    const prep = prepare(plots, p, opts);
+    const byId = Object.fromEntries(prep.map(q => [q.id, q]));
+    const H = herds.map(h => ({ h, au: herdAU(h, p) })).filter(x => x.au > 0).map(x => Object.assign(x, { d: x.au * p.season_days }));
+    const pairs = [];
+    H.forEach((x, i) => {
+      const home = (byId[x.h.home] || prep[0] || { pl: { dir: "С", dist_km: 0 } }).pl;
+      prep.forEach((q, j) => {
+        if (q.cap <= 0 || herdReasons(x.h, q).length) return;
+        const km = dist(home, q.pl) + (!x.h.daily_return && q.ring === "near" ? NEAR_PENALTY : 0);
+        pairs.push({ i, j, cap: x.au * (q.win[1] - q.win[0] + 1), km, realKm: dist(home, q.pl) });
+      });
+    });
+    return { prep, byId, H, pairs };
+  }
+  /** Сколько корма можно дать стадам при заданных верхних пределах lim_i (максимальный поток). */
+  function feasibleFlow(m, lim) {
+    const nH = m.H.length, nP = m.prep.length, S = nH + nP, T = S + 1, G = Graph(T + 1);
+    lim.forEach((c, i) => { if (c > 0) G.add(S, i, c); });
+    for (const e of m.pairs) G.add(e.i, nH + e.j, e.cap);
+    m.prep.forEach((q, j) => { if (q.cap > 0) G.add(nH + j, T, q.cap); });
+    return { flow: G.maxflow(S, T), G, S, T };
+  }
+
+  /** Шаг 1: доли обеспеченности s_i (лексикографический max-min, прогрессивное заполнение). */
+  function fairShares(m) {
+    const n = m.H.length, s = new Array(n).fill(0), frozen = new Array(n).fill(false);
+    const lim = t => m.H.map((x, i) => (frozen[i] ? s[i] : t) * x.d);
+    const ok = t => { const L = lim(t), need = L.reduce((a, b) => a + b, 0); return feasibleFlow(m, L).flow >= need - 1e-9 * (1 + need); };
+    let base = 0;
+    for (let round = 0; round < n && frozen.some(f => !f); round++) {
+      let lo = base, hi = 1;
+      if (ok(1)) lo = 1;
+      else for (let k = 0; k < 50 && hi - lo > 1e-9; k++) { const mid = (lo + hi) / 2; if (ok(mid)) lo = mid; else hi = mid; }
+      for (let i = 0; i < n; i++) if (!frozen[i]) s[i] = lo;
+      if (lo >= 1 - 1e-9) { for (let i = 0; i < n; i++) frozen[i] = true; break; }
+      // фиксируем тех, кому уже нельзя добавить ни капли при остальных на текущем уровне
+      // сравниваем прирост потока, а не «сошлось ли до копейки»: так погрешность поиска не замораживает всех сразу
+      const eps = Math.max(1e-4, (1 - lo) * 1e-2);
+      const base0 = feasibleFlow(m, m.H.map((x, k) => s[k] * x.d)).flow;
+      for (let i = 0; i < n; i++) {
+        if (frozen[i]) continue;
+        const L = m.H.map((x, k) => s[k] * x.d); L[i] = Math.min(1, s[i] + eps) * m.H[i].d;
+        const gain = feasibleFlow(m, L).flow - base0, want = L[i] - s[i] * m.H[i].d;
+        if (gain < 0.5 * want) frozen[i] = true;
+      }
+      if (!frozen.some(f => !f)) break;
+      base = lo;
+    }
+    return s;
+  }
+
+  /** Шаг 2: распределение с минимальным перегоном при заданных объёмах x_i = s_i d_i. */
+  function minDistanceAlloc(m, amounts) {
+    const nH = m.H.length, nP = m.prep.length, S = nH + nP, T = S + 1, G = Graph(T + 1);
+    amounts.forEach((a, i) => { if (a > 0) G.add(S, i, a); });
+    const edges = m.pairs.map(e => ({ e, edge: G.add(e.i, nH + e.j, e.cap, e.km) }));
+    m.prep.forEach((q, j) => { if (q.cap > 0) G.add(nH + j, T, q.cap); });
+    const need = amounts.reduce((a, b) => a + b, 0);
+    const r = G.mincost(S, T, need);
+    const alloc = m.H.map(() => ({}));
+    for (const { e, edge } of edges) { const x = edge.c0 - edge.c; if (x > 1e-6) alloc[e.i][m.prep[e.j].id] = (alloc[e.i][m.prep[e.j].id] || 0) + x; }
+    return { alloc, flow: r.flow };
+  }
+
+  /**
+   * Шаг 2б. Склейка: мелкие куски стада (меньше MIN_STAY суток или лишний третий участок) переносятся
+   * на другие участки этого же стада со свободной ёмкостью. Объём каждого стада и общий объём не меняются,
+   * значит справедливость и оптимальность шага 1 сохраняются; меняется только число перегонов.
+   */
+  function consolidate(m, alloc) {
+    const used = {};
+    alloc.forEach(a => { for (const [id, x] of Object.entries(a)) used[id] = (used[id] || 0) + x; });
+    const capOf = Object.fromEntries(m.prep.map(q => [q.id, q.cap]));
+    const pairCap = {};
+    for (const e of m.pairs) pairCap[e.i + "|" + m.prep[e.j].id] = e.cap;
+    for (let pass = 0; pass < 3; pass++) {
+      let changed = false;
+      m.H.forEach((x, i) => {
+        const a = alloc[i];
+        const pieces = Object.entries(a).filter(([, v]) => v > 1e-6).sort((p1, p2) => p1[1] - p2[1]);
+        if (pieces.length < 2) return;
+        const [pid, amt] = pieces[0];
+        if (amt / x.au >= MIN_STAY && pieces.length <= 2) return;
+        // куда переносить: другие участки этого стада, затем любые разрешённые (ближе к дому — раньше)
+        const targets = pieces.slice(1).map(([id]) => id)
+          .concat(m.pairs.filter(e => e.i === i && !(m.prep[e.j].id in a)).sort((e1, e2) => e1.km - e2.km).map(e => m.prep[e.j].id));
+        const room = id => { const r = Math.min((capOf[id] || 0) - (used[id] || 0), (pairCap[i + "|" + id] || 0) - (a[id] || 0)); return Number.isFinite(r) ? r : 0; };
+        const total = targets.slice(0, 3).reduce((t, id) => t + Math.max(0, room(id)), 0);
+        if (total < amt - 1e-6) return;
+        let rest = amt;
+        for (const id of targets.slice(0, 3)) {
+          const r = Math.max(0, room(id)), take = Math.min(r, rest);
+          if (take <= 1e-9) continue;
+          a[id] = (a[id] || 0) + take; used[id] = (used[id] || 0) + take; rest -= take;
+          if (rest <= 1e-9) break;
+        }
+        delete a[pid]; used[pid] -= amt; changed = true;
+      });
+      if (!changed) break;
+    }
+    return alloc;
+  }
+
+  /**
+   * Сертификат «узкого места» (минимальный разрез при полной потребности): группа стад, которой
+   * доступны только определённые участки, и почему корма им не хватает. Это доказательство, а не догадка:
+   * дефицит группы = потребность − ёмкость доступных ей участков − лимиты окон к остальным.
+   */
+  function bottlenecks(plots, herds, p, opts) {
+    p = params(p);
+    const m = flowModel(plots, herds, p, opts);
+    const nH = m.H.length;
+    const { flow, G, S } = feasibleFlow(m, m.H.map(x => x.d));
+    const demand = m.H.reduce((a, x) => a + x.d, 0);
+    if (demand - flow <= EPS) return { feasible: true, deficit_au_days: 0, groups: [] };
+    const seen = G.reachable(S);
+    const herdsIn = m.H.map((x, i) => i).filter(i => seen[i]);
+    const plotsIn = m.prep.map((q, j) => j).filter(j => seen[nH + j]);
+    const capIn = plotsIn.reduce((a, j) => a + m.prep[j].cap, 0);
+    const windowOut = m.pairs.filter(e => seen[e.i] && !seen[nH + e.j]).reduce((a, e) => a + e.cap, 0);
+    const need = herdsIn.reduce((a, i) => a + m.H[i].d, 0);
+    const excluded = {};
+    for (const i of herdsIn) for (const q of m.prep) if (!plotsIn.includes(m.prep.indexOf(q))) for (const r of herdReasons(m.H[i].h, q)) (excluded[r] = excluded[r] || new Set()).add(q.id);
+    return {
+      feasible: false, deficit_au_days: demand - flow,
+      groups: [{ herds: herdsIn.map(i => m.H[i].h.id), plots: plotsIn.map(j => m.prep[j].id),
+        demand_au_days: need, capacity_au_days: capIn, window_limited_au_days: windowOut,
+        shortfall_au_days: need - capIn - windowOut,
+        excluded: Object.fromEntries(Object.entries(excluded).map(([r, set]) => [r, [...set]])) }],
+    };
+  }
+
+  /** Метрики справедливости и практичности плана (для сравнения алгоритмов). */
+  function planMetrics(res, plots, herds, p) {
+    p = params(p);
+    const byId = Object.fromEntries(plots.map(x => [x.id, x]));
+    const H = herds.filter(h => herdAU(h, p) > 0);
+    const cov = H.map(h => 1 - (res.unmet[h.id] || 0) / (herdAU(h, p) * p.season_days));
+    const sum = cov.reduce((a, b) => a + b, 0), sq = cov.reduce((a, b) => a + b * b, 0);
+    let km = 0, moves = 0, stays = 0, shortStays = 0;
+    for (const h of H) {
+      const au = herdAU(h, p), home = byId[h.home] || plots[0];
+      const segs = (res.herdPlans[h.id] || []).filter(s => s.plot);
+      moves += Math.max(0, segs.length - 1); stays += segs.length;
+      shortStays += segs.filter(s => s.to - s.from + 1 < 14).length;
+      for (const z of Object.values(res.load)) { const hh = z.herds.find(y => y.herd === h.id); if (hh) {} }
+      for (const [pid, l] of Object.entries(res.load)) { const hh = l.herds.find(y => y.herd === h.id); if (hh) km += (hh.au_days / au) * 0 + au * dist(home, byId[pid]); }
+    }
+    return {
+      deficit_au_days: Object.values(res.unmet).reduce((a, b) => a + b, 0),
+      min_coverage: cov.length ? Math.min(...cov) : 1, mean_coverage: cov.length ? sum / cov.length : 1,
+      jain: cov.length && sq > 0 ? (sum * sum) / (cov.length * sq) : 1,
+      herds_short: H.filter(h => res.unmet[h.id]).length,
+      // хозяйства без корма, хотя хоть один допустимый участок у них есть (у кого нет ни одного — ноль неизбежен)
+      starved: H.filter(h => (res.diagnostics[h.id] && (res.diagnostics[h.id].candidates || []).length) && (res.unmet[h.id] || 0) >= herdAU(h, p) * p.season_days * 0.99).length,
+      min_coverage_reachable: (() => { const xs = H.filter(h => res.diagnostics[h.id] && (res.diagnostics[h.id].candidates || []).length).map(h => 1 - (res.unmet[h.id] || 0) / (herdAU(h, p) * p.season_days)); return xs.length ? Math.min(...xs) : 1; })(),
+      max_short_days: H.length ? Math.max(...H.map(h => (res.unmet[h.id] || 0) / herdAU(h, p))) : 0,
+      head_km: km, moves, stays, short_stays: shortStays,
+      violations: (res.violations || []).length,
+    };
+  }
+
+  /**
+   * Оптимизированный план: справедливое распределение + минимум перегона + календарь.
+   * Возвращает ту же структуру, что plan(), плюс shares (доли обеспеченности) и bottleneck.
+   */
+  function optimize(plots, herds, p, opts) {
+    p = params(p);
+    opts = opts || {};
+    const ids = new Set();
+    for (const h of herds) { if (ids.has(h.id)) throw Object.assign(new Error("стадо повторяется: " + h.id), { code: 400 }); ids.add(h.id); }
+    const m = flowModel(plots, herds, p, opts);
+    // Шаги 1–2б, затем проверка календаря. Если часть объёма не встала в сезонные окна (стаду некуда
+    // поставить дни на нескольких закрытых в одно время участках), предел пары уменьшается до реально
+    // поставленного и задача решается заново — освободившийся корм достаётся другим стадам. До 4 раз.
+    let shares, alloc, repairs = 0;
+    for (let iter = 0; iter < 5; iter++) {
+      shares = fairShares(m);
+      alloc = minDistanceAlloc(m, m.H.map((x, i) => shares[i] * x.d)).alloc;
+      if (!opts.no_consolidate) consolidate(m, alloc);
+      let conflict = false;
+      m.H.forEach((x, i) => {
+        const segs = Object.entries(alloc[i]).map(([id, v]) => ({ plot: id, ring: m.byId[id].ring, days: v / x.au, au_days: v, window: m.byId[id].win }));
+        for (const u of schedule(segs, p.season_days).unplaced) {
+          const e = m.pairs.find(z => z.i === i && m.prep[z.j].id === u.plot);
+          if (e) { e.cap = Math.max(0, alloc[i][u.plot] - u.days * x.au - 1e-6); conflict = true; }
+        }
+      });
+      if (!conflict || iter === 4) break;
+      repairs++;
+    }
+    const prep = m.prep, byId = m.byId;
+    const load = emptyLoad(prep);
+    const herdPlans = {}, unmet = {}, coverage = {}, diagnostics = {};
+    for (const h of herds) {
+      const au = herdAU(h, p);
+      const excluded = {};
+      for (const q of prep) for (const r of herdReasons(h, q)) (excluded[r] = excluded[r] || []).push(q.id);
+      if (au <= 0) { herdPlans[h.id] = []; coverage[h.id] = p.season_days; diagnostics[h.id] = { rights: rightsOf(h), excluded, candidates: [] }; continue; }
+      const i = m.H.findIndex(x => x.h === h);
+      const a = Object.assign({}, alloc[i] || {});
+      let need = au * p.season_days - Object.values(a).reduce((s2, x) => s2 + x, 0);
+      const segs = Object.entries(a).map(([id, x]) => ({ plot: id, ring: byId[id].ring, days: x / au, au_days: x, window: byId[id].win }))
+        .sort((s1, s2) => dist(byId[h.home] ? byId[h.home].pl : s1, byId[s1.plot].pl) - dist(byId[h.home] ? byId[h.home].pl : s2, byId[s2.plot].pl));
+      const sch = schedule(segs, p.season_days);
+      for (const u of sch.unplaced) { a[u.plot] -= u.days * au; need += u.days * au; }
+      for (const [id, x] of Object.entries(a)) if (x > 1e-6) { load[id].used += x; load[id].herds.push({ herd: h.id, au_days: x }); }
+      herdPlans[h.id] = sch.segments.map(s2 => (s2.plot === null && need > EPS ? Object.assign(s2, { reason: "no_feed" }) : s2));
+      const candidates = prep.filter(q => q.cap > 0 && herdReasons(h, q).length === 0).map(q => q.id);
+      diagnostics[h.id] = { rights: rightsOf(h), candidates, full: candidates.filter(id => load[id].used >= prep.find(q => q.id === id).cap - EPS), excluded,
+        calendar_conflict: sch.unplaced.length > 0, share: shares[i] };
+      if (need > EPS) { unmet[h.id] = need; diagnostics[h.id].reason = !candidates.length ? "no_allowed_plots" : sch.unplaced.length ? "calendar" : "capacity"; }
+      coverage[h.id] = Math.max(0, p.season_days - Math.max(0, need) / au);
+    }
+    const s = finishLoad(load, p);
+    const deficitAUd = Object.values(unmet).reduce((a, x) => a + x, 0);
+    const demand = herds.reduce((a, h) => a + herdAU(h, p) * p.season_days, 0);
+    const allocated = Object.values(load).reduce((a, l) => a + l.used, 0);
+    const status = demand <= EPS ? "no_demand" : deficitAUd <= EPS ? "feasible" : allocated <= EPS ? "infeasible" : "partially_feasible";
+    const res = Object.assign({ load, herdPlans, unmet, coverage, deficit_kg: deficitAUd * p.intake, deficit_au_days: deficitAUd,
+      demand_au_days: demand, allocated_au_days: allocated, status, herds_full: herds.filter(h => !unmet[h.id]).map(h => h.id),
+      herds_short: herds.filter(h => unmet[h.id]).map(h => h.id), diagnostics, algorithm: "fair-optimal-v1",
+      optimal: true, objective: ["max_min_share", "max_total", "min_km"], calendar_repairs: repairs,
+      shares: Object.fromEntries(m.H.map((x, i) => [x.h.id, shares[i]])), kind: "plan" }, s);
+    res.warnings = planWarnings(prep, res, herds);
+    res.suggestions = suggestions(plots, herds, p, opts, prep, res);
+    res.violations = checkLoad(prep, herds, load, p, { plan: res });
+    res.bound = exactBound(plots, herds, p, opts);
+    res.gap_au_days = Math.max(0, deficitAUd - res.bound.min_deficit_au_days);
+    res.bottleneck = status === "feasible" || status === "no_demand" ? null : bottlenecks(plots, herds, p, opts);
+    return res;
+  }
+
+  /** План выбранным алгоритмом: opts.algorithm = "optimized" (по умолчанию) | "greedy". */
+  function solve(plots, herds, p, opts) {
+    return opts && opts.algorithm === "greedy" ? plan(plots, herds, p, opts) : optimize(plots, herds, p, opts);
+  }
+
   /** Где новый водопой откроет больше всего корма (только участки с известной ёмкостью и без запрета). */
   function wells(plots, p, opts) {
     p = params(p);
@@ -478,9 +770,9 @@
   /** Моделирование водопоя на участке: что изменится в плане. Не рекомендация строить скважину. */
   function wellEffect(plots, herds, p, plotId, opts) {
     p = params(p);
-    const before = plan(plots, herds, p, opts);
+    const before = solve(plots, herds, p, opts);
     const withWell = plots.map(pl => (pl.id === plotId ? Object.assign({}, pl, { water: true, water_status: "modeled", water_source: "смоделированный водопой" }) : pl));
-    const after = plan(withWell, herds, p, opts);
+    const after = solve(withWell, herds, p, opts);
     const prepA = prepare(withWell, p, opts);
     const q = prepA.find(x => x.id === plotId);
     return {
@@ -494,12 +786,15 @@
   }
 
   // ---------- «Что если?»: сравнение сценариев на одном экране ----------
-  function metrics(res, herds) {
+  function metrics(res, herds, p) {
+    const H = herds.filter(h => herdAU(h, p) > 0);
+    const share = h => 1 - ((res.unmet && res.unmet[h.id]) || 0) / (herdAU(h, p) * p.season_days);
     return {
       status: res.status || (res.overloaded ? "overloaded" : "ok"),
       deficit_kg: res.deficit_kg, overloaded: res.overloaded,
       herds_full: res.herds_full ? res.herds_full.length : herds.filter(h => !(res.violations || []).some(v => v.herd === h.id)).length,
       herds_short: res.herds_short ? res.herds_short.length : null,
+      min_share: res.kind === "plan" && H.length ? Math.min(...H.map(share)) : null,
       violations: res.violations || [], unknown_used: res.unknown_used || 0,
     };
   }
@@ -518,9 +813,9 @@
         if (v.type === "herds") hs = herds.map(h => { const x = Object.assign({}, h); for (const k of SPECIES) if (x[k]) x[k] = Math.round(x[k] * v.factor); return x; });
         if (v.type === "season") pp = M.resolve({ user: Object.assign(stripParams(p), { season_days: Math.max(1, Math.min(365, p.season_days + v.days)) }) });
         if (v.type === "params") pp = M.scenarioParams(p, v.name);
-        r = v.type === "current" ? current(ps, hs, pp, o) : plan(ps, hs, pp, o);
+        r = v.type === "current" ? current(ps, hs, pp, o) : v.type === "algorithm" ? solve(ps, hs, pp, Object.assign({}, o, { algorithm: v.name })) : solve(ps, hs, pp, o);
       } catch (e) { return { id: v.id, type: v.type, error: e.message }; }
-      return Object.assign({ id: v.id, type: v.type, plot: v.plot, factor: v.factor, days: v.days, name: v.name, note, result: r }, metrics(r, hs));
+      return Object.assign({ id: v.id, type: v.type, plot: v.plot, factor: v.factor, days: v.days, name: v.name, note, result: r }, metrics(r, hs, pp));
     });
   }
   function stripParams(p) {
@@ -533,9 +828,11 @@
   function defaultVariants(plots, herds, p, opts) {
     p = params(p);
     const v = [{ id: "current", type: "current" }, { id: "plan", type: "plan" }];
+    // второй алгоритм — для сравнения на одном экране
+    v.push({ id: (opts && opts.algorithm === "greedy") ? "optimized" : "greedy", type: "algorithm", name: (opts && opts.algorithm === "greedy") ? "optimized" : "greedy" });
     const w = wells(plots, p, opts)[0];
     if (w) v.push({ id: "well", type: "add_water", plot: w.plot });
-    const pl = plan(plots, herds, p, opts);
+    const pl = solve(plots, herds, p, opts);
     const busiest = Object.entries(pl.load).filter(([, l]) => l.used > EPS).sort((a, b) => b[1].used - a[1].used)[0];
     if (busiest) v.push({ id: "exclude", type: "exclude_plot", plot: busiest[0] });
     v.push({ id: "forage", type: "forage", factor: 0.8 }, { id: "herds", type: "herds", factor: 1.2 },
@@ -552,7 +849,7 @@
       let pp;
       try { pp = M.resolve({ user }); } catch (e) { return { value: val, error: e.message }; }
       const cap = totalCapacity(plots, pp, opts);
-      const r = herds.length ? plan(plots, herds, pp, opts) : null;
+      const r = herds.length ? solve(plots, herds, pp, opts) : null;
       return { value: val, capacity_au_season: cap.au_season, capacity_sheep: cap.au_season / pp.au.sheep, deficit_kg: r ? r.deficit_kg : 0, status: r ? r.status : "no_demand" };
     });
   }
@@ -579,6 +876,8 @@
     return Math.floor((date - start) / 86400000) + 1;
   }
 
-  return { DIRS, DEFAULTS, ALGORITHM, MODEL: M, params, herdAU, plotCapacity, explainCapacity, current, plan, schedule, exactBound, wells, wellEffect,
+  const _internal = { flowModel, feasibleFlow, fairShares, minDistanceAlloc, consolidate };
+  return { DIRS, DEFAULTS, ALGORITHM, MODEL: M, NEAR_PENALTY, MIN_STAY, _internal, params, herdAU, plotCapacity, explainCapacity, current, plan, optimize, solve, bottlenecks, planMetrics,
+    schedule, exactBound, wells, wellEffect,
     compareScenarios, defaultVariants, sensitivity, totalCapacity, hayTonnes, plotOnDay, seasonDay, dist };
 });

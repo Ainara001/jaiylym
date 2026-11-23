@@ -65,7 +65,11 @@ async function journey(page, label) {
   st = await S();
   assert.equal(st.status, "partially_feasible", "огромное стадо — честный частичный результат");
   await page.evaluate(() => window.JaiylymApp.renderPane("brief"));
-  assert.match(await page.textContent(".result"), /полностью распределить стада не удалось/);
+  const res = await page.textContent(".result");
+  assert.match(res, /полностью распределить стада не удалось/);
+  assert.match(res, /Узкое место \(доказательство\)/, "показано доказательство узкого места");
+  assert.match(res, /Справедливая оптимизация/);
+  assert.equal(await page.evaluate(() => window.JaiylymApp.S.pl.algorithm), "fair-optimal-v1");
   // «Как рассчитано?»
   await page.click('.result [data-how]');
   const how = await page.textContent("dialog[open]");
@@ -81,7 +85,7 @@ async function journey(page, label) {
   // 7. сравнить сценарии
   await page.evaluate(() => window.JaiylymApp.renderPane("whatif"));
   const wi = await page.textContent('.pane[data-pane="whatif"]');
-  for (const re of [/Как сейчас/, /Предлагаемый план/, /водопой на/, /Скота на 20 % больше/, /не оптимизатор/, /Точн|точная граница/i]) assert.match(wi, re);
+  for (const re of [/Как сейчас/, /Предлагаемый план/, /Быстрый алгоритм/, /Худшее хозяйство/, /водопой на/, /Скота на 20 % больше/, /доказуемыми/, /Точн|точная граница/i]) assert.match(wi, re);
   // неверный параметр не принимается
   await page.evaluate(() => window.JaiylymApp.renderPane("brief"));
   await page.evaluate(() => document.querySelectorAll('.pane[data-pane="brief"] details').forEach(d => { d.open = true; }));

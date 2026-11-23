@@ -29,7 +29,7 @@ test("все ключи, которые использует интерфейс,
   }
   for (const m of read("web/index.html").matchAll(/data-i18n(?:-ph|-label)?="([a-zA-Z0-9._]+)"/g)) used.add(m[1]);
   // ключи, собираемые из переменной: t("conf." + c) — их полноту проверяет следующий тест
-  const dynamic = /^(conf|role|herds|src|hist|ab|map\.mode|fc|how\.step|how\.f|unit|meta|rsn|set\.origin|veg|vt|why|wi\.a|wi\.st|wi\.v|wr|ws|sg|rs)\.$/;
+  const dynamic = /^(conf|role|herds|src|hist|ab|map\.mode|fc|how\.step|how\.f|unit|meta|rsn|set\.origin|veg|vt|why|wi\.a|wi\.st|wi\.v|wi\.v\.algo|algo|wr|ws|sg|rs)\.$/;
   const missing = [...used].filter(k => !ru.includes(k) && !dynamic.test(k) && !/^ab\.(f|g\.)$/.test(k));
   assert.deepEqual(missing, []);
 });
@@ -51,6 +51,7 @@ test("для всех кодов движка и модели есть текс�
     ...["feasible", "partially_feasible", "infeasible", "no_demand"].map(x => "wi.st." + x),
     ...["current", "plan", "forage", "herds", "season", "cautious", "optimistic"].map(x => "wi.v." + x),
     ...["cautious", "base", "optimistic"].map(x => "wi.a." + x),
+    ...["optimized", "greedy"].flatMap(x => ["algo." + x, "wi.v.algo." + x]),
     ...["area", "ndvi", "biomass", "forage", "au_days", "au_season", "sheep", "herd_intake", "days"].flatMap(x => ["how.step." + x, "unit." + x]),
     "how.f.area", "how.f.ndvi",
     ...["measured", "no_data"].map(x => "meta." + x),
