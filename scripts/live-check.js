@@ -40,7 +40,7 @@ async function ask(body, label) {
   try {
     const r = await get(API + "/api/ai", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), timeout: 90000 });
     const d = await r.json().catch(() => ({}));
-    console.log(`\n--- ИИ: ${label} (HTTP ${r.status}, модель ${d.model || "—"}) ---\n${d.text || d.error}\n` + (d.issues && d.issues.length ? "проблемы данных: " + d.issues.join(" ") + "\n" : ""));
+    console.log(`\n--- ИИ: ${label} (HTTP ${r.status}, модель ${d.model || "—"}${d.reason ? ", причина " + d.reason : ""}) ---\n${d.text || d.error}\n` + (d.issues && d.issues.length ? "проблемы данных: " + d.issues.join(" ") + "\n" : ""));
     return { status: r.status, d };
   } catch (e) { console.log(`--- ИИ: ${label}: ${e.message}`); return { status: 0, d: {} }; }
 }
@@ -73,6 +73,12 @@ async function ask(body, label) {
   } catch (e) { ok(false, "/cron: " + e.message); }
 
   // 3. ИИ с настоящим ключом
+  try {
+    const st = await (await get(API + "/api/ai/status")).json();
+    console.log("\n--- состояние ИИ ---\n" + JSON.stringify(st, null, 1));
+    ok(st.key_configured === true, "ключ Gemini задан на сервере");
+    if (st.configured_available && st.configured_available.every(x => !x.available)) note("ни одна модель из GEMINI_MODELS не доступна ключу; запасные: " + (st.fallback_candidates || []).join(", "));
+  } catch (e) { note("/api/ai/status недоступен (сервер на старой версии?): " + e.message); }
   const ctx = context();
   const a1 = await ask({ mode: "chat", lang: "ru", context: ctx, messages: [{ role: "user", text: "Откуда взялось число 367 овец на участке Б-С?" }] }, "ru, откуда 367 овец");
   ok(a1.status === 200 && !!a1.d.text, "ИИ отвечает по-русски");
