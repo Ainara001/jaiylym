@@ -172,3 +172,45 @@ test("рамка ассистента общая и без списков зап
   assert.match(G.SCOPE, /одной-двумя фразами/);
   assert.match(G.SCOPE, /не новые правила/);
 });
+
+test("поиск Google: инструмент в запросе, источники с позициями, число запросов, подсказки", async () => {
+  process.env.GEMINI_API_KEY = "test-key";
+  G._state.blocked.clear(); G._state.noSearch.clear(); G._state.noThinking.clear();
+  let body = null;
+  await withFetch(async (url, opt) => {
+    body = JSON.parse(opt.body);
+    return { ok: true, status: 200, json: async () => ({ steps: [
+      { type: "google_search_call", arguments: { queries: ["цена сена Алматинская область", "сено Кеген"] } },
+      { type: "google_search_result", result: [{ search_suggestions: "<div>chips</div>" }] },
+      { type: "model_output", content: [{ type: "text", text: "Сено — 45 000 ₸/т. ", annotations: [
+        { type: "url_citation", url: "https://a.kz/x", title: "a.kz", start_index: 0, end_index: 18 },
+        { type: "url_citation", url: "javascript:alert(1)", title: "bad", start_index: 0, end_index: 5 }] },
+        { type: "text", text: "Дальше без источника." }] }] }) };
+  }, async () => {
+    const r = await G.ask({ system: "s", input: "i", search: true });
+    assert.deepEqual(body.tools, [{ type: "google_search" }]);
+    assert.equal(r.text, "Сено — 45 000 ₸/т. Дальше без источника.");
+    assert.deepEqual(r.sources, [{ url: "https://a.kz/x", title: "a.kz" }], "только http(s)");
+    assert.deepEqual(r.cited, ["Сено — 45 000 ₸/т."]);
+    assert.equal(r.searches, 2);
+    assert.equal(r.suggestions, "<div>chips</div>");
+    await G.ask({ system: "s", input: "i" });
+    assert.equal(body.tools, undefined, "без search — без инструмента");
+  });
+});
+
+test("поиск Google: модель без поддержки (400) — повтор без поиска, модель запоминается", async () => {
+  process.env.GEMINI_API_KEY = "test-key";
+  G._state.blocked.clear(); G._state.noSearch.clear(); G._state.noThinking.clear();
+  const seen = [];
+  await withFetch(async (url, opt) => {
+    const b = JSON.parse(opt.body); seen.push(!!b.tools);
+    if (b.tools) return { ok: false, status: 400, json: async () => ({ error: { code: 400, message: "google_search tool is not supported" } }) };
+    return { ok: true, status: 200, json: async () => ({ steps: [{ type: "model_output", content: [{ type: "text", text: "да" }] }] }) };
+  }, async () => {
+    assert.equal((await G.ask({ system: "s", input: "i", search: true })).text, "да");
+    await G.ask({ system: "s", input: "i", search: true });
+    assert.deepEqual(seen, [true, false, false]);
+  });
+  G._state.noSearch.clear();
+});
