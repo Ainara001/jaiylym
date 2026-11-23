@@ -454,6 +454,40 @@ async function runCron(send, now = new Date()) {
   return report;
 }
 
+/** Версия на сервере: модель и коммит сборки Render (чтобы проверить, что новая версия развернулась). */
+function buildInfo() {
+  return `Модель ${M.MODEL_VERSION}, сборка ${(process.env.RENDER_GIT_COMMIT || "local").slice(0, 7)}.`;
+}
+
+/**
+ * POST /cron — ежедневная проверка. Кто может вызвать:
+ *  1) GitHub Actions этого репозитория (workflow daily-check.yml из main) — по OIDC-токену GitHub, без общего пароля;
+ *  2) запасной способ — заголовок X-Cron-Secret, если на сервере задан CRON_SECRET.
+ * Одновременно идёт только одна проверка.
+ */
+let cronBusy = false;
+async function cronRoute(req, res, send, opts = {}) {
+  let who = null;
+  const secret = process.env.CRON_SECRET;
+  if (secret && req.headers["x-cron-secret"] && req.headers["x-cron-secret"] === secret) who = "secret";
+  const m = /^Bearer\s+(\S+)$/.exec(req.headers.authorization || "");
+  let reason = "no_credentials";
+  if (!who && m) {
+    const v = await require("./cronauth").verifyGithubOidc(m[1], opts.oidc);
+    if (v.ok) who = "github-oidc"; else reason = v.reason;
+  }
+  if (!who) { console.error("cron: отказ,", reason); res.writeHead(401, { "content-type": "text/plain; charset=utf-8" }).end("нет доступа: " + reason); return; }
+  if (cronBusy) { res.writeHead(409, { "content-type": "text/plain; charset=utf-8" }).end("проверка уже идёт"); return; }
+  cronBusy = true;
+  try {
+    const r = await runCron(send, opts.now);
+    r.auth = who;
+    console.log("cron", JSON.stringify(r));
+    res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(r));
+  } catch (e) { console.error("cron", e); res.writeHead(500).end(String(e.message)); }
+  finally { cronBusy = false; }
+}
+
 // ---------- обработка сообщений ----------
 async function handle(update, send, today = new Date()) {
   if (update.callback_query) {
@@ -754,15 +788,8 @@ function serve(token, api, onUpdate, info, send) {
       });
       return;
     }
-    if (req.method === "POST" && req.url.startsWith("/cron")) {
-      // Пароль задаётся вручную: CRON_SECRET в Render (Environment) и такой же секрет в GitHub (Settings → Secrets → Actions)
-      if (!process.env.CRON_SECRET) { res.writeHead(503).end("CRON_SECRET не задан"); return; }
-      if (req.headers["x-cron-secret"] !== process.env.CRON_SECRET) { res.writeHead(401).end(); return; }
-      runCron(send).then(r => { console.log("cron", JSON.stringify(r)); res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(r)); })
-        .catch(e => { console.error("cron", e); res.writeHead(500).end(String(e.message)); });
-      return;
-    }
-    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }).end("Jaiylym bot работает. Telegram: @" + BOT_USERNAME);
+    if (req.method === "POST" && req.url.startsWith("/cron")) { cronRoute(req, res, send); return; }
+    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }).end("Jaiylym bot работает. Telegram: @" + BOT_USERNAME + ". " + buildInfo());
   }
   const port = +process.env.PORT || 10000;
   server.listen(port, async () => {
@@ -823,4 +850,4 @@ if (require.main === module) {
   else { console.log("Нужен TELEGRAM_TOKEN в .env (или проверка: node bot.js --test)"); process.exit(1); }
 }
 
-module.exports = { handle, parseHerd, runCron, villageApi, siteApi, alertText, pastureAlert, trendWords, getState: () => state, setTest: () => { TEST = true; } };
+module.exports = { handle, parseHerd, runCron, cronRoute, buildInfo, villageApi, siteApi, alertText, pastureAlert, trendWords, getState: () => state, setTest: () => { TEST = true; } };

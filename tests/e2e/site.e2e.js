@@ -6,8 +6,10 @@ const assert = require("node:assert/strict");
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-let chromium, devices;
-try { ({ chromium, devices } = require("playwright")); } catch (_) {}
+let pw = null;
+try { pw = require("playwright"); } catch (_) {}
+// В CI: JAIYLYM_BROWSERS=chromium,webkit (WebKit — движок Safari на iPhone). Локально — Chromium.
+const BROWSERS = (process.env.JAIYLYM_BROWSERS || "chromium").split(",").map(s => s.trim()).filter(Boolean);
 
 const WEB = path.join(__dirname, "..", "..", "web");
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".json": "application/json", ".svg": "image/svg+xml" };
@@ -101,25 +103,47 @@ async function journey(page, label) {
   for (const k of ["Источники данных и даты снимков", "Хозяйства", "Формулы и коэффициенты", "Ограничения модели", "Расчётная потребность", "Результат распределения",
     "Неудовлетворённая потребность", "Сравнение сценариев", "Источники неопределённости", "Версия модели", "не подтверждает право землепользования", "тенге"]) assert.ok(rep.includes(k), k);
   assert.ok(!rep.includes("₸"), "в PDF тенге словом");
+  // настоящий PDF: кнопка → библиотека html2pdf из web/vendor (CDN в тесте закрыт) → скачанный файл
+  const [dl] = await Promise.all([page.waitForEvent("download", { timeout: 60000 }), page.click("#pdfBtn")]);
+  const file = await dl.path();
+  const buf = fs.readFileSync(file);
+  assert.equal(buf.slice(0, 5).toString(), "%PDF-", label + ": скачан PDF");
+  assert.ok(buf.length > 50000, label + ": PDF не пустой (" + buf.length + " байт)");
+  assert.match(dl.suggestedFilename(), /^jaiylym-kegen-\d{4}-\d{2}-\d{2}\.pdf$/);
   // 10. открыть данные в Telegram
   const tg = await page.getAttribute("#tgVillage", "href");
   assert.match(tg, /^https:\/\/t\.me\/JAIYLYM_bot\?start=v_43020_79220$/);
   // казахский язык и страница исследования
   await page.click('.langsw [data-lang="kk"]');
-  assert.match(await page.textContent(".tabs"), /Егер/);
+  assert.match(await page.textContent(".tabs"), /Егер былай болса/);
   await page.goto(base + "#/research");
   assert.match(await page.textContent("#rsPage"), /Жазылған сұхбаттар: 0/);
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
-  assert.equal(overflow, false, label + ": нет горизонтальной прокрутки страницы");
+  for (const route of ["research", "map?lat=43.02&lon=79.22&name=Кеген", "settings", "about", "home"]) {
+    await page.goto(base + "#/" + route);
+    await page.waitForTimeout(300);
+    const wide = await page.evaluate(() => {
+      const W = document.documentElement.clientWidth;
+      if (document.documentElement.scrollWidth <= W + 1) return null;
+      return [...document.querySelectorAll("body *")].filter(e => { const r = e.getBoundingClientRect(); return r.width && r.right > W + 1 && getComputedStyle(e).position !== "fixed"; })
+        .slice(-6).map(e => `${e.tagName.toLowerCase()}${e.id ? "#" + e.id : ""}.${String(e.className).split(" ")[0]} right=${Math.round(e.getBoundingClientRect().right)} «${(e.textContent || "").trim().slice(0, 40)}»`).join("; ") + ` (ширина ${W}, страница ${document.documentElement.scrollWidth})`;
+    });
+    assert.equal(wide, null, `${label}: #/${route} шире экрана: ${wide}`);
+  }
   assert.deepEqual(errors, [], label + ": ошибки JavaScript");
 }
 
-test("путь пользователя на компьютере", { skip: !chromium && "playwright не установлен", timeout: 120000 }, async () => {
-  const b = await chromium.launch();
-  try { await journey(await b.newPage({ viewport: { width: 1280, height: 900 } }), "ПК"); } finally { await b.close(); }
-});
-
-test("путь пользователя на телефоне", { skip: !chromium && "playwright не установлен", timeout: 120000 }, async () => {
-  const b = await chromium.launch();
-  try { const ctx = await b.newContext(devices["iPhone 13"]); await journey(await ctx.newPage(), "телефон"); } finally { await b.close(); }
-});
+for (const name of BROWSERS) {
+  const skip = !pw && "playwright не установлен";
+  test(`${name}: путь пользователя на компьютере`, { skip, timeout: 180000 }, async () => {
+    const b = await pw[name].launch();
+    try { const ctx = await b.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true }); await journey(await ctx.newPage(), name + " ПК"); }
+    finally { await b.close(); }
+  });
+  test(`${name}: путь пользователя на телефоне (iPhone 13)`, { skip, timeout: 180000 }, async () => {
+    const b = await pw[name].launch();
+    const dev = Object.assign({}, pw.devices["iPhone 13"]);
+    if (name !== "webkit") delete dev.defaultBrowserType;
+    try { const ctx = await b.newContext(Object.assign(dev, { acceptDownloads: true })); await journey(await ctx.newPage(), name + " телефон"); }
+    finally { await b.close(); }
+  });
+}

@@ -3,18 +3,24 @@
  * Если библиотека не загрузилась (нет сети), открывается печать: «Сохранить как PDF». */
 (function () {
   "use strict";
-  const LIB = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js";
+  // своя копия библиотеки (MIT, web/vendor) — PDF не зависит от внешнего CDN и работает из офлайн-кэша; CDN — запасной путь
+  const LIBS = ["vendor/html2pdf-0.10.1.bundle.min.js", "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"];
 
-  function loadLib() {
-    if (window.html2pdf) return Promise.resolve();
+  function loadOne(src) {
     return new Promise((resolve, reject) => {
       const s = document.createElement("script");
-      s.src = LIB; s.async = true;
+      s.src = src; s.async = true;
       const to = setTimeout(() => reject(new Error("timeout")), 20000);
       s.onload = () => { clearTimeout(to); window.html2pdf ? resolve() : reject(new Error("no lib")); };
-      s.onerror = () => { clearTimeout(to); reject(new Error("load")); };
+      s.onerror = () => { clearTimeout(to); s.remove(); reject(new Error("load")); };
       document.head.appendChild(s);
     });
+  }
+  async function loadLib() {
+    if (window.html2pdf) return;
+    let last;
+    for (const src of LIBS) { try { await loadOne(src); return; } catch (e) { last = e; } }
+    throw last;
   }
 
   /**
@@ -137,9 +143,19 @@
     </div>`;
   }
 
+  // имя файла только латиницей: с кириллицей часть браузеров сохраняет файл как «download» без расширения
+  const TR = { а: "a", ә: "a", б: "b", в: "v", г: "g", ғ: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z", и: "i", й: "y", к: "k", қ: "q", л: "l", м: "m",
+    н: "n", ң: "ng", о: "o", ө: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ұ: "u", ү: "u", ф: "f", х: "kh", һ: "h", ц: "ts", ч: "ch", ш: "sh",
+    щ: "shch", ъ: "", ы: "y", і: "i", ь: "", э: "e", ю: "yu", я: "ya" };
+  function fileName(village, d) {
+    const lat = String(village || "village").toLowerCase().split("").map(ch => (ch in TR ? TR[ch] : ch)).join("")
+      .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "village";
+    return `jaiylym-${lat}-${d.toISOString().slice(0, 10)}.pdf`;
+  }
+
   async function exportPdf(c) {
     const html = build(c);
-    const name = `jaiylym-${(c.S.D.village.name || "village").replace(/[^\p{L}\p{N}]+/gu, "-")}-${new Date().toISOString().slice(0, 10)}.pdf`;
+    const name = fileName(c.S.D.village.name, new Date());
     try {
       await loadLib();
       const el = document.createElement("div");
@@ -161,5 +177,5 @@
     }
   }
 
-  window.Report = { build, export: exportPdf };
+  window.Report = { build, export: exportPdf, fileName };
 })();
