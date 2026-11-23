@@ -156,3 +156,16 @@ test("единый объект метаданных: одинаковые по�
   assert.equal(legacy.imagery_count, 6);
   assert.ok(legacy.warnings.length >= 1, "для старых данных честно сказано, что не записано");
 });
+
+test("сеть: сбой соединения и 503 повторяются, 4xx — нет", async () => {
+  const real = global.fetch;
+  let n = 0;
+  try {
+    global.fetch = async () => { n++; if (n === 1) throw new TypeError("fetch failed"); if (n === 2) return { status: 503, headers: { get: () => "0" } }; return { status: 200, ok: true, headers: { get: () => null } }; };
+    const r = await PL.fetchRetry("https://x", {}, 4);
+    assert.equal(r.status, 200); assert.equal(n, 3);
+    n = 0;
+    global.fetch = async () => { n++; return { status: 404, headers: { get: () => null } }; };
+    assert.equal((await PL.fetchRetry("https://x", {}, 4)).status, 404); assert.equal(n, 1, "404 не повторяется");
+  } finally { global.fetch = real; }
+});
