@@ -109,6 +109,31 @@
     return out;
   }
 
+  // ---------- сеть: повтор при сбое и не больше 4 одновременных загрузок ----------
+  // Planetary Computer иногда обрывает соединение или отвечает 429/5xx, если сразу просить десяток снимков.
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  let active = 0;
+  const queue = [];
+  async function slot(fn) {
+    if (active >= 4) await new Promise(r => queue.push(r));
+    active++;
+    try { return await fn(); } finally { active--; const next = queue.shift(); if (next) next(); }
+  }
+  async function fetchRetry(url, opts, tries = 4) {
+    let last;
+    for (let i = 0; i < tries; i++) {
+      try {
+        const r = await slot(() => fetch(url, opts));
+        if (r.status !== 429 && r.status < 500) return r;
+        last = new Error("HTTP " + r.status);
+        const ra = +r.headers.get("retry-after");
+        if (i < tries - 1) await sleep(Number.isFinite(ra) && ra > 0 ? Math.min(ra, 10) * 1000 : 800 * 2 ** i);
+        else return r;
+      } catch (e) { last = e; if (i < tries - 1) await sleep(800 * 2 ** i); }
+    }
+    throw last;
+  }
+
   // ---------- данные ----------
   function parseNpy(buf) {
     const u8 = new Uint8Array(buf);
@@ -125,14 +150,14 @@
   }
 
   async function stac(body) {
-    const r = await fetch(STAC, { method: "POST", headers: headers({ "content-type": "application/json" }), body: JSON.stringify(body) });
+    const r = await fetchRetry(STAC, { method: "POST", headers: headers({ "content-type": "application/json" }), body: JSON.stringify(body) });
     if (!r.ok) throw new Error("Каталог снимков недоступен (" + r.status + ")");
     return (await r.json()).features || [];
   }
 
   async function raster(bbox, collection, item, assets) {
     const q = `collection=${collection}&item=${encodeURIComponent(item)}&${assets.map(a => "assets=" + a).join("&")}&dst_crs=epsg:4326`;
-    const r = await fetch(`${DATA}/${bbox.join(",")}/${SIZE}x${SIZE}.npy?${q}`, { headers: headers() });
+    const r = await fetchRetry(`${DATA}/${bbox.join(",")}/${SIZE}x${SIZE}.npy?${q}`, { headers: headers() });
     if (!r.ok) throw new Error("Снимок не загрузился (" + r.status + ")");
     return parseNpy(await r.arrayBuffer());
   }
@@ -566,5 +591,5 @@
   return { geocode, reverseGeocode, buildVillage, latestScene, polygonStats, latestPolygonScene, polygonAreaHa, closeRing, checkRing, ringSelfIntersects,
     plotCode, plotFromCode, bboxFor, makePlots, setUserAgent, summerYear, SIZE,
     LANDCOVER, LANDCOVER_YEAR, SCL_OK, SCL_NAMES, classifyLandcover, landcoverComposition, sanitizeScenes, pickScenes, boaOffset, ndviFromBands,
-    mergeSameDate, medianComposite, plotMeans, maskedMean, insideMask, ringBbox, polygonFromArrays, plotIndex, metaFor };
+    mergeSameDate, medianComposite, fetchRetry, plotMeans, maskedMean, insideMask, ringBbox, polygonFromArrays, plotIndex, metaFor };
 });
