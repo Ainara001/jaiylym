@@ -1568,6 +1568,19 @@
     return "";
   }
 
+  /** Источники поиска Google под ответом ИИ (только http/https, открываются в новой вкладке). */
+  function aiSources(list) {
+    const ok = (list || []).filter(s => s && /^https?:\/\//.test(s.url || ""));
+    if (!ok.length) return "";
+    const host = u => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch (_) { return u; } };
+    return `<div class="ai-src"><p class="fine">${t("ai.sources")}</p><ol>${ok.map(s => `<li><a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer nofollow">${esc(s.title || host(s.url))}</a></li>`).join("")}</ol></div>`;
+  }
+  /** Подсказки поиска Google (обязательны по условиям Grounding): HTML от Google — в изолированном iframe без скриптов. */
+  function aiSuggest(html) {
+    if (!html) return "";
+    return `<iframe class="ai-sugg" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" title="Google Search" srcdoc="${esc(html)}"></iframe>`;
+  }
+
   /** Данные открытого села для ИИ: только то, что видит пользователь, с пометками источника. */
   function aiContext() {
     if (!S.D) return { село: null };
@@ -1626,7 +1639,7 @@
     const ctxLine = S.D ? t("ai.ctx", { v: `${esc(S.D.village.name)} · ${S.plots.length} ${t("ai.plots")} · ${S.herds.length} ${t("sc.herds")}` }) : t("ai.noctx");
     el.innerHTML = `<div class="chat"><div class="chat-head"><h1>${ic("spark")} ${t("ai.title")}</h1><p class="fine" style="margin:0">${t("ai.lead")}</p>
         <span class="chat-ctx">${ic("pin")} ${ctxLine}</span></div>
-      <div class="chat-log" id="chatLog" aria-live="polite">${hist.map(m => `<div class="msg ${m.role}">${esc(m.text)}</div>`).join("")}</div>
+      <div class="chat-log" id="chatLog" aria-live="polite">${hist.map(m => `<div class="msg ${m.role}">${esc(m.text)}${m.role === "ai" ? aiSources(m.sources) : ""}</div>`).join("")}</div>
       <div class="chips-q">${["ai.q1", "ai.q5", "ai.q6", "ai.q7", "ai.q8", "ai.q2", "ai.q3", "ai.q4"].map(k => `<button type="button" data-q="${esc(t(k))}">${t(k)}</button>`).join("")}</div>
       <form class="chat-form" id="chatForm"><textarea id="chatIn" rows="1" placeholder="${t("ai.ph")}" aria-label="${t("ai.ph")}"></textarea>
         <button class="btn btn-primary">${ic("send")} <span>${t("ai.send")}</span></button></form></div>
@@ -1640,8 +1653,8 @@
       log.scrollTop = log.scrollHeight; inp.value = "";
       try {
         const r = await C.ai({ mode: "chat", lang: I.lang, context: aiContext(), messages: hist.slice(-10) });
-        hist.push({ role: "ai", text: r.text });
-        $("#aiTyping").outerHTML = `<div class="msg ai">${esc(r.text)}${aiMark(r)}</div>`;
+        hist.push(Object.assign({ role: "ai", text: r.text }, r.sources && r.sources.length ? { sources: r.sources } : {}));
+        $("#aiTyping").outerHTML = `<div class="msg ai">${esc(r.text)}${aiMark(r)}${aiSources(r.sources)}${aiSuggest(r.suggestions)}</div>`;
       } catch (e) {
         hist.pop();
         $("#aiTyping").outerHTML = `<div class="msg ai err">${esc(t("brief.aiFail") + ": " + errText(e))}</div>`;
