@@ -16,6 +16,7 @@ const path = require("path");
 try { process.loadEnvFile(path.join(__dirname, ".env")); } catch (_) {}
 
 const J = require("./web/engine.js");
+const M = require("./web/model.js");
 const PL = require("./web/pipeline.js");
 const { loadPlots, loadHerds } = require("./data");
 
@@ -46,7 +47,8 @@ const KEGEN = loadPlots();
 const vkey = (lat, lon) => `${(+lat).toFixed(3)},${(+lon).toFixed(3)}`;
 const KEGEN_KEY = vkey(KEGEN.village.lat, KEGEN.village.lon);
 function attachKegen() {
-  state.villages[KEGEN_KEY] = Object.assign({ herds: [] }, state.villages[KEGEN_KEY] || {}, { data: KEGEN, demo: loadHerds() });
+  // демо-стада Кегена — условные, всегда с признаком demo: true (в текстах бота они так и называются)
+  state.villages[KEGEN_KEY] = Object.assign({ herds: [] }, state.villages[KEGEN_KEY] || {}, { data: KEGEN, demo: loadHerds().map(h => Object.assign({}, h, { demo: true })) });
 }
 // ---------- API сайта (вход, профили, сценарии) — см. api.js ----------
 const BOT_USERNAME = process.env.BOT_USERNAME || "JAIYLYM_bot";
@@ -84,7 +86,11 @@ const chatOf = id => (state.chats[id] = state.chats[id] || {});
 const villageOf = c => c.village && state.villages[c.village];
 const herdsOf = v => (v.demo || []).concat(v.herds || []);
 const fmt = n => Math.round(n).toLocaleString("ru-RU");
-const pct = x => (isFinite(x) ? Math.round(x * 100) + "%" : "∞");
+const pct = x => (x == null ? "нет данных" : isFinite(x) ? Math.round(x * 100) + "%" : "∞");
+const sheepCap = c => (c && c.known ? `≈ ${fmt(c.au_season / 0.2)} овец за сезон (оценка модели, не проверена в поле)` : "ёмкость неизвестна (нет NDVI)");
+const WATER_WORD = { confirmed: "водопой подтверждён пользователем", satellite: "водоём на карте WorldCover (пригодность для скота не проверена)",
+  assumed: "у села (предположение модели)", modeled: "смоделированный водопой", unknown: "нет информации", absent: "водопоя нет" };
+const waterWord = p => WATER_WORD[M.waterStatus(p)] || p.water_source;
 const plural = (n, a, b, c) => n % 10 === 1 && n % 100 !== 11 ? a : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? b : c;
 const where = p => `${p.id} (${p.ring === "near" ? "ближний" : "дальний"}, ~${p.dist_km} км на ${p.dir} от села)`;
 const siteLink = (v, plotId) => `${SITE}#lat=${v.data.village.lat}&lon=${v.data.village.lon}&name=${encodeURIComponent(v.data.village.name)}` +
@@ -155,8 +161,11 @@ async function reverseName(lat, lon) {
 function villageSummary(v) {
   const d = v.data, past = d.plots.reduce((s, p) => s + p.pasture_ha, 0);
   const best = d.plots.filter(p => p.ndvi != null).sort((a, b) => b.ndvi - a.ndvi)[0];
+  const noData = d.plots.filter(p => p.ndvi == null).length;
   return `${d.village.name}: ${fmt(past)} га пастбищ в радиусе 8 км (снимки лета ${d.source.year}, ${d.source.dates.length} безоблачных дней).\n` +
-    (best ? `Лучшая трава — участок ${where(best)}, NDVI ${best.ndvi}.` : "");
+    (best ? `Лучшая трава — участок ${where(best)}, NDVI ${best.ndvi}.` : "") +
+    (noData ? `\nНет спутниковых данных по ${noData} ${plural(noData, "участку", "участкам", "участкам")} — они не входят в план.` : "") +
+    (v.demo && v.demo.length ? `\nВ расчёте ${v.demo.length} условных демо-стад (пример, не реальные хозяйства).` : "");
 }
 
 function textToday(v, herd, day) {
@@ -171,25 +180,28 @@ function textToday(v, herd, day) {
   const seg = J.plotOnDay(plan, day);
   if (!seg || !seg.plot) return note + `День ${day}: корма для стада по плану не хватает. Нужен водопой на дальнем участке или сено — нажмите «Водопой».`;
   const p = byId[seg.plot], c = J.plotCapacity(p), next = plan[plan.indexOf(seg) + 1];
-  return note + `${herd.name}, день сезона ${day}\n\n` +
+  return note + `${herd.name}${herd.demo ? " (демо-стадо)" : ""}, день сезона ${day}\n\n` +
     `Пасти на участке ${where(p)}.\n` +
-    `Трава (NDVI): ${p.ndvi ?? "нет данных"} · участок выдержит ≈ ${fmt(c.au_season / 0.2)} овец за сезон.\n` +
-    `Нагрузка по плану: ${pct(pl.load[p.id].load)}. Вода: ${p.water_source}.\n\n` +
+    `Трава (NDVI, спутник): ${p.ndvi ?? "нет данных"} · участок выдержит ${sheepCap(c)}.\n` +
+    `Нагрузка по плану: ${pct(pl.load[p.id].load)}. Вода: ${waterWord(p)}.\n\n` +
     (next ? `Через ${seg.to - day + 1} дн. — перегон на ${next.plot ? where(byId[next.plot]) : "— (корма не хватает)"}.` : "До конца сезона здесь.");
 }
 
 function textPlan(v, herd) {
   const { pl, byId } = compute(v);
   const lines = pl.herdPlans[herd.id].map(s => `• дни ${s.from}–${s.to}: ${s.plot ? where(byId[s.plot]) : "корма не хватает (внимание)"}`);
-  return `Маршрут на сезон — ${herd.name} (${fmt(J.herdAU(herd))} усл. голов):\n\n${lines.join("\n")}\n\n` +
-    `Правило: ни один участок не загружен больше 100%. Ближние участки — дойному скоту и на отдых.`;
+  const head = pl.status === "feasible" ? "По введённым условиям возможен вариант распределения."
+    : "При текущих ограничениях полностью распределить стада не удалось" + (pl.unmet[herd.id] ? " — вашему стаду не хватает корма." : ".");
+  return `${head}\n\nМаршрут на сезон — ${herd.name}${herd.demo ? " (демо-стадо)" : ""} (${fmt(J.herdAU(herd))} усл. голов):\n\n${lines.join("\n")}\n\n` +
+    `Правило: ни один участок не загружен больше 100% расчётной ёмкости. Ближние участки — дойному скоту и на отдых. ` +
+    `Ёмкость — оценка модели (не проверена укосом), вода у села и водоёмы на карте не проверены на месте.`;
 }
 
 function textMap(v) {
   const { cur, pl, plots, herds } = compute(v);
   const worst = plots.filter(p => cur.load[p.id].load > 1).sort((a, b) => cur.load[b.id].load - cur.load[a.id].load);
   const n = cur.overloaded;
-  return villageSummary(v) + `\n\nСтад в расчёте: ${herds.length}${v.demo ? " (вместе с демо-стадами)" : ""}.\n` +
+  return villageSummary(v) + `\n\nСтад в расчёте: ${herds.length}${v.demo && v.demo.length ? ` (из них демо: ${v.demo.length})` : ""}.\n` +
     `Если все пасут у села: перегружено ${n} ${plural(n, "участок", "участка", "участков")}` +
     (worst.length ? ` — ${worst.slice(0, 4).map(p => `${p.id} ${pct(cur.load[p.id].load)}`).join(", ")}` : "") +
     `, сверх нормы ≈ ${fmt(J.hayTonnes(cur.deficit_kg))} т сена.\n` +
@@ -201,8 +213,9 @@ function textWells(v) {
   const ws = J.wells(plots).slice(0, 4);
   if (!ws.length) return "Все дальние участки уже с водой.";
   return `Где новый водопой откроет больше всего корма:\n\n` +
-    ws.map((w, i) => `${i + 1}. ${where(byId[w.plot])} — ≈ ${fmt(w.sheep)} овец на сезон`).join("\n") +
-    `\n\nМы не строим водопои. Мы показываем акимату, куда вложить деньги, чтобы открыть дальние пастбища.`;
+    ws.map((w, i) => `${i + 1}. ${where(byId[w.plot])} — ≈ ${fmt(w.sheep)} овец на сезон (оценка модели)`).join("\n") +
+    `\n\nЭто моделирование, а не рекомендация строить скважину: нужны гидрогеология, право на землю, дорога и смета. ` +
+    `Водоём на спутниковой карте не означает пригодный водопой — проверьте на месте.`;
 }
 
 // ---------- Gemini: свободные вопросы ----------
@@ -212,8 +225,10 @@ async function askGemini(question, v, herd) {
   try {
     const { pl, cur } = compute(v);
     ctx.участки = v.data.plots.map(p => ({ id: p.id, кольцо: p.ring === "near" ? "ближний" : "дальний", км: p.dist_km, направление: p.dir,
-      пастбище_га: p.pasture_ha, ndvi: p.ndvi, вода: p.water_source, нагрузка_сейчас: pct(cur.load[p.id].load), нагрузка_план: pct(pl.load[p.id].load) }));
-    if (herd) ctx.стадо = { имя: herd.name, овцы: herd.sheep, козы: herd.goats, крс: herd.cattle, лошади: herd.horses, маршрут: pl.herdPlans[herd.id] };
+      пастбище_га: p.pasture_ha, ndvi: p.ndvi, вода: waterWord(p), нагрузка_сейчас: pct(cur.load[p.id].load), нагрузка_план: pct(pl.load[p.id].load),
+      как_рассчитано: J.explainCapacity(p).steps.map(s => `${s.key}: ${s.formula} ${s.unit}`).join("; ") }));
+    ctx.статус_плана = pl.status; ctx.демо_стад = (v.demo || []).length;
+    if (herd) ctx.стадо = { имя: herd.name, демо: !!herd.demo, овцы: herd.sheep, козы: herd.goats, крс: herd.cattle, лошади: herd.horses, маршрут: pl.herdPlans[herd.id], не_хватает_усл_гол_дней: Math.round(pl.unmet[herd.id] || 0) };
   } catch (_) {}
   const kk = /[әғқңөұүһі]/i.test(question);
   const system = "Ты — помощник пастуха в сервисе Jaiylym (Казахстан). Отвечай коротко (до 6 предложений), просто. " +
@@ -221,6 +236,7 @@ async function askGemini(question, v, herd) {
       "овцы — қой, стадо — табын, водопой — суат, «водоём на карте WorldCover» — картадағы су айдыны, нагрузка — жүктеме, ёмкость — сыйымдылық. "
       : "Отвечай по-русски. ") +
     "Опирайся только на данные села и общие знания о выпасе. Не выдумывай цифры; числа пиши цифрами, как в данных; ёмкость и нагрузка — оценки модели. " +
+    "Если нужного числа нет в данных — так и скажи. Право на участок и водопой никто не проверял — не утверждай обратное. Ты не агроном и не госорган. " +
     "Пиши обычным текстом без markdown (без звёздочек и решёток) — это сообщение Telegram. " +
     "Если вопрос не про пастбища и скот — вежливо скажи, что помогаешь только с пастбищами.";
   const r = await require("./gemini").ask({ system, input: `Данные села (JSON): ${JSON.stringify(ctx)}\n\nВопрос пастуха: ${question}`, maxTokens: 500 });
@@ -262,18 +278,27 @@ function plotReport(v, p) {
   return text;
 }
 
+/**
+ * Заголовок и совет по новому снимку. Тревога «трава убывает» — только если снижение видно
+ * на двух снимках подряд (M.ndviTrend); одно снижение — мягкое «возможно, проверим следующим снимком».
+ */
+function trendWords(cur, prev) {
+  const tr = M.ndviTrend(cur, prev);
+  const W = {
+    decline_confirmed: ["Внимание: трава убывает (видно на двух снимках подряд)", "Если стадо там или скоро туда идёт — планируйте перегон заранее. Проверьте на месте."],
+    decline_possible: ["Возможно снижение травы", "Это одно наблюдение: снимок мог испортить дымка или тень. Тревогу подтвердит или снимет следующий снимок."],
+    low: ["Мало травы", "Долго пасти здесь не стоит."],
+    rise: ["Трава растёт", "Участок восстанавливается."],
+    stable: ["Свежий снимок", "Заметных изменений нет."],
+    first: ["Свежий снимок", "Это первое наблюдение — сравнивать пока не с чем."],
+  };
+  const [head, advice] = W[tr.kind] || W.stable;
+  return { tr, head, advice };
+}
 /** Текст уведомления о новом снимке. prev — прошлые значения NDVI этого участка. */
 function alertText(v, p, cur, prev, date) {
-  const base = prev.length ? median(prev.slice(-3)) : null;
-  const delta = base == null ? null : cur - base;
-  let head, advice;
-  const rel = delta == null ? 0 : delta / base;
-  if (delta != null && (delta <= -0.05 || rel <= -0.12)) {
-    head = "Внимание: трава убывает";
-    advice = "Если стадо там или скоро туда идёт — планируйте перегон заранее. Проверьте на месте: иногда снимок портит дымка.";
-  } else if (cur < 0.2) { head = "Мало травы"; advice = "Долго пасти здесь не стоит."; }
-  else if (delta != null && (delta >= 0.05 || rel >= 0.12)) { head = "Трава растёт"; advice = "Участок восстанавливается."; }
-  else { head = "Свежий снимок"; advice = "Заметных изменений нет."; }
+  const { tr, head, advice } = trendWords(cur, prev);
+  const base = tr.base, delta = tr.delta;
   return `${head} — участок ${p.id}, ${v.data.village.name}\n\n` +
     `Снимок Sentinel-2 от ${fmtDate(date)}: NDVI ${cur.toFixed(2)}` +
     (base != null ? ` (было ≈ ${base.toFixed(2)}, ${delta >= 0 ? "+" : ""}${(delta / base * 100).toFixed(0)}%)` : "") +
@@ -316,7 +341,8 @@ function pastureLink(chatId, q) {
 }
 function pastureReport(chatId, q) {
   const s = q.stats || {}, series = s.series || [];
-  const cap = J.plotCapacity({ ndvi: s.ndvi, pasture_ha: s.pasture_ha || 0 });
+  const cap = J.plotCapacity({ ndvi: s.ndvi, pasture_ha: s.pasture_ha || 0, series: s.series, valid_fraction: s.valid_fraction });
+  const server = (q.observations || []).filter(o => o.source === "server");
   let text = `Пастбище «${q.name}»: ${ha1(q.area_ha)} га (границы нарисованы вами на сайте).\n` +
     `Трава за лето ${s.year || ""} — NDVI по снимкам Sentinel-2 внутри границ:\n`;
   if (series.length) {
@@ -324,16 +350,14 @@ function pastureReport(chatId, q) {
     const ch = (series[series.length - 1].v - series[0].v) / series[0].v * 100;
     text += `\n\nЗа лето: ${ch >= 0 ? "+" : ""}${ch.toFixed(0)}% ${ch <= -10 ? "— трава убывает" : ch >= 10 ? "— растёт" : "≈ стабильно"}.`;
   } else text += `в среднем ${s.ndvi ?? "нет данных"}.`;
-  text += `\nСейчас: ${ndviWord(s.ndvi)}. Выдержит за сезон ≈ ${fmt(cap.au_season / 0.2)} овец (оценка модели). Вода: ${q.water ? "есть" : "не указана"}.`;
+  text += `\nСейчас: ${ndviWord(s.ndvi)}. Выдержит за сезон ${sheepCap(cap)}. Вода: ${q.water ? "есть (по вашим словам)" : "не указана"}.`;
+  text += server.length ? `\nСервер сам проверил ${server.length} ${plural(server.length, "снимок", "снимка", "снимков")}, последний — ${fmtDate(server[server.length - 1].d)}: NDVI ${server[server.length - 1].v.toFixed(2)}.`
+    : `\nNDVI посчитан на сайте в браузере; сервер его ещё не проверял (проверит по первому новому снимку в сезон).`;
   return text + `\n\nНа карте: ${pastureLink(chatId, q)}`;
 }
 function pastureAlert(chatId, q, cur, prev, date) {
-  const base = prev.length ? median(prev.slice(-3)) : null;
-  const delta = base == null ? null : cur - base, rel = delta == null ? 0 : delta / base;
-  const head = delta != null && (delta <= -0.05 || rel <= -0.12) ? "Внимание: трава убывает" : cur < 0.2 ? "Мало травы"
-    : delta != null && (delta >= 0.05 || rel >= 0.12) ? "Трава растёт" : "Свежий снимок";
-  const advice = head.startsWith("Внимание") ? "Если стадо там — планируйте перегон заранее. Проверьте на месте: иногда снимок портит дымка."
-    : head === "Мало травы" ? "Долго пасти здесь не стоит." : head === "Трава растёт" ? "Участок восстанавливается." : "Заметных изменений нет.";
+  const { tr, head, advice } = trendWords(cur, prev);
+  const base = tr.base, delta = tr.delta;
   return `${head} — ваше пастбище «${q.name}»\n\nСнимок Sentinel-2 от ${fmtDate(date)}: NDVI ${cur.toFixed(2)}` +
     (base != null ? ` (было ≈ ${base.toFixed(2)}, ${delta >= 0 ? "+" : ""}${(delta / base * 100).toFixed(0)}%)` : "") +
     `.\n${advice}\n\nНа карте: ${pastureLink(chatId, q)}`;
@@ -365,6 +389,8 @@ async function runCron(send, now = new Date()) {
     if (!scene) continue;
     report.scenes++;
     v.monitor.last = scene.date;
+    v.monitor.sent = v.monitor.sent || [];
+    save();                                                                  // отметка о снимке — до рассылки
     for (const id of ids) {
       const m = scene.plots[id], p = v.data.plots.find(x => x.id === id);
       if (!m || !p || m.valid < 0.6 || m.ndvi == null) continue;          // облака закрыли участок
@@ -373,7 +399,12 @@ async function runCron(send, now = new Date()) {
       const hist = v.monitor.hist[id] = v.monitor.hist[id] || seed.slice(-5);
       const text = alertText(v, p, m.ndvi, hist.map(h => h.v), scene.date);
       hist.push({ d: scene.date, v: m.ndvi }); v.monitor.hist[id] = hist.slice(-8);
-      for (const chat of subscribers(vk, id)) { await send(chat, text, MENU); report.alerts++; }
+      for (const chat of subscribers(vk, id)) {
+        const key = `${scene.id}|${id}|${chat}`;
+        if (v.monitor.sent.includes(key)) { report.duplicates = (report.duplicates || 0) + 1; continue; }   // повторный запуск — не дублируем
+        v.monitor.sent = v.monitor.sent.concat([key]).slice(-300);
+        await send(chat, text, MENU); report.alerts++;
+      }
     }
   }
 
@@ -389,8 +420,15 @@ async function runCron(send, now = new Date()) {
       report.scenes++;
       q.monitor.last = scene.date;
       if (scene.valid < 0.6 || scene.ndvi == null) continue;                 // облака закрыли участок
+      const skey = `${scene.id || scene.date}|${chat}`;
+      q.monitor.sent = q.monitor.sent || [];
+      if (q.monitor.sent.includes(skey)) { report.duplicates = (report.duplicates || 0) + 1; continue; }
+      q.monitor.sent = q.monitor.sent.concat([skey]).slice(-50);
+      // наблюдение, проверенное сервером (в отличие от NDVI, присланного сайтом)
+      q.observations = (q.observations || []).concat([{ d: scene.date, v: scene.ndvi, valid: +(+scene.valid).toFixed(3), source: "server", scene: scene.id || null }]).slice(-20);
       const seed = q.stats && q.stats.year === now.getFullYear() ? (q.stats.series || []).filter(x => x.d < scene.date) : [];
       const hist = q.monitor.hist || seed.slice(-5);
+      save();
       await send(chat, pastureAlert(chat, q, scene.ndvi, hist.map(h => h.v), scene.date), MENU);
       report.alerts++;
       q.monitor.hist = hist.concat([{ d: scene.date, v: scene.ndvi }]).slice(-8);
@@ -408,7 +446,7 @@ async function runCron(send, now = new Date()) {
     c.reminded = report.date;
     const to = plan[i], from = plan[i - 1], p = to.plot && v.data.plots.find(x => x.id === to.plot);
     await send(chat, `Через 3 дня по плану перегон стада «${herd.name}»: ${from.plot || "—"} → ` +
-      (p ? `${where(p)}.\nТрава там: ${ndviWord(p.ndvi)} (NDVI ${p.ndvi}). ${p.water_source === "нет" ? "Воды нет — возьмите с собой." : "Вода: " + p.water_source + "."}` : "корма по плану не хватает — нужен водопой или сено.") +
+      (p ? `${where(p)}.\nТрава там: ${ndviWord(p.ndvi)} (NDVI ${p.ndvi}). Вода: ${waterWord(p)}.` : "корма по плану не хватает — нужен водопой или сено.") +
       (p ? `\n\nКарта: ${siteLink(v, p.id)}` : ""), MENU);
     report.reminders++;
   }
@@ -785,4 +823,4 @@ if (require.main === module) {
   else { console.log("Нужен TELEGRAM_TOKEN в .env (или проверка: node bot.js --test)"); process.exit(1); }
 }
 
-module.exports = { handle, parseHerd, runCron, villageApi, siteApi, getState: () => state, setTest: () => { TEST = true; } };
+module.exports = { handle, parseHerd, runCron, villageApi, siteApi, alertText, pastureAlert, trendWords, getState: () => state, setTest: () => { TEST = true; } };

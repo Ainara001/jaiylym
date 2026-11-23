@@ -557,3 +557,44 @@ details.more { margin-top: 12px; background: var(--surface); border: 1px solid v
 @media (max-width: 360px) {
   .brand > span { display: none; }
 }
+
+/* ---------- версия модели 2.0: итог плана, статусы данных, «Что если?», исследование ---------- */
+.result{border-radius:12px;padding:12px 14px;margin:0 0 12px;border:1px solid var(--line,#dfe3d8);background:#fff}
+.result.res-ok{border-left:5px solid #3e8e5a}
+.result.res-short{border-left:5px solid #bf4a2a;background:#fff8f3}
+.result .res-head{display:flex;gap:8px;align-items:flex-start;margin:0 0 6px;font-size:15px}
+.result h4{margin:10px 0 2px;font-size:13px;color:#24543f}
+.result ul{margin:2px 0;padding-left:18px}
+.result p{margin:2px 0}
+.demo-banner{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:0 0 10px}
+.tag-demo{background:#f3e6cf;color:#7a5413}
+.tag-closed{background:#f7dcd2;color:#8a2f17}
+.conf-none{background:#ecebe6;color:#5e5e58}
+.conf-fc-unconfirmed{background:#f3e6cf;color:#7a5413}
+.conf-fc-calibrated{background:#dff0e3;color:#24543f}
+.conf-fc-none{background:#ecebe6;color:#5e5e58}
+.origin{font-weight:700}
+.origin.o-user{color:#7a5413}
+.origin.o-calibrated{color:#24543f}
+.perr{display:block;color:#a3361b;font-size:12px;margin-top:2px}
+input[aria-invalid="true"]{outline:2px solid #bf4a2a}
+.fresh{font-size:12px;color:#5d6b60}
+.fresh.stale{color:#9a5a12;font-weight:600}
+.band-need .need{list-style:none;counter-reset:n;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;padding:0;margin:12px 0 0}
+.band-need .need li{counter-increment:n;background:#fff;border-radius:12px;padding:12px 14px;border:1px solid #e4e1d4;display:flex;flex-direction:column;gap:4px}
+.band-need .need li b::before{content:counter(n) ". ";color:#24543f}
+.band-need .need li.approx{background:#f6ead2;border-color:#ead6ae}
+.rights{margin-top:8px;font-size:13px}
+.rights summary{cursor:pointer}
+.rights .chips{margin-top:6px}
+table.how td{vertical-align:top}
+table.how code{font-size:12px;white-space:normal;word-break:break-word}
+table.wi td small.worse{color:#a3361b}
+table.wi td small.better{color:#2f7a4a}
+table.wi tr.wi-base td{background:#f2f7f1}
+.legend .lg-h{display:block;margin-top:6px}
+@media (max-width:560px){
+  .result{padding:10px 11px}
+  table.wi th,table.wi td,table.plots-t th,table.plots-t td{font-size:12px;padding:5px 6px}
+  .demo-banner .btn{width:100%}
+}
