@@ -612,4 +612,5 @@ table.wi tr.wi-base td{background:#f2f7f1}
 .params .field > .perr { order: 4; flex: 1 1 100%; }
 .params .field .origin { white-space: nowrap; }
 /* длинные подписи кнопок (особенно на казахском) переносятся, а не растягивают страницу */
-.page .btn { max-width: 100%; white-space: normal; text-align: center; height: auto; min-height: 36px; }
+main .btn { max-width: 100%; white-space: normal; text-align: center; height: auto; min-height: 36px; }
+main .btn > span { min-width: 0; overflow-wrap: anywhere; }
