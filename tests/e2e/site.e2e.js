@@ -118,8 +118,17 @@ async function journey(page, label) {
   assert.match(await page.textContent(".tabs"), /Егер былай болса/);
   await page.goto(base + "#/research");
   assert.match(await page.textContent("#rsPage"), /Жазылған сұхбаттар: 0/);
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
-  assert.equal(overflow, false, label + ": нет горизонтальной прокрутки страницы");
+  for (const route of ["research", "map?lat=43.02&lon=79.22&name=Кеген", "settings", "about", "home"]) {
+    await page.goto(base + "#/" + route);
+    await page.waitForTimeout(300);
+    const wide = await page.evaluate(() => {
+      const W = document.documentElement.clientWidth;
+      if (document.documentElement.scrollWidth <= W + 1) return null;
+      return [...document.querySelectorAll("body *")].filter(e => { const r = e.getBoundingClientRect(); return r.width && r.right > W + 1 && getComputedStyle(e).position !== "fixed"; })
+        .slice(-6).map(e => `${e.tagName.toLowerCase()}${e.id ? "#" + e.id : ""}.${String(e.className).split(" ")[0]} right=${Math.round(e.getBoundingClientRect().right)} «${(e.textContent || "").trim().slice(0, 40)}»`).join("; ") + ` (ширина ${W}, страница ${document.documentElement.scrollWidth})`;
+    });
+    assert.equal(wide, null, `${label}: #/${route} шире экрана: ${wide}`);
+  }
   assert.deepEqual(errors, [], label + ": ошибки JavaScript");
 }
 
