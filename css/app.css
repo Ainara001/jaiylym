@@ -633,3 +633,61 @@ main .btn > span { min-width: 0; overflow-wrap: anywhere; }
 .ai-text .src { font-size: 10px; padding: 1px 6px; border-radius: 999px; vertical-align: 1px; }
 .src-web { background: #e3eef0; color: #1d5e66; }
 .ai-text .plot-id { white-space: nowrap; font-weight: 600; }
+
+/* ================= Телефоны и сенсорные экраны: цели нажатия, поля без увеличения на iPhone, карта, вкладки, таблица участков ================= */
+@media (pointer: coarse), (max-width: 860px) {
+  /* iOS увеличивает страницу при фокусе на поле мельче 16px */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea { font-size: 16px !important; }
+  .btn, .btn-sm, .linkbtn, main .btn, main .btn-sm, .topbar .btn { min-height: 44px; }
+  .field select, .field input { min-height: 44px; }
+  .btn-tg#tgTop { min-width: 44px; }
+  .seg button, .langsw button { min-height: 40px; min-width: 40px; }
+  .chips-q button { min-height: 44px; }
+  .leaflet-touch .leaflet-bar a { width: 40px; height: 40px; line-height: 40px; }
+}
+@media (max-width: 860px) {
+  /* вкладки анализа: затухание у края, если есть ещё вкладки за краем */
+  .tabs { --fade: 28px; }
+  .tabs.more-right { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - var(--fade)), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - var(--fade)), transparent); }
+  .tabs.more-left { -webkit-mask-image: linear-gradient(90deg, transparent, #000 var(--fade)); mask-image: linear-gradient(90deg, transparent, #000 var(--fade)); }
+  .tabs.more-left.more-right { -webkit-mask-image: linear-gradient(90deg, transparent, #000 var(--fade), #000 calc(100% - var(--fade)), transparent); mask-image: linear-gradient(90deg, transparent, #000 var(--fade), #000 calc(100% - var(--fade)), transparent); }
+  .tabs button { scroll-snap-align: center; }
+  /* карта: атрибуция компактно, легенда над ней, подписи внутреннего кольца мельче */
+  .leaflet-control-attribution { font-size: 10px; line-height: 1.35; padding: 1px 6px; }
+  .legend { bottom: 36px; }
+  .plabel-near { font-size: 9.5px; line-height: 1.15; }
+}
+/* таблица участков на телефоне — карточки: код и нагрузка в первой строке, остальное «подпись — значение» */
+@media (max-width: 560px) {
+  .plots-t, .plots-t tbody { display: block; }
+  .plots-t thead { display: none; }
+  .plots-t tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; padding: 10px 12px; margin: 0 4px 8px;
+    border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+  .plots-t td { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; grid-column: 1 / -1; padding: 3px 0; border: 0;
+    white-space: normal; min-width: 0 !important; text-align: right; }
+  .plots-t td[data-l]::before { content: attr(data-l); color: var(--muted); font-size: 12.5px; text-align: left; }
+  .plots-t td.pt-id { grid-column: 1; grid-row: 1; align-items: center; justify-content: flex-start; gap: 6px; font-size: 15px; }
+  .plots-t td.pt-load { grid-column: 2; grid-row: 1; align-items: center; }
+  .plots-t td.pt-load::before { content: none; }
+  .plots-t tr:focus-visible { outline: 3px solid var(--focus-gold, #e3b25c); outline-offset: 2px; }
+}
+/* карточка участка и своего пастбища на телефоне — нижняя шторка */
+.plot-sheet .pop table { width: 100%; }
+@media (max-width: 860px) {
+  .modal.plot-sheet { width: 100%; max-width: 100%; margin: auto 0 0; border-radius: 22px 22px 0 0; max-height: 86dvh; overflow-y: auto;
+    padding: 22px 16px calc(18px + env(safe-area-inset-bottom, 0px)); overscroll-behavior: contain; }
+  .modal.plot-sheet .modal-x { top: 12px; right: 12px; }
+  .modal.plot-sheet .modal-x button { width: 44px; height: 44px; }
+  .modal.plot-sheet .pop h3 { padding-right: 52px; font-size: 18px; }
+  .modal.plot-sheet .pop td { padding: 9px 6px; vertical-align: top; }
+  .modal.plot-sheet .pop td:first-child { color: var(--muted); white-space: normal; width: 42%; }
+  .modal.plot-sheet .pop td:last-child { white-space: normal; }
+}
+/* телефон в горизонтальной ориентации: низкий экран — навигация в одну строку, карта по высоте экрана */
+@media (max-width: 960px) and (max-height: 500px) and (orientation: landscape) {
+  :root { --top-h: 48px; --bottom-h: 44px; }
+  .bottomnav a, .bottomnav button { flex-direction: row; gap: 6px; font-size: 12px; }
+  .bottomnav a .ic, .bottomnav button .ic { width: 20px; height: 20px; }
+  .mapwrap { height: calc(100svh - var(--top-h) - var(--bottom-h) - env(safe-area-inset-bottom, 0px) - 12px); min-height: 220px; }
+  .modal.plot-sheet { max-height: 92dvh; }
+}
