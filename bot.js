@@ -22,7 +22,7 @@ const { loadPlots, loadHerds } = require("./data");
 
 const SITE = process.env.SITE_URL || "https://ainara001.github.io/jaiylym/";
 const GEMINI_KEY = process.env.GEMINI_API_KEY || "";
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
+const G = require("./gemini");
 const UA = "Jaiylym-hackathon-bot/1.0 (+https://github.com/Ainara001/jaiylym)";
 PL.setUserAgent(UA);
 
@@ -239,9 +239,8 @@ async function askGemini(question, v, herd) {
       : "Отвечай по-русски. ") +
     "Опирайся только на данные села и общие знания о выпасе. Не выдумывай цифры; числа пиши цифрами, как в данных; ёмкость и нагрузка — оценки модели. " +
     "Если нужного числа нет в данных — так и скажи. Право на участок и водопой никто не проверял — не утверждай обратное. Ты не агроном и не госорган. " +
-    "Пиши обычным текстом без markdown (без звёздочек и решёток) — это сообщение Telegram. " +
-    "Если вопрос не про пастбища и скот — вежливо скажи, что помогаешь только с пастбищами.";
-  const r = await require("./gemini").ask({ system, input: `Данные села (JSON): ${JSON.stringify(ctx)}\n\nВопрос пастуха: ${question}`, maxTokens: 500 });
+    "Пиши обычным текстом без markdown (без звёздочек и решёток) — это сообщение Telegram. " + G.SCOPE;
+  const r = await G.ask({ system, input: `Данные села (JSON): ${JSON.stringify(ctx)}\n\nВопрос пастуха: ${String(question).slice(0, 1200)}`, maxTokens: kk ? 700 : 500 });
   return r.ok ? r.text : null;
 }
 
@@ -756,7 +755,7 @@ async function run(token) {
     api("sendChatAction", { chat_id: chat, action: "typing" }).catch(() => {});
     handle(u, send).catch(e => { console.error("Ошибка:", e); send(chat, "Что-то пошло не так, попробуйте ещё раз.").catch(() => {}); });
   };
-  const info = `Бот @${me.result.username}. Хранилище: ${store.kind}. Gemini: ${GEMINI_KEY ? require("./gemini").MODELS.join(", ") : "выключен"} (Interactions API).`;
+  const info = `Бот @${me.result.username}. Хранилище: ${store.kind}. Gemini: ${GEMINI_KEY ? G.MODELS.join(", ") : "выключен"} (Interactions API).`;
 
   if (PUBLIC_URL) return serve(token, api, onUpdate, info, send);
 
