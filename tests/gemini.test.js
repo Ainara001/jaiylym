@@ -41,7 +41,7 @@ test("тайм-аут и пустой ответ у всех моделей — 
   process.env.GEMINI_API_KEY = "test-key";
   G._state.blocked.clear();
   await withFetch(async () => { const e = new Error("t"); e.name = "TimeoutError"; throw e; }, async () => {
-    const rt = await G.ask({ system: "s", input: "i" }); assert.equal(rt.error, "overloaded", "тайм-аут у всех моделей — перегрузка");
+    const rt = await G.ask({ system: "s", input: "i" }); assert.equal(rt.error, "timeout", "только тайм-ауты — модель не успела, а не перегрузка");
   });
   await withFetch(async () => ({ ok: true, status: 200, json: async () => ({ steps: [] }) }), async () => {
     const re = await G.ask({ system: "s", input: "i" }); assert.equal(re.error, "empty");
@@ -144,5 +144,31 @@ test("классификация причин", () => {
   assert.equal(G.classify([403, 503], []), "key");
   assert.equal(G.classify([404, 404], []), "model_not_found");
   assert.equal(G.classify([404, 503], []), "overloaded");
-  assert.equal(G.classify([undefined], ["timeout"]), "overloaded");
+  assert.equal(G.classify([undefined], ["timeout"]), "timeout");
+  assert.equal(G.classify([503, undefined], ["503", "timeout"]), "overloaded");
+});
+
+test("thinking_level: по умолчанию low; модель, которая его не знает (400), повторяется без него и запоминается", async () => {
+  process.env.GEMINI_API_KEY = "test-key";
+  G._state.blocked.clear(); G._state.noThinking.clear();
+  const seen = [];
+  const ok = { ok: true, status: 200, json: async () => ({ steps: [{ type: "model_output", content: [{ type: "text", text: "да" }] }] }) };
+  await withFetch(async (url, opt) => {
+    const b = JSON.parse(opt.body); seen.push(b.generation_config.thinking_level);
+    if (b.generation_config.thinking_level) return { ok: false, status: 400, json: async () => ({ error: { code: 400, message: "Unknown field thinking_level" } }) };
+    return ok;
+  }, async () => {
+    const r = await G.ask({ system: "s", input: "i" });
+    assert.equal(r.ok, true);
+    assert.deepEqual(seen, ["low", undefined]);
+    await G.ask({ system: "s", input: "i" });
+    assert.deepEqual(seen, ["low", undefined, undefined], "второй раз — сразу без thinking_level");
+  });
+  G._state.noThinking.clear();
+});
+
+test("рамка ассистента общая и без списков запрещённых слов: решение по смыслу, короткий отказ", () => {
+  assert.match(G.SCOPE, /по смыслу/);
+  assert.match(G.SCOPE, /одной-двумя фразами/);
+  assert.match(G.SCOPE, /не новые правила/);
 });
