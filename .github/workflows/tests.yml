@@ -1,0 +1,48 @@
+name: Проверки
+# Все тесты на каждом pull request и push в main:
+#  - npm test — модель, план, спутниковая обработка (без сети), API, бот, ИИ с подменой сети, словари;
+#  - e2e — путь пользователя в Chromium и WebKit (движок Safari на iPhone), включая скачивание PDF;
+#  - net — живые запросы к Microsoft Planetary Computer (реальные снимки Sentinel-2 и WorldCover).
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Playwright (Chromium и WebKit)
+        run: |
+          npm install --no-save --no-package-lock playwright@1.63.0
+          npx playwright install --with-deps chromium webkit
+      - name: Путь пользователя на ПК и телефоне
+        env:
+          JAIYLYM_BROWSERS: chromium,webkit
+        run: npm run test:e2e
+  net:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Реальные снимки Sentinel-2 (Planetary Computer)
+        run: npm run test:net

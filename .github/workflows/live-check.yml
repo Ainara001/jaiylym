@@ -1,0 +1,19 @@
+name: Проверка продакшна
+# Проверяет работающую систему: сайт на GitHub Pages, сервер на Render, ИИ-помощника с настоящим ключом
+# (ключ хранится только на Render), страницу бота в Telegram. Запуск вручную и раз в неделю.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"
+permissions:
+  contents: read
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/live-check.js
