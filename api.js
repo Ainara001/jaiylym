@@ -316,7 +316,8 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         if (!r.ok) {
           const ERR = { no_key: "ИИ не настроен на сервере", timeout: "ИИ не ответил вовремя, попробуйте ещё раз",
             quota: "у ИИ закончился лимит запросов Google, попробуйте позже", key: "ключ ИИ на сервере не принят Google",
-            model_not_found: "модели ИИ из настроек сервера недоступны" };
+            model_not_found: "модели ИИ из настроек сервера недоступны",
+            overloaded: "серверы Google сейчас перегружены, ИИ не ответил — попробуйте через минуту" };
           return json(res, 503, { error: ERR[r.error] || "ИИ сейчас перегружен, попробуйте через минуту", reason: r.error, issues }), true;
         }
         return json(res, 200, { text: r.text, model: r.model, issues, note: "Ответ ИИ — пояснение расчёта, а не заключение агронома или госоргана." }), true;
