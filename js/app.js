@@ -1462,6 +1462,34 @@
       <div class="aibox" id="aiBox"><button class="btn btn-green btn-sm" id="aiBriefBtn">${ic("spark")} ${t("brief.ai")}</button>
         ${S.aiBrief && S.aiBrief.key === briefKey() ? `<div class="aitext">${aiText(S.aiBrief.text)}</div>${S.aiBrief.mark || ""}<p class="fine">${t("brief.aiNote")}</p>` : ""}</div>`;
   }
+  /**
+   * «Как NDVI превращается в овец»: та же цепочка, что в «Как рассчитано?» (engine.explainCapacity), но на виду —
+   * на примере выбранного участка, с пересчётом видов скота и честной оговоркой, что сезон и тип травостоя учтены не полностью.
+   */
+  function chainHtml() {
+    const known = S.plots.filter(p => capOf(p).known);
+    if (!known.length) return "";
+    const p = known.find(x => x.id === S.chainId) || known[0];
+    const e = J.explainCapacity(p, S.P), st = Object.fromEntries(e.steps.map(s => [s.key, s])), P = e.params, au = S.P.au;
+    const per = k => fmt1(1 / au[k]);
+    const steps = [
+      { v: String(st.ndvi.value), u: "NDVI", l: t("cap.s.ndvi"), f: t("cap.f.ndvi", { ha: fmt(st.area.value) }), s: "sat" },
+      { v: fmt(st.biomass.value), u: t("cap.u.kgha"), l: t("cap.s.biomass"), f: `(${st.ndvi.value} − ${P.ndvi0}) × ${fmt(P.k_ndvi)}`, s: "model" },
+      { v: fmt(st.forage.value / 1000), u: t("pop.t"), l: t("cap.s.forage"), f: `${fmt(st.area.value)} ${t("common.ha")} × ${fmt(st.biomass.value)} × ${P.util}`, s: "model" },
+      { v: fmt1(st.au_season.value), u: t("cap.u.au"), l: t("cap.s.au"), f: t("cap.f.au", { i: P.intake, d: P.season_days }), s: "model" },
+      { v: fmt(st.sheep.value), u: t("pop.sheep"), l: t("cap.s.sheep"), f: `${fmt1(st.au_season.value)} × ${per("sheep")}`, s: "model" },
+    ];
+    return `<section class="chain" aria-labelledby="chainH"><h3 id="chainH">${ic("leaf")} ${t("cap.title")}</h3>
+      <label class="field chain-pick">${t("cap.plot")}<select id="chainPlot">${known.map(x => `<option value="${esc(x.id)}" ${x.id === p.id ? "selected" : ""}>${esc(x.id)}</option>`).join("")}</select></label>
+      <ol class="chain-steps">${steps.map(x => `<li><div class="cv"><b>${x.v}</b> <span>${esc(x.u)}</span></div>
+        <div class="cl">${esc(x.l)} ${src(x.s)}<small>${esc(x.f)}</small></div></li>`).join("")}</ol>
+      <ul class="chain-notes">
+        <li>${t("cap.n.au", { cattle: per("cattle"), horses: per("horses"), sheep: per("sheep"), goats: per("goats") })}</li>
+        <li>${t("cap.n.season", { d: P.season_days })}</li>
+        <li>${t("cap.n.veg", { k: fmt(P.k_ndvi) })}</li>
+      </ul>
+      <button type="button" class="btn btn-soft btn-sm" data-how="${esc(p.id)}">${ic("info")} ${t("cap.more")}</button></section>`;
+  }
   const briefKey = () => S.D ? JSON.stringify([S.D.village.lat, S.D.village.lon, S.herds.map(h => [h.sheep, h.goats, h.cattle, h.horses, h.home, h.daily_return, h.allowed_plots]), [...S.added], [...S.forbidden], S.waterSet, S.P.k_ndvi, S.P.util, S.P.season_days, I.lang]) : "";
 
   // ---------- итог плана простыми словами: возможно ли, почему, что использовано, где дефицит, что изменить, насколько надёжно ----------
@@ -1571,12 +1599,14 @@
   }
 
   function paneBrief(el) {
-    el.innerHTML = briefHtml() + movesHtml() + wxHtml() +
+    el.innerHTML = briefHtml() + chainHtml() + movesHtml() + wxHtml() +
       (S.herds.length ? `<details class="more"><summary>${ic("chart")} ${t("brief.details")}</summary><div id="briefDetails"></div></details>` : "");
     const det = $("#briefDetails", el);
     if (det) paneOverview(det);
     el.querySelectorAll("[data-how]").forEach(b => b.onclick = () => openHow(b.dataset.how));
     el.querySelectorAll("[data-goto]").forEach(b => b.onclick = () => renderPane(b.dataset.goto));
+    const cp = $("#chainPlot", el);
+    if (cp) cp.onchange = () => { S.chainId = cp.value; const y = scrollY; renderPane("brief"); scrollTo(0, y); const n = $("#chainPlot"); if (n) n.focus(); };
     const dt = $("#demoToggle", el);
     if (dt) dt.onclick = () => {
       const has = S.herds.some(h => h.demo);
