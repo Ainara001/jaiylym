@@ -1,7 +1,7 @@
 // Текстовый отчёт по селу: node report.js
 const { Jaiylym: J, loadPlots, loadHerds } = require("./data");
 const D = loadPlots(), H = loadHerds();
-const cur = J.current(D.plots, H), pl = J.plan(D.plots, H);
+const cur = J.current(D.plots, H), pl = J.solve(D.plots, H);
 const pct = x => (isFinite(x) ? Math.round(x * 100) + "%" : "∞");
 
 console.log(`Село: ${D.village.name}. Снимки ${D.source.year}: ${D.source.dates.join(", ")}\n`);
