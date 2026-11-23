@@ -275,10 +275,14 @@ test("ИИ: ключ не нужен браузеру, проблемы данн
     assert.match(seen.system, /не агроном/);
     G.ask = async () => ({ ok: false, error: "timeout" });
     const r3 = await call("POST", "/api/ai", { ip: "10.7.7.3", body: { mode: "chat", context: ctx } });
-    assert.equal(r3.status, 503);
+    assert.equal(r3.status, 200, "Gemini не ответил — шаблонный ответ, а не ошибка");
+    assert.equal(r3.data.fallback, true);
     assert.match(r3.data.error, /не ответил вовремя/);
+    assert.match(r3.data.text, /ИИ сейчас недоступен/);
     G.ask = async () => ({ ok: false, error: "no_key" });
-    assert.match((await call("POST", "/api/ai", { ip: "10.7.7.4", body: {} })).data.error, /не настроен/);
+    const r4 = (await call("POST", "/api/ai", { ip: "10.7.7.4", body: {} })).data;
+    assert.match(r4.error, /не настроен/);
+    assert.match(r4.text, /Село не открыто/);
   } finally { G.ask = orig; }
 });
 
