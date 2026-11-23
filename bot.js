@@ -138,13 +138,39 @@ function compute(v) {
 
 async function ensureVillage(name, lat, lon, say) {
   const key = vkey(lat, lon);
-  if (state.villages[key]) return key;
+  if (state.villages[key]) { ensurePrev(key); return key; }
   await say(`Считаю пастбища «${name}» по снимкам Sentinel-2… это ~10–20 секунд.`);
   const res = await PL.buildVillage({ name, lat, lon });
   delete res.grid;
   state.villages[key] = { data: res, herds: [] };
   save();
+  ensurePrev(key);
   return key;
+}
+
+// прошлое лето села (то же окно июнь–август) — в фоне, чтобы ИИ мог сравнить годы; для села по умолчанию уже посчитано
+const prevPending = new Set();
+function ensurePrev(key) {
+  const v = state.villages[key];
+  if (!v || !v.data || !v.data.source || v.prev || prevPending.has(key)) return;
+  const year = v.data.source.year - 1;
+  if (v.data.prev_season && v.data.prev_season.year === year) { v.prev = v.data.prev_season; return; }
+  if (TEST) return;
+  prevPending.add(key);
+  PL.buildSeason({ lat: v.data.village.lat, lon: v.data.village.lon, year })
+    .then(s => { v.prev = s; save(); })
+    .catch(e => console.error("прошлое лето:", e.message))
+    .finally(() => prevPending.delete(key));
+}
+/** Сравнение лет для контекста ИИ: итог и участки, коротко. null — прошлое лето ещё не готово. */
+function prevContext(v) {
+  if (!v.prev || v.prev.status === "no_data") return null;
+  const c = PL.compareSeasons({ year: v.data.source.year, dates: v.data.source.dates || [],
+    plots: v.data.plots.map(p => ({ id: p.id, ndvi: p.ndvi, water_ha: p.water_obs_ha })) }, v.prev);
+  return { годы: c.years, безоблачных_дат: c.dates, сравнение_надёжно: c.reliable, порог_изменения_ndvi_проц: c.threshold_pct,
+    ndvi_медиана_изменения_проц: c.summary.ndvi_median_change_pct, участков_зеленее: c.summary.greener, участков_суше: c.summary.browner,
+    устойчивая_вода_по_снимкам_га: c.summary.water_total_ha,
+    участки: c.plots.map(x => `${x.id}: NDVI ${x.ndvi[0] ?? "?"}→${x.ndvi[1] ?? "?"} (${x.ndvi_change_pct ?? "?"} %), вода ${x.water_ha[0] ?? "?"}→${x.water_ha[1] ?? "?"} га`) };
 }
 
 async function reverseName(lat, lon) {
@@ -224,12 +250,15 @@ function textWells(v) {
 async function askGemini(question, v, herd) {
   if (!GEMINI_KEY) return null;
   const ctx = { село: v.data.village.name, лето: v.data.source.year };
+  ensurePrev(vkey(v.data.village.lat, v.data.village.lon));   // если прошлого лета ещё нет — к следующему вопросу будет
   try {
     const { pl, cur } = compute(v);
     ctx.участки = v.data.plots.map(p => ({ id: p.id, кольцо: p.ring === "near" ? "ближний" : "дальний", км: p.dist_km, направление: p.dir,
       пастбище_га: p.pasture_ha, ndvi: p.ndvi, вода: waterWord(p), нагрузка_сейчас: pct(cur.load[p.id].load), нагрузка_план: pct(pl.load[p.id].load),
       как_рассчитано: J.explainCapacity(p).steps.map(s => `${s.key}: ${s.formula} ${s.unit}`).join("; ") }));
     ctx.статус_плана = pl.status; ctx.демо_стад = (v.demo || []).length;
+    const prev = prevContext(v);
+    if (prev) ctx.прошлый_год = prev;
     if (herd) ctx.стадо = { имя: herd.name, демо: !!herd.demo, овцы: herd.sheep, козы: herd.goats, крс: herd.cattle, лошади: herd.horses, маршрут: pl.herdPlans[herd.id], не_хватает_усл_гол_дней: Math.round(pl.unmet[herd.id] || 0) };
   } catch (_) {}
   const kk = /[әғқңөұүһі]/i.test(question);
@@ -239,6 +268,7 @@ async function askGemini(question, v, herd) {
       : "Отвечай по-русски. ") +
     "Опирайся только на данные села и общие знания о выпасе. Не выдумывай цифры; числа пиши цифрами, как в данных; ёмкость и нагрузка — оценки модели. " +
     "Если нужного числа нет в данных — так и скажи. Право на участок и водопой никто не проверял — не утверждай обратное. Ты не агроном и не госорган. " +
+    "«прошлый_год» — то же окно июнь–август прошлого лета: изменения уже посчитаны; изменение NDVI меньше порога — «без изменений»; NDVI — зелёность, а не урожай; при сравнение_надёжно = false скажи об этом. " +
     "Пиши обычным текстом без markdown (без звёздочек и решёток) — это сообщение Telegram. " + G.SCOPE;
   const r = await G.ask({ system, input: `Данные села (JSON): ${JSON.stringify(ctx)}\n\nВопрос пастуха: ${String(question).slice(0, 1200)}`, maxTokens: kk ? 700 : 500 });
   return r.ok ? r.text : null;

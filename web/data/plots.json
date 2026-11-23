@@ -181,7 +181,9 @@
      "d": "2026-08-29",
      "v": 0.267
     }
-   ]
+   ],
+   "water_obs_ha": 4.6,
+   "water_obs_max_ha": 17.7
   },
   {
    "id": "Б-СВ",
@@ -335,7 +337,9 @@
      "d": "2026-08-29",
      "v": 0.279
     }
-   ]
+   ],
+   "water_obs_ha": 1.8,
+   "water_obs_max_ha": 23.3
   },
   {
    "id": "Б-В",
@@ -489,7 +493,9 @@
      "d": "2026-08-29",
      "v": 0.359
     }
-   ]
+   ],
+   "water_obs_ha": 7.2,
+   "water_obs_max_ha": 28.7
   },
   {
    "id": "Б-ЮВ",
@@ -643,7 +649,9 @@
      "d": "2026-08-29",
      "v": 0.231
     }
-   ]
+   ],
+   "water_obs_ha": 0.3,
+   "water_obs_max_ha": 12.5
   },
   {
    "id": "Б-Ю",
@@ -797,7 +805,9 @@
      "d": "2026-08-29",
      "v": 0.24
     }
-   ]
+   ],
+   "water_obs_ha": 0.5,
+   "water_obs_max_ha": 15.4
   },
   {
    "id": "Б-ЮЗ",
@@ -947,7 +957,9 @@
      "d": "2026-08-29",
      "v": 0.283
     }
-   ]
+   ],
+   "water_obs_ha": 0,
+   "water_obs_max_ha": 12
   },
   {
    "id": "Б-З",
@@ -1097,7 +1109,9 @@
      "d": "2026-08-29",
      "v": 0.259
     }
-   ]
+   ],
+   "water_obs_ha": 0.3,
+   "water_obs_max_ha": 17.4
   },
   {
    "id": "Б-СЗ",
@@ -1247,7 +1261,9 @@
      "d": "2026-08-29",
      "v": 0.207
     }
-   ]
+   ],
+   "water_obs_ha": 0.3,
+   "water_obs_max_ha": 7.7
   },
   {
    "id": "Д-С",
@@ -1397,7 +1413,9 @@
      "d": "2026-08-29",
      "v": 0.223
     }
-   ]
+   ],
+   "water_obs_ha": 2,
+   "water_obs_max_ha": 43.5
   },
   {
    "id": "Д-СВ",
@@ -1551,7 +1569,9 @@
      "d": "2026-08-29",
      "v": 0.287
     }
-   ]
+   ],
+   "water_obs_ha": 3.1,
+   "water_obs_max_ha": 96.2
   },
   {
    "id": "Д-В",
@@ -1705,7 +1725,9 @@
      "d": "2026-08-29",
      "v": 0.215
     }
-   ]
+   ],
+   "water_obs_ha": 1.5,
+   "water_obs_max_ha": 41.2
   },
   {
    "id": "Д-ЮВ",
@@ -1859,7 +1881,9 @@
      "d": "2026-08-29",
      "v": 0.241
     }
-   ]
+   ],
+   "water_obs_ha": 8.7,
+   "water_obs_max_ha": 54.3
   },
   {
    "id": "Д-Ю",
@@ -2013,7 +2037,9 @@
      "d": "2026-08-29",
      "v": 0.322
     }
-   ]
+   ],
+   "water_obs_ha": 0.8,
+   "water_obs_max_ha": 80.6
   },
   {
    "id": "Д-ЮЗ",
@@ -2163,7 +2189,9 @@
      "d": "2026-08-29",
      "v": 0.445
     }
-   ]
+   ],
+   "water_obs_ha": 3.1,
+   "water_obs_max_ha": 74.2
   },
   {
    "id": "Д-З",
@@ -2313,7 +2341,9 @@
      "d": "2026-08-29",
      "v": 0.378
     }
-   ]
+   ],
+   "water_obs_ha": 3.3,
+   "water_obs_max_ha": 72.7
   },
   {
    "id": "Д-СЗ",
@@ -2463,7 +2493,168 @@
      "d": "2026-08-29",
      "v": 0.307
     }
-   ]
+   ],
+   "water_obs_ha": 9.2,
+   "water_obs_max_ha": 70.9
   }
- ]
+ ],
+ "prev_season": {
+  "year": 2025,
+  "dates": [
+   "2025-06-05",
+   "2025-06-25",
+   "2025-06-30",
+   "2025-07-25",
+   "2025-08-19",
+   "2025-08-29"
+  ],
+  "status": "measured",
+  "valid_fraction": 1,
+  "plots": [
+   {
+    "id": "Б-С",
+    "ndvi": 0.306,
+    "valid_fraction": 1,
+    "obs_count": 6,
+    "water_ha": 2.3,
+    "water_max_ha": 14.1,
+    "water_obs": 6
+   },
+   {
+    "id": "Б-СВ",
+    "ndvi": 0.334,
+    "valid_fraction": 1,
+    "obs_count": 6,
+    "water_ha": 1.3,
+    "water_max_ha": 10.2,
+    "water_obs": 6
+   },
+   {
+    "id": "Б-В",
+    "ndvi": 0.408,
+    "valid_fraction": 1,
+    "obs_count": 6,
+    "water_ha": 6.1,
+    "water_max_ha": 30.5,
+    "water_obs": 6
+   },
+   {
+    "id": "Б-ЮВ",
+    "ndvi": 0.269,
+    "valid_fraction": 1,
+    "obs_count": 6,
+    "water_ha": 1,
+    "water_max_ha": 11.3,
+    "water_obs": 6
+   },
+   {
+    "id": "Б-Ю",
+    "ndvi": 0.297,
+    "valid_fraction": 1,
+    "obs_count": 6,
+    "water_ha": 0.5,
+    "water_max_ha": 7.4,
+    "water_obs": 6
+   },
+   {
+    "id": "Б-ЮЗ",
+    "ndvi": 0.35,
+    "valid_fraction": 1,
+    "obs_count": 6,
+    "water_ha": 1,
+    "water_max_ha": 15.1,
+    "water_obs": 6
+   },
+   {
+    "id": "Б-З",
+    "ndvi": 0.312,
+    "valid_fraction": 1,
+    "obs_count": 6,
+    "water_ha": 0.8,
+    "water_max_ha": 7.4,
+    "water_obs": 6
+   },
+   {
+    "id": "Б-СЗ",
+    "ndvi": 0.243,
+    "valid_fraction": 1,
+    "obs_count": 6,
+    "water_ha": 0.5,
+    "water_max_ha": 6.1,
+    "water_obs": 6
+   },
+   {
+    "id": "Д-С",
+    "ndvi": 0.251,
+    "valid_fraction": 1,
+    "obs_count": 6,
+    "water_ha": 0.5,
+    "water_max_ha": 22.5,
+    "water_obs": 6
+   },
+   {
+    "id": "Д-СВ",
+    "ndvi": 0.394,
+    "valid_fraction": 1,
+    "obs_count": 6,
+    "water_ha": 2.3,
+    "water_max_ha": 82.7,
+    "water_obs": 6
+   },
+   {
+    "id": "Д-В",
+    "ndvi": 0.268,
+    "valid_fraction": 1,
+    "obs_count": 6,
+    "water_ha": 1.3,
+    "water_max_ha": 30.5,
+    "water_obs": 6
+   },
+   {
+    "id": "Д-ЮВ",
+    "ndvi": 0.309,
+    "valid_fraction": 1,
+    "obs_count": 6,
+    "water_ha": 6.1,
+    "water_max_ha": 72.7,
+    "water_obs": 6
+   },
+   {
+    "id": "Д-Ю",
+    "ndvi": 0.438,
+    "valid_fraction": 1,
+    "obs_count": 6,
+    "water_ha": 0.3,
+    "water_max_ha": 47.1,
+    "water_obs": 6
+   },
+   {
+    "id": "Д-ЮЗ",
+    "ndvi": 0.568,
+    "valid_fraction": 1,
+    "obs_count": 6,
+    "water_ha": 0.8,
+    "water_max_ha": 54.5,
+    "water_obs": 6
+   },
+   {
+    "id": "Д-З",
+    "ndvi": 0.443,
+    "valid_fraction": 1,
+    "obs_count": 6,
+    "water_ha": 0.3,
+    "water_max_ha": 68.6,
+    "water_obs": 6
+   },
+   {
+    "id": "Д-СЗ",
+    "ndvi": 0.321,
+    "valid_fraction": 1,
+    "obs_count": 6,
+    "water_ha": 5.4,
+    "water_max_ha": 69.9,
+    "water_obs": 6
+   }
+  ]
+ }
 }

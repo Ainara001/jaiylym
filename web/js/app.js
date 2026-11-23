@@ -381,6 +381,7 @@
     drawVillage();
     render();
     if (!opts.herds) loadBotData();
+    loadPrev(key, data);
     if (S.histKey !== key) { S.histKey = key; C.addHistory({ kind: "open", village: data.village, summary: summary() }); }
     const want = opts.plot;
     if (want) setTimeout(() => focusPlot(want), 350);
@@ -597,6 +598,7 @@
       <tr><td>${t("pop.load")}</td><td><b>${l.known ? pct(l.load) : t("st.no_data")}</b> (${S.mode === "current" ? t("kpi.before") : t("kpi.after")})</td></tr>
       <tr><td>${t("pop.herds")}</td><td style="white-space:normal">${esc(names.join(", ")) || "—"}</td></tr>
       <tr><td>${t("pop.water")}</td><td style="white-space:normal">${esc(t("ws." + ws))}</td></tr>
+      ${prevRow(p)}
       </tbody></table>
       ${c.known ? "" : `<p class="note warn" style="margin:8px 0 0">${t("pop.noData")}</p>`}
       ${spark(p.series)}
@@ -891,6 +893,51 @@
     });
   }
 
+  // ---------- прошлое лето: те же участки, то же окно июнь–август, считается в фоне для любого села ----------
+  function loadPrev(key, data) {
+    const year = data.source.year - 1, pk = key + ":prev:" + year;
+    const done = season => {
+      if (S.loadingKey !== key) return;
+      S.prev = { year, state: season.status === "no_data" ? "none" : "ready", season };
+      if (S.tab === "data") renderPane("data");
+    };
+    if (data.prev_season && data.prev_season.year === year) return done(data.prev_season);
+    const hit = C.ls.get(pk, null);
+    if (hit && hit.plots) return done(hit);
+    if (!navigator.onLine) { S.prev = { year, state: "error" }; return; }
+    S.prev = { year, state: "loading" };
+    PL.buildSeason({ lat: data.village.lat, lon: data.village.lon, year })
+      .then(s => { C.ls.set(pk, s); done(s); })
+      .catch(() => { if (S.loadingKey === key) { S.prev = { year, state: "error" }; if (S.tab === "data") renderPane("data"); } });
+  }
+  /** Сравнение «прошлое лето → это лето» по участкам (pipeline.compareSeasons), или null, пока прошлое лето не готово. */
+  function prevCmp() {
+    if (!S.D || !S.prev || S.prev.state !== "ready") return null;
+    if (S.prev.cmpFor !== S.D) {
+      S.prev.cmp = PL.compareSeasons({ year: S.D.source.year, dates: S.D.source.dates || [],
+        plots: S.D.plots.map(p => ({ id: p.id, ndvi: p.ndvi, water_ha: p.water_obs_ha })) }, S.prev.season);
+      S.prev.cmpFor = S.D;
+    }
+    return S.prev.cmp;
+  }
+  const signed = v => (v > 0 ? "+" : "") + v;
+  function prevLine() {
+    if (!S.prev) return "";
+    const y = S.prev.year, c = prevCmp();
+    if (!c) return `<p class="note">${S.prev.state === "loading" ? t("prev.loading", { y }) : S.prev.state === "none" ? t("prev.none", { y }) : t("prev.error", { y })}</p>`;
+    const s = c.summary, w = s.water_total_ha;
+    return `<p class="note${c.reliable ? "" : " warn"}">${t("prev.sum", { y, y2: S.D.source.year, c: s.ndvi_median_change_pct == null ? "—" : signed(s.ndvi_median_change_pct) + " %",
+      g: s.greener, b: s.browner, s: s.same, t: c.threshold_pct })}${w[0] != null && w[1] != null ? " " + t("prev.water", { a: fmt1(w[0]), b: fmt1(w[1]) }) : ""} ${src("sat")}
+      ${c.reliable ? "" : "<br>" + t("prev.unreliable")}</p>`;
+  }
+  function prevRow(p) {
+    const c = prevCmp(), x = c && c.plots.find(q => q.id === p.id);
+    if (!x || (x.ndvi[0] == null && x.water_ha[0] == null)) return "";
+    const nd = x.ndvi[0] != null ? `NDVI ${x.ndvi[0]} → ${x.ndvi[1] ?? "?"}${x.ndvi_change_pct != null ? ` (${signed(x.ndvi_change_pct)} %)` : ""}` : "";
+    const wa = x.water_ha[0] != null && x.water_ha[1] != null ? t("prev.waterPlot", { a: fmt1(x.water_ha[0]), b: fmt1(x.water_ha[1]) }) : "";
+    return `<tr><td>${t("prev.row", { y: c.years[0] })}</td><td style="white-space:normal">${[nd, wa].filter(Boolean).join("; ")} ${src("sat")}</td></tr>`;
+  }
+
   function trendLine() {
     if (!S.D.source.base_year) return "";
     const avg = ring => { const xs = S.D.plots.filter(p => p.ring === ring && p.ndvi != null && p.ndvi_base != null); return xs.reduce((a, p) => a + p.ndvi - p.ndvi_base, 0) / xs.length; };
@@ -919,6 +966,7 @@
         <p style="margin-top:8px">${t("plots.quality")}: <span class="conf conf-high">${t("conf.high")} ${counts.high}</span> <span class="conf conf-medium">${t("conf.medium")} ${counts.medium}</span> <span class="conf conf-low">${t("conf.low")} ${counts.low}</span> <span class="conf conf-none">${t("conf.none")} ${counts.none}</span></p>
         <p class="fine">${t("fc.note")}</p>
         ${trendLine() ? `<p class="note">${trendLine()}</p>` : ""}
+        ${prevLine()}
         ${S.fromCache ? `<p class="note warn">${t("meta.cached", { d: meta.calculated_at ? dateStr(meta.calculated_at, false) : t("meta.unknownDate") })}</p>` : ""}
         ${days != null && days > 30 ? `<p class="note warn">${t("meta.stale", { n: Math.round(days) })}</p>` : ""}
         <h3>${t("meta.title")}</h3>${metaHtml(meta)}</div>
@@ -1531,6 +1579,12 @@
       поголовье_усл_голов: Math.round(b.au), поголовье_в_пересчёте_на_овец: Math.round(sheepOf(b.au)), сезон_дней: b.Sd,
       хватает_ли_корма: b.deficitT < 1 ? (b.ratio <= 0.7 ? "да, с запасом" : "да, впритык") : "нет, не на весь сезон",
       статус_плана: S.pl.status, версия_модели: M.MODEL_VERSION,
+      прошлый_год: (c => c ? {
+        годы: c.years, безоблачных_дат: c.dates, сравнение_надёжно: c.reliable, порог_изменения_ndvi_проц: c.threshold_pct,
+        ndvi_медиана_изменения_проц: c.summary.ndvi_median_change_pct, участков_зеленее: c.summary.greener, участков_суше: c.summary.browner,
+        участков_без_изменений: c.summary.same, устойчивая_вода_по_снимкам_га: c.summary.water_total_ha,
+        участки: c.plots.map(x => ({ id: x.id, ndvi: x.ndvi, изменение_проц: x.ndvi_change_pct, вода_га: x.water_ha })),
+      } : { статус: S.prev ? { loading: "считается", none: "нет безоблачных снимков", error: "не загрузилось" }[S.prev.state] || "нет" : "нет" })(prevCmp()),
       алгоритм: S.pl.algorithm === "fair-optimal-v1" ? "оптимизация: 1) у всех хозяйств одинаковая доля обеспеченности, насколько позволяют ограничения (max-min); 2) при этом максимум корма; 3) при этом минимум перегона; затем календарь"
         : "жадная эвристика (не оптимизатор)",
       доли_обеспеченности_проц: S.pl.shares ? Object.fromEntries(S.herds.filter(h => S.pl.shares[h.id] != null).map(h => [h.name, Math.round(S.pl.shares[h.id] * 100)])) : null,
