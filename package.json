@@ -11,7 +11,9 @@
     "site": "python3 -m http.server 8765 --directory web",
     "test:net": "node --test tests/net/*.net.js",
     "test:e2e": "node --test tests/e2e/*.e2e.js",
-    "report": "node report.js"
+    "report": "node report.js",
+    "i18n:review": "node scripts/i18n-review.js > docs/KK_REVIEW.md",
+    "live-check": "node scripts/live-check.js"
   },
   "engines": {
     "node": ">=20.12"
