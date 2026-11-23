@@ -1,8 +1,8 @@
 /* Jaiylym — интерфейс приложения.
- * Расчёты — web/engine.js (без изменений), спутник — web/pipeline.js, сервер — js/client.js. */
+ * Параметры модели — web/model.js, расчёты — web/engine.js, спутник — web/pipeline.js, сервер — js/client.js. */
 (function () {
   "use strict";
-  const J = window.Jaiylym, PL = window.JaiylymPipeline, C = window.Client, I = window.I18N, t = I.t;
+  const J = window.Jaiylym, M = window.JaiylymModel, PL = window.JaiylymPipeline, C = window.Client, I = window.I18N, t = I.t;
   const DEFAULT = window.JAIYLYM_DATA, DEMO_HERDS = window.JAIYLYM_HERDS;
   const BOT = "JAIYLYM_bot";
   const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -11,19 +11,29 @@
   const fmt1 = n => (+n).toLocaleString("ru-RU", { maximumFractionDigits: 1 });
   const two = n => String(n).padStart(2, "0");
   const dateStr = (s, time = true) => { const d = new Date(s); if (isNaN(d)) return ""; return `${two(d.getDate())}.${two(d.getMonth() + 1)}.${d.getFullYear()}` + (time ? ` ${two(d.getHours())}:${two(d.getMinutes())}` : ""); };
-  const pct = x => (isFinite(x) ? Math.round(x * 100).toLocaleString("ru-RU") + " %" : "∞");
+  const pct = x => (x == null ? "—" : isFinite(x) ? Math.round(x * 100).toLocaleString("ru-RU") + " %" : "∞");
   const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const ic = id => `<svg class="ic"><use href="#i-${id}"/></svg>`;
   const src = k => `<span class="src src-${k}">${t("src." + k)}</span>`;
   const coord = x => (x < 0 ? "m" : "") + Math.round(Math.abs(x) * 1000);
   const isKegen = (lat, lon) => Math.abs(lat - DEFAULT.village.lat) < 0.01 && Math.abs(lon - DEFAULT.village.lon) < 0.01;
 
+  // ---------- параметры модели: стандартные → калибровка (если есть) → свои (настройки) ----------
+  let paramErr = null;
+  function resolveParams(user, cal) {
+    try { return M.resolve({ user, calibrated: cal }); }
+    catch (e) { paramErr = e.message; try { return M.resolve({ calibrated: cal }); } catch (_) { return M.resolve(); } }
+  }
+
   // ---------- состояние ----------
   const S = {
-    D: null, plots: [], baseWater: {}, added: new Set(), herds: [], P: J.params(C.ls.get("jaiylym:params", null) || {}),
+    D: null, plots: [], baseWater: {}, added: new Set(), forbidden: new Set(), waterSet: {}, herds: [],
+    userP: C.ls.get("jaiylym:params", null) || {}, calib: C.ls.get("jaiylym:calibration", null), P: null, t0: 0,
     mode: C.ls.get("jaiylym:mode", "plan"), tab: "brief", cur: null, pl: null, botSubs: {}, picking: false, wx: null, aiBrief: null,
     map: null, layers: {}, group: null, ndviLayer: null, png: null, route: "home", loadingKey: null, histKey: null,
   };
+  S.P = resolveParams(S.userP, S.calib);
+  if (paramErr) { S.userP = {}; C.ls.del("jaiylym:params"); }
 
   // ---------- мелкие помощники ----------
   let toastTimer;
@@ -37,17 +47,16 @@
     el.classList.toggle("err", err);
     el.innerHTML = msg ? (busy ? '<span class="spin" aria-hidden="true"></span>' : "") + `<span>${esc(msg)}</span>` : "";
   }
-  const loadColor = x => (!x ? "#9aa29a" : x <= 0.7 ? "#3e8e5a" : x <= 1 ? "#c9970f" : "#bf4a2a");
+  const loadColor = x => (x == null ? "#d9d2bf" : !x ? "#9aa29a" : x <= 0.7 ? "#3e8e5a" : x <= 1 ? "#c9970f" : "#bf4a2a");
   const ndviColor = v => (v == null ? "#9aa29a" : v < 0.18 ? "#8c510a" : v < 0.25 ? "#d8b56a" : v < 0.32 ? "#9fd068" : "#2f9a4b");
-  // Достоверность спутникового показателя участка: число безоблачных снимков (series) и площадь пастбища
-  function confidence(p) {
-    if (p.ndvi == null || p.pasture_ha < 20) return "low";
-    const n = (p.series || []).length;
-    if (n >= 4 && p.pasture_ha >= 100) return "high";
-    if (n >= 2) return "medium";
-    return "low";
-  }
+  // Качество спутникового измерения (единое правило web/model.js) — НЕ достоверность числа овец
+  const confidence = p => M.satelliteQuality(p);
   const confTag = p => { const c = confidence(p); return `<span class="conf conf-${c}">${t("conf." + c)}</span>`; };
+  const fcTag = p => { const f = M.forageConfidence(p, S.P); return `<span class="conf conf-fc-${f}">${t("fc." + f)}</span>`; };
+  const capOf = p => J.plotCapacity(p, S.P);
+  const sheepCap = c => (c.known ? fmt(c.au_season / S.P.au.sheep) : "—");
+  const wsLabel = p => t("ws." + M.waterStatus(p));
+  const loadOf = (r, id) => r.load[id];
   const botLink = plotId => `https://t.me/${BOT}?start=` + (S.D ? (plotId
     ? `p_${coord(S.D.village.lat)}_${coord(S.D.village.lon)}_${PL.plotCode(plotId)}`
     : `v_${coord(S.D.village.lat)}_${coord(S.D.village.lon)}`) : "");
@@ -71,7 +80,7 @@
     if (/^lat=/.test(h)) return { route: "map", q: new URLSearchParams(h) };          // старые ссылки из бота
     const m = /^\/?([a-z]*)\??(.*)$/.exec(h) || [];
     const r = m[1] === "data" ? "about" : m[1];      // старая ссылка «О данных» ведёт в «Что это»
-    return { route: ["home", "map", "scenarios", "profile", "coord", "about", "ai", "settings"].includes(r) ? r : "home", q: new URLSearchParams(m[2] || "") };
+    return { route: ["home", "map", "scenarios", "profile", "coord", "about", "ai", "settings", "research"].includes(r) ? r : "home", q: new URLSearchParams(m[2] || "") };
   }
   function go(route, q) { location.hash = "#/" + route + (q ? "?" + q : ""); }
   function onRoute() {
@@ -106,6 +115,7 @@
     if (route === "about") { renderAbout(); renderDataPage(); }
     if (route === "ai") renderAI();
     if (route === "settings") renderSettings();
+    if (route === "research") renderResearch();
     const more = $("#moreDlg"); if (more && more.open) more.close();
     window.scrollTo(0, 0);
   }
@@ -162,24 +172,23 @@
 
   // ---------- свои пастбища: фермер рисует контур, NDVI считается по снимкам внутри него ----------
   const farmAU = () => (C.user && C.user.farm ? J.herdAU(C.user.farm, S.P) : 0);
-  function pastConf(st, area) {
-    const n = (st.series || []).length;
-    if (st.ndvi == null || area < 1) return "low";
-    if (n >= 4 && area >= 5) return "high";
-    return n >= 2 ? "medium" : "low";
-  }
+  // единое правило качества для своего пастбища и участков села (web/model.js)
+  const pastPlot = st => ({ ndvi: st.ndvi, pasture_ha: st.pasture_ha || 0, series: st.series, samples: st.samples, valid_fraction: st.valid_fraction, obs_count: st.obs_count });
+  const pastConf = st => M.satelliteQuality(pastPlot(st));
   function pastureRows(st, area, water) {
-    const cap = J.plotCapacity({ ndvi: st.ndvi, pasture_ha: st.pasture_ha }, S.P);
-    const au = farmAU(), load = au && cap.au_days > 0 ? au * S.P.season_days / cap.au_days : null;
-    const c = pastConf(st, area);
+    const cap = J.plotCapacity(pastPlot(st), S.P);
+    const au = farmAU(), load = au && cap.known && cap.au_days > 0 ? au * S.P.season_days / cap.au_days : null;
+    const c = pastConf(st);
+    const comp = st.excluded_ha != null ? `<tr><td>${t("past.comp")}</td><td style="white-space:normal">${fmt1(st.pasture_ha)} / ${fmt1(st.excluded_ha)} / ${fmt1(st.uncertain_ha || 0)} ${t("common.ha")} ${src("sat")}</td></tr>` : "";
+    const prov = st.provenance === "client_reported" ? `<p class="fine" style="margin:6px 0 0">${t("past.unverified")}</p>` : "";
     return `<table><tbody>
       <tr><td>${t("past.area")}</td><td>${fmt1(area)} ${t("common.ha")} ${src("input")}</td></tr>
-      <tr><td>${t("past.usable")}</td><td>${fmt1(st.pasture_ha)} ${t("common.ha")} ${src("sat")}</td></tr>
-      <tr><td>NDVI ${st.year || ""}</td><td>${st.ndvi ?? "—"} ${src("sat")} <span class="conf conf-${c}">${t("conf." + c)}</span></td></tr>
-      <tr><td>${t("past.cap")}</td><td>≈ ${fmt(cap.au_season / S.P.au.sheep)} ${t("pop.sheep")} ${src("model")}</td></tr>
-      <tr><td>${t("past.myLoad")}</td><td>${load == null ? `<small>${t("past.noFarm")}</small>` : `<b style="color:${loadColor(load)}">${pct(load)}</b> ${src("model")}`}</td></tr>
-      <tr><td>${t("pop.water")}</td><td>${water ? t("pop.hasWater").replace(/ \(.*\)/, "") : "—"}${st.water_on_map ? ` (${t("past.waterMap")})` : ""}</td></tr>
-      </tbody></table>${spark(st.series)}
+      <tr><td>${t("past.usable")}</td><td>${fmt1(st.pasture_ha)} ${t("common.ha")} ${src("sat")}</td></tr>${comp}
+      <tr><td>NDVI ${st.year || ""}</td><td>${st.ndvi ?? t("st.no_data")} ${src("sat")} <span class="conf conf-${c}">${t("conf." + c)}</span></td></tr>
+      <tr><td>${t("past.cap")}</td><td>${cap.known ? "≈ " + sheepCap(cap) + " " + t("pop.sheep") : t("st.no_data")} ${src("model")} ${fcTag(pastPlot(st))}</td></tr>
+      <tr><td>${t("past.myLoad")}</td><td>${load == null ? `<small>${cap.known ? t("past.noFarm") : t("st.no_data")}</small>` : `<b style="color:${loadColor(load)}">${pct(load)}</b> ${src("model")}`}</td></tr>
+      <tr><td>${t("pop.water")}</td><td>${water ? t("ws.confirmed") : "—"}${st.water_on_map ? ` (${t("past.waterMap")})` : ""}</td></tr>
+      </tbody></table>${spark(st.series)}${prov}
       ${st.wc_pasture_share != null ? `<p class="fine" style="margin:6px 0 0">${t("past.wc", { p: Math.round(st.wc_pasture_share * 100) })}</p>` : ""}`;
   }
   const pastLink = id => `https://t.me/${BOT}?start=m_${id}`;
@@ -292,7 +301,8 @@
   async function savePasture({ ring, st, name, water }) {
     try {
       await C.addPasture({ name, water, geometry: { type: "Polygon", coordinates: [ring.concat([ring[0]])] },
-        stats: { ndvi: st.ndvi, series: st.series, pasture_ha: st.pasture_ha, wc_pasture_share: st.wc_pasture_share, water_on_map: st.water_on_map, year: st.year } });
+        stats: { ndvi: st.ndvi, series: st.series, pasture_ha: st.pasture_ha, excluded_ha: st.excluded_ha, uncertain_ha: st.uncertain_ha,
+          wc_pasture_share: st.wc_pasture_share, valid_fraction: st.valid_fraction, water_on_map: st.water_on_map, year: st.year } });
       toast(t("past.saved"));
       drawPastures();
     } catch (e) { toast(errText(e), true); }
@@ -342,7 +352,7 @@
         } });
         if (S.loadingKey !== key) return;                      // пока считали, выбрали другое место
         png = ndviPng(res.grid); delete res.grid;
-        data = res;
+        data = res; S.justBuilt = true;
         C.ls.set(key, Object.assign({}, res, { png }));
       } catch (e) {
         if (S.loadingKey === key) status(t("err.build") + ": " + e.message, { err: true });
@@ -350,12 +360,15 @@
       }
     }
     status("");
-    S.D = data; S.png = png;
-    S.baseWater = Object.fromEntries(data.plots.map(p => [p.id, p.water]));
+    S.D = data; S.png = png; S.fromCache = !isKegen(lat, lon) && !!C.ls.get(key, null) && !S.justBuilt; S.justBuilt = false;
+    S.t0 = Date.now();
+    S.baseWater = Object.fromEntries(data.plots.map(p => [p.id, M.waterUsable(p)]));
     S.added = new Set((opts.water || []).filter(id => S.baseWater[id] === false));
-    if (opts.params) Object.assign(S.P, opts.params);
+    S.forbidden = new Set(opts.forbidden || []);
+    S.waterSet = Object.assign({}, opts.water_status || {});
+    if (opts.params) { S.userP = Object.assign({}, S.userP, opts.params); paramErr = null; S.P = resolveParams(S.userP, S.calib); if (paramErr) toast(paramErr, true); }
     rebuildPlots();
-    S.herds = opts.herds ? opts.herds.map(h => Object.assign({}, h)) : (isKegen(lat, lon) && C.ls.get("jaiylym:demo", true) ? DEMO_HERDS.map(h => Object.assign({ demo: true }, h)) : []);
+    S.herds = opts.herds ? opts.herds.map(h => Object.assign({}, h)) : (isKegen(lat, lon) && C.ls.get("jaiylym:demo", true) ? demoHerds() : []);
     addOwnFarm();
     S.botSubs = {};
     C.ls.set("jaiylym:last", { name: data.village.name, lat: data.village.lat, lon: data.village.lon });
@@ -372,19 +385,26 @@
     if (opts.draw) setTimeout(startDraw, 450);
   }
 
+  // ввод пользователя поверх спутниковых данных: смоделированный водопой, подтверждение/отсутствие воды, закрытый участок
   function rebuildPlots() {
-    S.plots = S.D.plots.map(p => Object.assign({}, p, {
-      water: S.baseWater[p.id] || S.added.has(p.id),
-      water_source: S.added.has(p.id) ? t("pop.hasWater") : p.water_source,
-    }));
+    S.plots = S.D.plots.map(p => {
+      const o = Object.assign({}, p);
+      if (S.added.has(p.id)) { o.water_status = "modeled"; o.water = true; o.water_source = t("ws.modeled"); }
+      else if (S.waterSet[p.id]) { o.water_status = S.waterSet[p.id]; o.water = M.waterUsable(o); }
+      else { o.water_status = M.waterStatus(p); o.water = M.waterUsable(o); }
+      o.forbidden = S.forbidden.has(p.id);
+      return o;
+    });
   }
+  const demoHerds = () => DEMO_HERDS.map(h => Object.assign({}, h, { demo: true }));
   function addOwnFarm() {
     const u = C.user;
     S.herds = S.herds.filter(h => !h.mine);
     if (!u || !u.farm || !S.D) return;
     const f = u.farm;
     if (Math.abs(f.village.lat - S.D.village.lat) > 0.0015 || Math.abs(f.village.lon - S.D.village.lon) > 0.0015) return;
-    S.herds.unshift({ id: "mine", mine: true, name: f.name, sheep: f.sheep, goats: f.goats, cattle: f.cattle, horses: f.horses, home: f.home, daily_return: f.daily_return });
+    S.herds.unshift({ id: "mine", mine: true, name: f.name, sheep: f.sheep, goats: f.goats, cattle: f.cattle, horses: f.horses, home: f.home, daily_return: f.daily_return,
+      allowed_plots: (f.plots || []).length ? f.plots.slice() : undefined });
   }
 
   async function loadBotData() {
@@ -435,39 +455,64 @@
 
   // ---------- расчёт и отрисовка ----------
   function summary() {
-    const cur = J.current(S.plots, S.herds, S.P), pl = J.plan(S.plots, S.herds, S.P);
-    return { overloaded_before: cur.overloaded, overloaded_after: pl.overloaded,
+    const cur = S.cur || J.current(S.plots, S.herds, S.P), pl = S.pl || J.plan(S.plots, S.herds, S.P);
+    return { overloaded_before: cur.overloaded, overloaded_after: pl.overloaded, status: pl.status,
       excess_t: +J.hayTonnes(cur.deficit_kg, S.P).toFixed(1), deficit_t: +J.hayTonnes(pl.deficit_kg, S.P).toFixed(1),
-      herds: S.herds.length, au: Math.round(S.herds.reduce((s, h) => s + J.herdAU(h, S.P), 0)), water_added: [...S.added] };
+      herds: S.herds.length, herds_short: (pl.herds_short || []).length, demo: S.herds.some(h => h.demo),
+      au: Math.round(S.herds.reduce((s, h) => s + J.herdAU(h, S.P), 0)), water_added: [...S.added], forbidden: [...S.forbidden],
+      missing: S.plots.filter(p => p.ndvi == null).length, model_version: M.MODEL_VERSION };
   }
 
   function render() {
     if (!S.D) return;
-    S.cur = J.current(S.plots, S.herds, S.P);
-    S.pl = J.plan(S.plots, S.herds, S.P);
+    try {
+      S.cur = J.current(S.plots, S.herds, S.P);
+      S.pl = J.plan(S.plots, S.herds, S.P);
+    } catch (e) { status(t("err.calc") + ": " + e.message, { err: true }); return; }
     const past = S.plots.reduce((s, p) => s + p.pasture_ha, 0);
-    $("#vtitle").innerHTML = `<b>${esc(S.D.village.name)}</b> · Sentinel-2, ${S.D.source.year} · ${fmt(past)} ${t("common.ha")} ${src("sat")}`;
+    $("#vtitle").innerHTML = `<b>${esc(S.D.village.name)}</b> · Sentinel-2, ${S.D.source.year} · ${fmt(past)} ${t("common.ha")} ${src("sat")}${freshness()}`;
+    metric("plan", { status: S.pl.status, before: J.hayTonnes(S.cur.deficit_kg, S.P), after: J.hayTonnes(S.pl.deficit_kg, S.P),
+      over: S.cur.overloaded, missing: S.plots.filter(p => p.ndvi == null).length, herds: S.herds.length });
     paintMap();
     renderPane(S.tab);
+  }
+  /** Дата расчёта и источник: кэш браузера помечается, старые данные — предупреждение. */
+  function freshness() {
+    const meta = M.metaOf(S.D);
+    const at = meta.calculated_at, days = at ? (Date.now() - Date.parse(at)) / 864e5 : null;
+    const when = at ? dateStr(at, false) : t("meta.unknownDate");
+    const stale = days != null && days > 30;
+    return ` · <span class="fresh${stale || S.fromCache ? " stale" : ""}" title="${esc(t("meta.calc"))}">${t("meta.calcShort", { d: when })}${S.fromCache ? " · " + t("meta.fromCache") : ""}</span>`;
   }
 
   function plotLabel(p) {
     const r = S.mode === "current" ? S.cur : S.pl, l = r.load[p.id];
     const small = window.matchMedia("(max-width: 860px)").matches;
-    if (S.mode === "ndvi") return `${p.id}<br>${p.ndvi ?? "—"}`;
+    if (S.mode === "ndvi") return `${p.id}<br>${p.ndvi ?? "?"}`;
+    if (!l.known) return `${p.id}<br>?`;
+    if (p.forbidden) return `${p.id}<br>${t("pop.closedTag")}`;
     return l.used ? `${p.id}<br>${pct(l.load)}` : (small ? p.id : `${p.id}<br>${t("map.free")}`);
   }
   function plotFill(p) {
     const r = S.mode === "current" ? S.cur : S.pl;
-    return S.mode === "ndvi" ? ndviColor(p.ndvi) : loadColor(r.load[p.id].load);
+    if (S.mode === "ndvi") return ndviColor(p.ndvi);
+    return r.load[p.id].known ? loadColor(r.load[p.id].load) : loadColor(null);
+  }
+  // граница участка = вода и правовой статус по введённым данным; заливка = нагрузка (или трава)
+  function plotStroke(p) {
+    if (p.forbidden) return { color: "#bf4a2a", weight: 3, dashArray: "2 5" };
+    const ws = p.water_status || M.waterStatus(p);
+    if (ws === "confirmed") return { color: "#1f6fa3", weight: 3.2, dashArray: null };
+    if (ws === "satellite" || ws === "modeled") return { color: "#8fd3ff", weight: 2.6, dashArray: ws === "modeled" ? "8 4" : null };
+    if (ws === "assumed") return { color: "#ffffff", weight: 1.4, dashArray: null };
+    return { color: "#ffffff", weight: 1.2, dashArray: "4 4" };
   }
   function paintMap() {
     if (S.noLeaflet) { renderSchemeMap(); }
     else {
       for (const p of S.plots) {
         const lay = S.layers[p.id]; if (!lay) continue;
-        lay.setStyle({ fillColor: plotFill(p), fillOpacity: S.mode === "ndvi" ? 0.06 : 0.5, color: p.water ? "#8fd3ff" : "#ffffff",
-          weight: p.water && p.ring === "far" ? 2.6 : 1.2, dashArray: p.water ? null : "4 4" });
+        lay.setStyle(Object.assign({ fillColor: plotFill(p), fillOpacity: S.mode === "ndvi" ? 0.06 : 0.5 }, plotStroke(p)));
         lay.setTooltipContent(plotLabel(p));
       }
       if (S.ndviLayer) { if (S.mode === "ndvi") S.ndviLayer.addTo(S.group); else S.ndviLayer.remove(); }
@@ -480,9 +525,11 @@
       lg.setAttribute("role", "button"); lg.tabIndex = 0;
       lg.addEventListener("keydown", e => { if (e.key === "Enter") lg.classList.toggle("collapsed"); });
     }
+    const border = `<b class="lg-h">${t("map.legend.border")}</b><i style="border:3px solid #1f6fa3"></i>${t("map.legend.wconf")}<br><i style="border:2px solid #8fd3ff"></i>${t("map.legend.wsat")}<br>` +
+      `<i style="border:1.5px solid #c9c9c9"></i>${t("map.legend.wassumed")}<br><i style="border:1.5px dashed #555"></i>${t("map.legend.wnone")}<br><i style="border:2px dotted #bf4a2a"></i>${t("map.legend.closed")}<br><small>${t("map.legend.rights")}</small>`;
     lg.innerHTML = S.mode === "ndvi"
-      ? `<b>${t("map.legend.ndvi")} ${S.D.source.year}</b><i style="background:#2f9a4b"></i>${t("map.legend.dense")}<br><i style="background:#9fd068"></i>${t("map.legend.mid")}<br><i style="background:#d8b56a"></i>${t("map.legend.sparse")}<br><i style="background:#8c510a"></i>${t("map.legend.none")}<br><small>${t("map.legend.nonpasture")}</small>`
-      : `<b>${t("map.legend.load")}</b><i style="background:#3e8e5a"></i>${t("map.legend.ok")}<br><i style="background:#c9970f"></i>${t("map.legend.warn")}<br><i style="background:#bf4a2a"></i>${t("map.legend.bad")}<br><i style="background:#9aa29a"></i>${t("map.legend.idle")}<br><i style="border:2px solid #2f7aa6"></i>${t("map.legend.water")}<br><i style="border:1.5px dashed #555"></i>${t("map.legend.nowater")}`;
+      ? `<b>${t("map.legend.ndvi")} ${S.D.source.year}</b><i style="background:#2f9a4b"></i>${t("map.legend.dense")}<br><i style="background:#9fd068"></i>${t("map.legend.mid")}<br><i style="background:#d8b56a"></i>${t("map.legend.sparse")}<br><i style="background:#8c510a"></i>${t("map.legend.none")}<br><i style="background:#9aa29a"></i>${t("map.legend.nodata")}<br><small>${t("map.legend.nonpasture")}</small>`
+      : `<b>${t("map.legend.load")}</b><i style="background:#3e8e5a"></i>${t("map.legend.ok")}<br><i style="background:#c9970f"></i>${t("map.legend.warn")}<br><i style="background:#bf4a2a"></i>${t("map.legend.bad")}<br><i style="background:#9aa29a"></i>${t("map.legend.idle")}<br><i style="background:#d9d2bf"></i>${t("map.legend.nodata")}<br>${border}`;
     $$(".modes button").forEach(b => { const on = b.dataset.mode === S.mode; b.classList.toggle("on", on); b.setAttribute("aria-selected", on); });
   }
 
@@ -499,7 +546,7 @@
       const i = dirs.indexOf(p.dir), [r1, r2] = p.ring === "near" ? rNear : rFar;
       const a1 = (i * 45 - 22.5) * Math.PI / 180, a2 = (i * 45 + 22.5) * Math.PI / 180, am = i * 45 * Math.PI / 180;
       const [lx, ly] = pt((r1 + r2) / 2, am);
-      const stroke = p.water && p.ring === "far" ? "#8fd3ff" : (dark ? "#1b3f30" : "#ffffff");
+      const stroke = p.forbidden ? "#bf4a2a" : p.water && p.ring === "far" ? "#8fd3ff" : (dark ? "#1b3f30" : "#ffffff");
       const lab = labelOf(p);
       return `<g${interactive ? ` data-plot="${p.id}" tabindex="0" role="button" aria-label="${esc(p.id)}" style="cursor:pointer"` : ""}>
         <path d="${arc(r1, r2, a1, a2)}" fill="${colorOf(p)}" stroke="${stroke}" stroke-width="${p.water && p.ring === "far" ? 2.5 : 1.5}" ${p.water ? "" : 'stroke-dasharray="3 3"'}/>
@@ -511,7 +558,7 @@
   function renderSchemeMap() {
     const el = $("#schemeMap");
     el.innerHTML = `<p class="fine">${ic("wifioff")} ${t("map.fallback")}</p>` +
-      scheme(S.plots, plotFill, p => { const l = (S.mode === "current" ? S.cur : S.pl).load[p.id]; return S.mode === "ndvi" ? String(p.ndvi ?? "—") : (l.used ? pct(l.load) : ""); }, { size: 520, interactive: true });
+      scheme(S.plots, plotFill, p => { const l = (S.mode === "current" ? S.cur : S.pl).load[p.id]; return S.mode === "ndvi" ? String(p.ndvi ?? "?") : !l.known ? "?" : (l.used ? pct(l.load) : ""); }, { size: 520, interactive: true });
     el.querySelectorAll("[data-plot]").forEach(g => {
       g.onclick = () => openPlot(g.dataset.plot);
       g.onkeydown = e => { if (e.key === "Enter") openPlot(g.dataset.plot); };
@@ -532,27 +579,79 @@
       <text x="2" y="${h - 1}" font-size="10" fill="#627064">${d(series[0].d)}</text><text x="${w - 2}" y="${h - 1}" font-size="10" fill="#627064" text-anchor="end">${d(series[series.length - 1].d)}</text></svg>`;
   }
   function plotHtml(p) {
-    const c = J.plotCapacity(p, S.P), l = (S.mode === "current" ? S.cur : S.pl).load[p.id];
+    const c = capOf(p), l = (S.mode === "current" ? S.cur : S.pl).load[p.id];
     const names = l.herds.map(x => (S.herds.find(h => h.id === x.herd) || {}).name).filter(Boolean);
-    const ndviRow = p.ndvi_base != null ? `${p.ndvi_base} → ${p.ndvi}` : (p.ndvi ?? "—");
+    const ndviRow = p.ndvi_base != null ? `${p.ndvi_base} → ${p.ndvi ?? "?"}` : (p.ndvi ?? t("st.no_data"));
+    const ws = M.waterStatus(p), userWs = S.waterSet[p.id] || "";
     return `<div class="pop"><h3 style="margin:0 0 6px">${esc(p.id)} <small style="font-weight:500;color:#627064">${p.ring === "near" ? t("pop.near") : t("pop.far")}, ~${p.dist_km} ${t("common.km")}, ${p.dir}</small></h3>
       <table><tbody>
       <tr><td>${t("pop.pasture")}</td><td>${fmt(p.pasture_ha)} ${t("common.ha")} ${src("sat")}</td></tr>
       <tr><td>${t("pop.ndvi")}${p.ndvi_base != null ? ` ${S.D.source.base_year} → ${S.D.source.year}` : ""}</td><td>${ndviRow} ${src("sat")}</td></tr>
-      <tr><td>${t("pop.conf")}</td><td>${confTag(p)}</td></tr>
-      <tr><td>${t("pop.forage")}</td><td>${fmt(c.forage / 1000)} ${t("pop.t")} ${src("model")}</td></tr>
-      <tr><td>${t("pop.cap")}</td><td>≈ ${fmt(c.au_season / S.P.au.sheep)} ${t("pop.sheep")} ${src("model")}</td></tr>
-      <tr><td>${t("pop.load")}</td><td><b>${pct(l.load)}</b> (${S.mode === "current" ? t("kpi.before") : t("kpi.after")})</td></tr>
+      <tr><td>${t("pop.quality")}</td><td>${confTag(p)}</td></tr>
+      <tr><td>${t("pop.forageConf")}</td><td>${fcTag(p)}</td></tr>
+      <tr><td>${t("pop.forage")}</td><td>${c.known ? fmt(c.forage / 1000) + " " + t("pop.t") : t("st.no_data")} ${src("model")}</td></tr>
+      <tr><td>${t("pop.cap")}</td><td>${c.known ? "≈ " + sheepCap(c) + " " + t("pop.sheep") : t("st.no_data")} ${src("model")}</td></tr>
+      <tr><td>${t("pop.load")}</td><td><b>${l.known ? pct(l.load) : t("st.no_data")}</b> (${S.mode === "current" ? t("kpi.before") : t("kpi.after")})</td></tr>
       <tr><td>${t("pop.herds")}</td><td style="white-space:normal">${esc(names.join(", ")) || "—"}</td></tr>
-      <tr><td>${t("pop.water")}</td><td style="white-space:normal">${esc(p.water_source)}</td></tr>
+      <tr><td>${t("pop.water")}</td><td style="white-space:normal">${esc(t("ws." + ws))}</td></tr>
       </tbody></table>
+      ${c.known ? "" : `<p class="note warn" style="margin:8px 0 0">${t("pop.noData")}</p>`}
       ${spark(p.series)}
-      ${p.ring === "far" && S.baseWater[p.id] === false ? `<label class="check" style="margin-top:8px"><input type="checkbox" data-water="${p.id}" ${S.added.has(p.id) ? "checked" : ""}> ${t("pop.hasWater")} ${src("input")}</label>` : ""}
+      <button type="button" class="btn btn-soft btn-sm" style="width:100%;margin-top:10px" data-how="${esc(p.id)}">${ic("info")} ${t("pop.how")}</button>
+      <label class="field" style="margin-top:8px">${t("ws.set")} ${src("input")}<select data-ws="${esc(p.id)}">
+        <option value="" ${userWs ? "" : "selected"}>${t("ws.asIs")}: ${esc(t("ws." + M.waterStatus(S.D.plots.find(x => x.id === p.id) || p)))}</option>
+        <option value="confirmed" ${userWs === "confirmed" ? "selected" : ""}>${t("ws.confirmed")}</option>
+        <option value="absent" ${userWs === "absent" ? "selected" : ""}>${t("ws.absent")}</option></select></label>
+      ${S.baseWater[p.id] === false && !userWs ? `<label class="check" style="margin-top:8px"><input type="checkbox" data-water="${p.id}" ${S.added.has(p.id) ? "checked" : ""}> ${t("pop.hasWater")} ${src("input")}</label>` : ""}
+      <label class="check" style="margin-top:8px"><input type="checkbox" data-closed="${esc(p.id)}" ${S.forbidden.has(p.id) ? "checked" : ""}> ${t("pop.closed")} ${src("input")}</label>
       <a class="btn btn-tg btn-sm" style="width:100%;margin-top:10px;color:#fff" href="${botLink(p.id)}" target="_blank" rel="noopener">${ic("send")} ${t("pop.subscribe")}</a>
       ${S.botSubs[p.id] ? `<p class="fine" style="margin:6px 0 0">${t("pop.subsCount", { n: S.botSubs[p.id] })}</p>` : ""}</div>`;
   }
   function bindPlotHtml(root) {
     root.querySelectorAll("[data-water]").forEach(chk => chk.onchange = () => { toggleWater(chk.dataset.water, chk.checked); });
+    root.querySelectorAll("[data-how]").forEach(b => b.onclick = () => openHow(b.dataset.how));
+    root.querySelectorAll("[data-closed]").forEach(chk => chk.onchange = () => {
+      const id = chk.dataset.closed;
+      chk.checked ? S.forbidden.add(id) : S.forbidden.delete(id);
+      rebuildPlots(); render(); if (S.map) S.map.closePopup();
+      toast((chk.checked ? t("pop.closedOn") : t("pop.closedOff")) + ": " + id);
+    });
+    root.querySelectorAll("[data-ws]").forEach(sel => sel.onchange = () => {
+      const id = sel.dataset.ws;
+      if (sel.value) { S.waterSet[id] = sel.value; S.added.delete(id); } else delete S.waterSet[id];
+      rebuildPlots(); render(); if (S.map) S.map.closePopup();
+    });
+  }
+
+  // ---------- «Как рассчитано?»: пошаговый расчёт, который можно повторить на калькуляторе ----------
+  function openHow(id, herdId) {
+    const p = S.plots.find(x => x.id === id); if (!p) return;
+    const herd = herdId ? S.herds.find(h => h.id === herdId) : null;
+    const e = J.explainCapacity(p, S.P, herd);
+    const meta = M.metaOf(S.D);
+    const val = s => (s.value == null ? (s.key === "ndvi" ? t("st.no_data") : "—") : s.key === "ndvi" ? String(s.value) : fmt1(s.value));
+    const unit = s => (s.key === "ndvi" ? "" : esc(t("unit." + s.key)));
+    const formula = s => (s.kind === "sat" ? esc(t("how.f." + s.key)) : `<code>${esc(s.formula)}</code>`);
+    const rows = e.steps.map(s => `<tr><td>${t("how.step." + s.key)}</td><td style="white-space:normal">${formula(s)}</td>
+      <td class="num"><b>${val(s)}</b> ${unit(s)}</td><td>${src(s.kind)}</td></tr>`).join("");
+    const limits = [];
+    if (!e.capacity.known) limits.push(t("how.lnd"));
+    if (e.capacity.status === "insufficient_quality") limits.push(t("how.llq"));
+    limits.push(t("how.l1"), t("how.l2"), t("how.l3"), t("how.l4"));
+    const d = document.createElement("dialog");
+    d.className = "modal modal-wide";
+    d.innerHTML = `<form method="dialog" class="modal-x"><button aria-label="${t("common.close")}">${ic("x")}</button></form>
+      <h2>${t("how.title", { id: esc(p.id) })}</h2>
+      <p class="fine">${t("how.calc")} ${herd ? t("how.herdFor") + " «" + esc(herd.name) + "»." : ""}</p>
+      <div class="tablewrap"><table class="how"><tbody>${rows}
+        <tr><td>${t("how.step.dates")}</td><td colspan="3" style="white-space:normal">${meta.scene_dates.map(x => dateStr(x, false)).join(", ") || "—"} ${src("sat")}</td></tr>
+        <tr><td>${t("how.step.k")}</td><td colspan="3">k_ndvi = ${e.params.k_ndvi} ${t("unit.k")}, ndvi0 = ${e.params.ndvi0}; ${t("how.step.util")}: ${e.params.util}; intake = ${e.params.intake} ${t("unit.intake")} ${src("model")}</td></tr>
+      </tbody></table></div>
+      <h3>${t("how.limits")}</h3><ul class="todo">${limits.map(x => `<li>${ic("info")}<span>${x}</span></li>`).join("")}</ul>
+      <p class="fine">${t("how.version", { v: e.model_version, f: e.field_validated ? t("how.yes") : t("how.no") })}</p>`;
+    document.body.appendChild(d);
+    d.addEventListener("close", () => d.remove());
+    d.showModal();
   }
   let plotDlg;
   function openPlot(id) {
@@ -590,7 +689,7 @@
     $$(".tabs [data-tab]").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === tab));
     $$(".pane").forEach(p => { p.hidden = p.dataset.pane !== tab; });
     const el = $(`.pane[data-pane="${tab}"]`);
-    ({ brief: paneBrief, overview: paneBrief, herds: paneHerds, routes: paneRoutes, water: paneWater, plots: panePlots, data: paneData })[tab](el);
+    ({ brief: paneBrief, overview: paneBrief, herds: paneHerds, routes: paneRoutes, water: paneWater, plots: panePlots, data: paneData, whatif: paneWhatIf })[tab](el);
   }
 
   function kpi(label, a, b, srcs, fmtFn = fmt, lowerIsBetter = true) {
@@ -621,7 +720,7 @@
   function paneOverview(el) {
     if (!S.herds.length) {
       el.innerHTML = `<p class="empty">${t("ov.noherds")}</p><button class="btn btn-soft" id="addDemo">${ic("plus")} ${t("ov.addDemo")}</button> <button class="btn btn-ghost" id="addHerd0">${ic("plus")} ${t("herds.add")}</button>${paramsBlock()}`;
-      $("#addDemo", el).onclick = () => { S.herds = DEMO_HERDS.map(h => Object.assign({ demo: true }, h)); render(); };
+      $("#addDemo", el).onclick = () => { S.herds = demoHerds(); render(); };
       $("#addHerd0", el).onclick = () => { addHerd(); renderPane("herds"); };
       bindParams(el);
       return;
@@ -643,27 +742,56 @@
       </div>${paramsBlock()}`;
     bindParams(el);
   }
+  // параметры модели: диапазон, единицы и происхождение (стандарт / калибровка / свой) видны у каждого поля
+  const PARAM_FIELDS = [["season_days", "params.season"], ["intake", "params.intake"], ["util", "params.util"], ["k_ndvi", "params.k"],
+    ["ndvi0", "params.ndvi0"], ["forage_factor", "params.forage"], ["max_load", "params.maxload"], ["hay_price", "params.hay"]];
+  function paramInputs() {
+    const origin = S.P._origin || {};
+    return PARAM_FIELDS.map(([k, l]) => { const sp = M.SPEC[k];
+      return `<label class="field">${t(l)} <small class="fine">${t("set.range", { a: sp.min, b: sp.max })} · ${esc(sp.unit)} · <span class="origin o-${origin[k] || "default"}">${t("set.origin." + (origin[k] || "default"))}</span></small>
+        <input type="number" step="any" min="${sp.min}" max="${sp.max}" data-param="${k}" value="${S.P[k]}"><small class="perr" data-perr="${k}" hidden></small></label>`; }).join("");
+  }
   function paramsBlock() {
-    const f = [["season_days", "params.season"], ["intake", "params.intake"], ["util", "params.util"], ["k_ndvi", "params.k"], ["hay_price", "params.hay"]];
     return `<details class="params"><summary>${t("params.title")} ${src("model")} ${src("input")}</summary>
-      ${f.map(([k, l]) => `<label class="field">${t(l)}<input type="number" step="any" min="0" data-param="${k}" value="${S.P[k]}"></label>`).join("")}
+      ${paramInputs()}
+      <p class="fine">${t("set.modelVer")}: ${M.MODEL_VERSION} · ${t("set.field")}: ${M.fieldValidated(S.P) ? t("how.yes") : t("how.no")}</p>
       <button class="linkbtn" data-reset>${t("params.reset")}</button></details>`;
   }
+  /** Неверное значение не принимается: показываем причину рядом с полем и оставляем прежнее значение. */
+  function setParam(k, raw, inp, root) {
+    const r = M.validate({ [k]: raw === "" ? NaN : +raw });
+    const err = root && root.querySelector(`[data-perr="${k}"]`);
+    if (!r.ok) {
+      if (err) { err.hidden = false; err.textContent = t("set.bad", { v: raw, r: r.errors[0].reason }); }
+      inp.value = S.P[k]; inp.setAttribute("aria-invalid", "true");
+      return false;
+    }
+    if (err) err.hidden = true;
+    inp.removeAttribute("aria-invalid");
+    S.userP = Object.assign({}, S.userP, r.values);
+    S.P = resolveParams(S.userP, S.calib); saveParams();
+    return true;
+  }
   function bindParams(el) {
-    el.querySelectorAll("[data-param]").forEach(i => i.onchange = () => {
-      const v = +i.value; if (!Number.isFinite(v) || v <= 0) { i.value = S.P[i.dataset.param]; return; }
-      S.P[i.dataset.param] = v; saveParams(); render();
-    });
-    const r = el.querySelector("[data-reset]"); if (r) r.onclick = () => { S.P = J.params(); saveParams(); render(); };
+    el.querySelectorAll("[data-param]").forEach(i => i.onchange = () => { if (setParam(i.dataset.param, i.value, i, el)) render(); });
+    const r = el.querySelector("[data-reset]"); if (r) r.onclick = () => { S.userP = {}; S.P = resolveParams({}, S.calib); saveParams(); render(); };
   }
 
   function addHerd() {
-    S.herds.push({ id: "h" + Date.now().toString(36), name: t("herds.farm") + " " + (S.herds.length + 1), sheep: 300, goats: 0, cattle: 0, horses: 0, home: "Б-С", daily_return: false });
+    S.herds.push({ id: "h" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name: t("herds.farm") + " " + (S.herds.length + 1), sheep: 300, goats: 0, cattle: 0, horses: 0, home: "Б-С", daily_return: false });
     render();
   }
   function paneHerds(el) {
     const near = S.plots.filter(p => p.ring === "near").map(p => p.id);
-    const tag = h => h.mine ? `<span class="tag tag-mine">${t("herds.mine")}</span>` : h.from_bot ? `<span class="tag tag-tg">${t("herds.tg")}</span>` : h.demo ? `<span class="tag">${t("herds.demo")}</span>` : "";
+    const tag = h => h.mine ? `<span class="tag tag-mine">${t("herds.mine")}</span>` : h.from_bot ? `<span class="tag tag-tg">${t("herds.tg")}</span>` : h.demo ? `<span class="tag tag-demo">${t(h.demo_edited ? "demo.edited" : "herds.demo")}</span>` : "";
+    const allIds = S.plots.map(p => p.id);
+    const rights = h => {
+      const ro = h.mine || h.from_bot;
+      const list = h.allowed_plots && h.allowed_plots.length ? h.allowed_plots : null;
+      return `<details class="rights"><summary>${t("herds.rights")}: <b>${list ? esc(list.join(", ")) : t("herds.rightsAll")}</b> ${src("input")}</summary>
+        <div class="chips">${allIds.map(id => `<label class="chip"><input type="checkbox" data-rp="${esc(id)}" ${list && list.includes(id) ? "checked" : ""} ${ro ? "disabled" : ""}>${esc(id)}</label>`).join("")}</div>
+        <p class="fine">${t("herds.rightsNote")}</p></details>`;
+    };
     el.innerHTML = S.herds.map((h, i) => `<div class="herd" data-i="${i}">
         <div class="herd-head"><input data-k="name" value="${esc(h.name)}" aria-label="${t("herds.name")}" ${h.mine || h.from_bot ? "readonly" : ""}>${tag(h)}
           ${h.mine || h.from_bot ? "" : `<button class="btn btn-ghost btn-sm" data-del aria-label="${t("herds.remove")}">${ic("trash")}</button>`}</div>
@@ -674,7 +802,7 @@
           <label class="field" style="flex-direction:row;align-items:center;gap:8px">${t("herds.home")}<select data-k="home" ${h.mine || h.from_bot ? "disabled" : ""}>${near.map(id => `<option ${id === h.home ? "selected" : ""}>${id}</option>`).join("")}</select></label>
           <label class="check"><input type="checkbox" data-k="daily_return" ${h.daily_return ? "checked" : ""} ${h.mine || h.from_bot ? "disabled" : ""}> ${t("herds.daily")}</label>
           <span class="au">${fmt(J.herdAU(h, S.P))} ${t("herds.au")} ${src("input")}</span>
-        </div></div>`).join("") +
+        </div>${rights(h)}</div>`).join("") +
       `<button class="btn btn-soft" id="addHerd">${ic("plus")} ${t("herds.add")}</button><p class="note">${t("herds.note")}</p><p class="note">${t("herds.codes")}</p>`;
     $$(".herd", el).forEach(card => {
       const h = S.herds[+card.dataset.i];
@@ -682,9 +810,16 @@
         const k = inp.dataset.k;
         h[k] = inp.type === "checkbox" ? inp.checked : inp.type === "number" ? Math.max(0, Math.round(+inp.value || 0)) : inp.value;
         if (inp.type === "number") inp.value = h[k];
-        delete h.demo;
+        if (h.demo) h.demo_edited = true;                  // изменённое демо-стадо остаётся демо-стадом
         S.cur = J.current(S.plots, S.herds, S.P); S.pl = J.plan(S.plots, S.herds, S.P); paintMap();
         card.querySelector(".au").innerHTML = `${fmt(J.herdAU(h, S.P))} ${t("herds.au")} ${src("input")}`;
+      });
+      card.querySelectorAll("[data-rp]").forEach(chk => chk.onchange = () => {
+        const set = new Set(h.allowed_plots || []);
+        chk.checked ? set.add(chk.dataset.rp) : set.delete(chk.dataset.rp);
+        h.allowed_plots = set.size ? allIds.filter(id => set.has(id)) : undefined;
+        if (h.demo) h.demo_edited = true;
+        render();
       });
       const del = card.querySelector("[data-del]");
       if (del) del.onclick = () => { S.herds.splice(+card.dataset.i, 1); render(); };
@@ -702,35 +837,51 @@
         return `<span class="${cls}" style="left:${(s.from - 1) / Sd * 100}%;width:${(s.to - s.from + 1) / Sd * 100}%" title="${esc(lab)}: ${t("common.days")} ${s.from}–${s.to}">${esc(lab)}</span>`;
       }).join("");
       const cov = S.pl.coverage ? S.pl.coverage[h.id] : Sd;
-      const why = cov < Sd - 0.5 ? `<p class="note warn" style="margin:-6px 0 14px">${t("routes.short", { d: Math.max(1, Math.round(cov)) })}</p>` : "";
+      const dg = S.pl.diagnostics && S.pl.diagnostics[h.id];
+      const why = cov < Sd - 0.5 ? `<p class="note warn" style="margin:-6px 0 14px">${t("routes.short", { d: Math.max(0, Math.round(cov)) })} ${dg && dg.reason ? whyHerd(h, dg) : ""}</p>` : "";
       return `<div class="rname"><span>${esc(h.name)}</span><small>${fmt(J.herdAU(h, S.P))} ${t("herds.au")}</small></div><div class="tl" role="img" aria-label="${esc(h.name)}">${bars}</div>${why}`;
     }).join("") + `<p class="note">${t("routes.note", { d: Sd })} ${src("model")}</p>`;
   }
 
   function paneWater(el) {
     const ws = J.wells(S.plots, S.P);
-    const baseOnly = S.D.plots.map(p => Object.assign({}, p, { water: S.baseWater[p.id] }));
-    const before = J.plan(baseOnly, S.herds, S.P);
     const added = [...S.added];
+    const baseOnly = S.plots.map(p => (S.added.has(p.id) ? Object.assign({}, p, { water: false, water_status: "unknown" }) : p));
+    const before = J.plan(baseOnly, S.herds, S.P);
+    const statusList = `<h3>${ic("drop")} ${t("water.status")}</h3><div class="tablewrap"><table><tbody>${S.plots.map(p => `<tr><td><b>${esc(p.id)}</b></td>
+      <td style="white-space:normal">${esc(wsLabel(p))} ${src(["confirmed", "absent"].includes(p.water_status) || S.added.has(p.id) ? "input" : p.water_status === "satellite" ? "sat" : "model")}</td></tr>`).join("")}</tbody></table></div>`;
+    let sim = "";
+    if (added.length) {
+      const newly = added.filter(id => (S.pl.load[id] || {}).used > 0.5);
+      const prepLimits = added.map(id => { const w = J.wellEffect(baseOnly, S.herds, S.P, id); return w.remaining_limits.length ? `${id}: ${w.remaining_limits.map(r => t("rsn." + r)).join(", ")}` : ""; }).filter(Boolean);
+      sim = `<div class="srcblock s-model"><h3>${t("water.sim")} ${src("model")}</h3>
+        <p>${t("water.newly", { ids: newly.length ? newly.join(", ") : t("rep.none") })}</p>
+        ${prepLimits.length ? `<p>${t("water.remain", { r: esc(prepLimits.join("; ")) })}</p>` : ""}
+        <p class="note warn">${t("water.check")}</p></div>`;
+    }
     el.innerHTML = `<h3>${ic("drop")} ${t("water.title")} ${src("model")}</h3>
       ${ws.length ? `<ul class="list">${ws.map((w, i) => `<li class="row"><div class="grow"><b>${i + 1}. ${esc(w.plot)}</b><small>${t("water.opens", { n: fmt(w.sheep) })}</small></div>
         <div class="btns"><button class="btn btn-soft btn-sm" data-add="${w.plot}">${ic("plus")} ${t("water.add")}</button></div></li>`).join("")}</ul>` : `<p class="empty">${t("water.none")}</p>`}
       ${added.length ? `<h3>${t("water.added")} ${src("input")}</h3><ul class="list">${added.map(id => `<li class="row"><div class="grow"><b>${esc(id)}</b></div>
         <div class="btns"><button class="btn btn-ghost btn-sm" data-rm="${id}">${ic("x")} ${t("water.remove")}</button></div></li>`).join("")}</ul>
-        <p class="note">${t("water.effect", { a: fmt(J.hayTonnes(before.deficit_kg, S.P)), b: fmt(J.hayTonnes(S.pl.deficit_kg, S.P)), c: before.overloaded, d: S.pl.overloaded })}</p>` : ""}
-      <p class="note">${t("water.note")}</p>`;
+        <p class="note">${t("water.effect", { a: fmt(J.hayTonnes(before.deficit_kg, S.P)), b: fmt(J.hayTonnes(S.pl.deficit_kg, S.P)), c: before.overloaded, d: S.pl.overloaded })}</p>${sim}` : ""}
+      <p class="note">${t("water.note")}</p>${statusList}`;
     el.querySelectorAll("[data-add]").forEach(b => b.onclick = () => toggleWater(b.dataset.add, true));
     el.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => toggleWater(b.dataset.rm, false));
   }
 
   function panePlots(el) {
-    el.innerHTML = `<div class="tablewrap"><table><thead><tr><th>${t("plots.id")}</th><th class="num">${t("plots.ha")}</th><th class="num">${t("plots.ndvi")}</th>
-      <th class="num">${t("plots.cap")}</th><th class="num">${t("plots.load")}</th><th>${t("plots.conf")}</th></tr></thead><tbody>
-      ${S.plots.map(p => { const l = S.pl.load[p.id].load, c = J.plotCapacity(p, S.P);
-        return `<tr data-plot="${p.id}" tabindex="0" style="cursor:pointer"><td><b>${esc(p.id)}</b> ${p.water ? ic("drop") : ""}</td><td class="num">${fmt(p.pasture_ha)}</td>
-        <td class="num">${p.ndvi ?? "—"}</td><td class="num">${fmt(c.au_season / S.P.au.sheep)}</td>
-        <td class="num"><span class="loadpill" style="background:${loadColor(l)}">${S.pl.load[p.id].used ? pct(l) : "—"}</span></td><td>${confTag(p)}</td></tr>`; }).join("")}
-      </tbody></table></div><p class="srcrow" style="margin-top:10px">${t("plots.ha")}, NDVI: ${src("sat")} &nbsp; ${t("plots.cap")}, ${t("plots.load")}: ${src("model")}</p>`;
+    const hasComp = S.plots.some(p => p.excluded_ha != null);
+    el.innerHTML = `<div class="tablewrap"><table class="plots-t"><thead><tr><th>${t("plots.id")}</th><th class="num">${t("plots.ha")}</th>${hasComp ? `<th class="num">${t("plots.comp")}</th>` : ""}<th class="num">${t("plots.ndvi")}</th>
+      <th class="num">${t("plots.cap")}</th><th class="num">${t("plots.load")}</th><th>${t("plots.quality")}</th><th>${t("plots.forage")}</th><th>${t("plots.water")}</th></tr></thead><tbody>
+      ${S.plots.map(p => { const ld = S.pl.load[p.id], c = capOf(p);
+        return `<tr data-plot="${p.id}" tabindex="0" style="cursor:pointer"><td><b>${esc(p.id)}</b> ${p.water ? ic("drop") : ""}${p.forbidden ? ` <span class="tag tag-closed">${t("pop.closedTag")}</span>` : ""}</td><td class="num">${fmt(p.pasture_ha)}</td>
+        ${hasComp ? `<td class="num">${fmt(p.excluded_ha || 0)} / ${fmt(p.uncertain_ha || 0)}</td>` : ""}
+        <td class="num">${p.ndvi ?? "—"}</td><td class="num">${sheepCap(c)}</td>
+        <td class="num"><span class="loadpill" style="background:${ld.known ? loadColor(ld.load) : loadColor(null)}">${!ld.known ? "?" : ld.used ? pct(ld.load) : "—"}</span></td><td>${confTag(p)}</td><td>${fcTag(p)}</td>
+        <td style="white-space:normal;min-width:110px"><small>${esc(wsLabel(p))}</small></td></tr>`; }).join("")}
+      </tbody></table></div><p class="srcrow" style="margin-top:10px">${t("plots.ha")}, NDVI: ${src("sat")} &nbsp; ${t("plots.cap")}, ${t("plots.load")}: ${src("model")} &nbsp; ${t("plots.water")}: ${src("sat")} ${src("input")} ${src("model")}</p>
+      <p class="fine">${t("plots.qualityNote")}</p>${hasComp ? `<p class="fine">${t("plots.compNote")}</p>` : ""}`;
     el.querySelectorAll("tr[data-plot]").forEach(r => {
       const go2 = () => { if (window.matchMedia("(max-width: 860px)").matches) window.scrollTo({ top: 0, behavior: "smooth" }); focusPlot(r.dataset.plot); };
       r.onclick = go2; r.onkeydown = e => { if (e.key === "Enter") go2(); };
@@ -743,24 +894,135 @@
     const f = x => (x >= 0 ? "+" : "") + x.toFixed(3);
     return t("data.trend", { a: S.D.source.base_year, b: S.D.source.year, n: f(avg("near")), f: f(avg("far")) });
   }
+  function metaHtml(meta) {
+    const row = (k, v) => `<tr><td>${t("meta." + k)}</td><td style="white-space:normal">${v}</td></tr>`;
+    return `<div class="tablewrap"><table><tbody>
+      ${row("source", esc(meta.source))}${row("dataset", esc(meta.dataset))}${row("year", meta.year ?? "—")}
+      ${row("dates", meta.scene_dates.map(d => dateStr(d, false)).join(", ") || "—")}${row("count", meta.imagery_count)}
+      ${row("valid", meta.valid_pixel_fraction == null ? t("meta.notRecorded") : pct(meta.valid_pixel_fraction))}
+      ${row("lc", esc(meta.landcover_source) + (meta.landcover_year ? ", " + meta.landcover_year : ""))}
+      ${row("calc", meta.calculated_at ? dateStr(meta.calculated_at) : t("meta.unknownDate"))}${row("model", esc(meta.model_version))}
+      ${row("status", t("meta." + meta.data_status) )}
+      ${meta.warnings.length ? row("warn", meta.warnings.map(esc).join("<br>")) : ""}</tbody></table></div>`;
+  }
   function paneData(el) {
-    const s = S.D.source, counts = { high: 0, medium: 0, low: 0 };
+    const s = S.D.source, counts = { high: 0, medium: 0, low: 0, none: 0 };
     S.plots.forEach(p => counts[confidence(p)]++);
+    const meta = M.metaOf(S.D);
+    const days = meta.calculated_at ? (Date.now() - Date.parse(meta.calculated_at)) / 864e5 : null;
     el.innerHTML = `<div class="srcblock s-sat"><h3>${src("sat")} ${t("data.sat.t")}</h3>
         <p>${t("data.village")}: <b>${esc(S.D.village.name)}</b> (${S.D.village.lat}, ${S.D.village.lon}). ${t("data.year")}: <b>${s.year}</b>.<br>
         ${t("data.scenes")} (${s.dates.length}): ${s.dates.slice().sort().join(", ")}.</p>
-        <p style="margin-top:8px">${t("plots.conf")}: <span class="conf conf-high">${t("conf.high")} ${counts.high}</span> <span class="conf conf-medium">${t("conf.medium")} ${counts.medium}</span> <span class="conf conf-low">${t("conf.low")} ${counts.low}</span></p>
-        ${trendLine() ? `<p class="note">${trendLine()}</p>` : ""}</div>
+        <p style="margin-top:8px">${t("plots.quality")}: <span class="conf conf-high">${t("conf.high")} ${counts.high}</span> <span class="conf conf-medium">${t("conf.medium")} ${counts.medium}</span> <span class="conf conf-low">${t("conf.low")} ${counts.low}</span> <span class="conf conf-none">${t("conf.none")} ${counts.none}</span></p>
+        <p class="fine">${t("fc.note")}</p>
+        ${trendLine() ? `<p class="note">${trendLine()}</p>` : ""}
+        ${S.fromCache ? `<p class="note warn">${t("meta.cached", { d: meta.calculated_at ? dateStr(meta.calculated_at, false) : t("meta.unknownDate") })}</p>` : ""}
+        ${days != null && days > 30 ? `<p class="note warn">${t("meta.stale", { n: Math.round(days) })}</p>` : ""}
+        <h3>${t("meta.title")}</h3>${metaHtml(meta)}</div>
       <div class="srcblock s-input"><h3>${src("input")} ${t("data.input.t")}</h3><p>${t("data.input.d")}</p></div>
       <div class="srcblock s-model"><h3>${src("model")} ${t("data.model.t")}</h3><p>${t("data.model.d")}</p></div>
+      <div class="srcblock"><h3>${ic("wifioff")} ${t("off.title")}</h3><p>${t("off.d")}</p></div>
       <p><a href="#/data">${t("nav.data")}</a></p>`;
+  }
+
+  // ---------- «Что если?»: варианты рядом, на одном экране ----------
+  function variantName(v) {
+    if (v.type === "add_water") return t("wi.v.well", { id: esc(v.plot) });
+    if (v.type === "exclude_plot") return t("wi.v.exclude", { id: esc(v.plot) });
+    if (v.type === "params") return t("wi.v." + v.name);
+    return t("wi.v." + v.id);
+  }
+  const violText = v => t("vt." + v.type, { id: esc(v.plot || "") });
+  function paneWhatIf(el) {
+    if (!S.herds.length) { el.innerHTML = `<p class="empty">${t("ov.noherds")}</p>`; return; }
+    let rows;
+    try { rows = J.compareScenarios(S.plots, S.herds, S.P, J.defaultVariants(S.plots, S.herds, S.P)); }
+    catch (e) { el.innerHTML = `<p class="note warn">${esc(e.message)}</p>`; return; }
+    const plan = rows.find(r => r.id === "plan");
+    const dT = r => J.hayTonnes(r.deficit_kg, r.result && r.result.kind ? S.P : S.P);
+    const tr = rows.map(r => r.error ? `<tr><td>${variantName(r)}</td><td colspan="5">${t("wi.err")}: ${esc(r.error)}</td></tr>` : `<tr class="${r.id === "plan" ? "wi-base" : ""}">
+      <td><b>${variantName(r)}</b>${r.status && r.type !== "current" ? `<br><small>${t("wi.st." + r.status)}</small>` : ""}</td>
+      <td class="num">${fmt(dT(r))}${r.id !== "plan" && plan ? `<br><small class="${dT(r) > dT(plan) + 0.5 ? "worse" : dT(r) < dT(plan) - 0.5 ? "better" : ""}">${dT(r) - dT(plan) >= 0 ? "+" : ""}${fmt(dT(r) - dT(plan))}</small>` : ""}</td>
+      <td class="num">${r.overloaded}</td><td class="num">${r.type === "current" ? "—" : r.herds_full}</td><td class="num">${r.type === "current" ? "—" : r.herds_short}</td>
+      <td style="white-space:normal;min-width:120px"><small>${r.violations.length ? r.violations.slice(0, 4).map(violText).join(", ") + (r.violations.length > 4 ? " …" : "") : t("wi.violNone")}</small></td></tr>`).join("");
+    // чувствительность и сценарии допущений
+    const sens = (key, a, b) => {
+      const s2 = J.sensitivity(S.plots, S.herds, S.P, key, [a, b]);
+      if (s2.some(x => x.error)) return "";
+      const c0 = s2[0].capacity_sheep, c1 = s2[1].capacity_sheep;
+      return t(key === "util" ? "wi.sensUtil" : "wi.sensK", { a, b, c: fmt(c0), d: fmt(c1), p: (c0 ? ((c1 / c0 - 1) * 100).toFixed(0) : "0") + " %" });
+    };
+    const ass = ["cautious", "base", "optimistic"].map(n => {
+      const pp = M.scenarioParams(S.P, n);
+      const cap = J.totalCapacity(S.plots, pp).au_season / pp.au.sheep;
+      const pl2 = J.plan(S.plots, S.herds, pp);
+      return `<tr><td><b>${t("wi.a." + n)}</b><br><small>util ${pp.util}, k_ndvi ${pp.k_ndvi}</small></td><td class="num">${fmt(cap)}</td><td class="num">${fmt(J.hayTonnes(pl2.deficit_kg, pp))}</td></tr>`;
+    }).join("");
+    const b = S.pl.bound;
+    el.innerHTML = `<h3>${ic("layers")} ${t("wi.title")} ${src("model")}</h3>
+      <div class="tablewrap"><table class="wi"><thead><tr><th>${t("wi.c.variant")}</th><th class="num">${t("wi.c.deficit")}</th><th class="num">${t("wi.c.over")}</th>
+        <th class="num">${t("wi.c.full")}</th><th class="num">${t("wi.c.short")}</th><th>${t("wi.c.viol")}</th></tr></thead><tbody>${tr}</tbody></table></div>
+      <p class="note">${t("wi.note")}</p>
+      <p class="fine">${t("wi.bound", { b: fmt(J.hayTonnes(b.min_deficit_au_days * S.P.intake, S.P)), g: fmt(J.hayTonnes(S.pl.deficit_kg, S.P)), d: fmt(J.hayTonnes(S.pl.gap_au_days * S.P.intake, S.P)) })}</p>
+      <h3>${ic("chart")} ${t("wi.sens")}</h3><p>${sens("util", 0.5, 0.4)}</p><p>${sens("k_ndvi", S.P.k_ndvi, Math.round(S.P.k_ndvi * 0.75))}</p>
+      <h3>${t("wi.assump")}</h3><div class="tablewrap"><table><thead><tr><th></th><th class="num">${t("wi.c.cap")}</th><th class="num">${t("wi.c.deficit")}</th></tr></thead><tbody>${ass}</tbody></table></div>
+      <p class="fine">${t("wi.assumpNote")}</p>`;
+  }
+
+  // ---------- исследование: шаблон интервью и пилотные показатели (только этот браузер, без вымышленных ответов) ----------
+  const RS_KEY = "jaiylym:interviews";
+  const RS_Q = ["q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "q9"];
+  function renderResearch() {
+    const list = C.ls.get(RS_KEY, []) || [];
+    const m = C.ls.get("jaiylym:metrics", null) || { plans: 0, feasible: 0, saved: 0, pdf: 0, completed: 0, times: [], last: null };
+    const med = xs => { if (!xs || !xs.length) return null; const a = xs.slice().sort((x, y) => x - y), k = a.length >> 1; return a.length % 2 ? a[k] : (a[k - 1] + a[k]) / 2; };
+    const L = m.last || {};
+    $("#rsPage").innerHTML = `<div class="card"><h2>${ic("users")} ${t("rs.title")}</h2><p>${t("rs.lead")}</p>
+        <p><b>${t("rs.count", { n: list.length })}</b>${list.length ? "" : " · " + t("rs.none")}</p>
+        <p class="note warn">${t("rs.noPersonal")}</p></div>
+      <form class="card" id="rsForm"><h2>${t("rs.new")}</h2>
+        <div class="formgrid"><label class="field">${t("rs.role")}<select name="role"><option value="farmer">${t("rs.role.farmer")}</option><option value="akimat">${t("rs.role.akimat")}</option><option value="other">${t("rs.role.other")}</option></select></label>
+          <label class="field span2">${t("rs.village")}<input name="village" maxlength="60"></label>
+          <label class="field">${t("rs.date")}<input name="date" type="date" required></label></div>
+        ${RS_Q.map(q => `<label class="field" style="margin-top:8px">${t("rs." + q)}<textarea name="${q}" rows="2" maxlength="1000"></textarea></label>`).join("")}
+        <label class="check" style="margin-top:10px"><input type="checkbox" name="consent"> ${t("rs.consent")}</label>
+        <p style="margin-top:12px"><button class="btn btn-primary btn-sm">${t("rs.save")}</button></p></form>
+      <div class="card"><p style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-soft btn-sm" id="rsJson" ${list.length ? "" : "disabled"}>${t("rs.export")}</button>
+        <button class="btn btn-soft btn-sm" id="rsCsv" ${list.length ? "" : "disabled"}>${t("rs.exportCsv")}</button>
+        <button class="btn btn-ghost btn-sm" id="rsClear" ${list.length ? "" : "disabled"}>${t("rs.clear")}</button></p></div>
+      <div class="card"><h2>${ic("chart")} ${t("rs.metrics")}</h2><p class="fine">${t("rs.metricsNote")}</p>
+        <dl class="kv"><dt>${t("m.plans")}</dt><dd>${m.plans}</dd><dt>${t("m.scenarios")}</dt><dd>${m.saved}</dd>
+          <dt>${t("m.herdsInPlan")}</dt><dd>${L.herds ?? "—"}</dd><dt>${t("m.feasibleShare")}</dt><dd>${m.plans ? pct(m.feasible / m.plans) : "—"}</dd>
+          <dt>${t("m.deficit")}</dt><dd>${L.before_t != null ? fmt1(L.before_t) + " → " + fmt1(L.after_t) : "—"}</dd><dt>${t("m.over")}</dt><dd>${L.overloaded ?? "—"}</dd>
+          <dt>${t("m.missing")}</dt><dd>${L.missing ?? "—"}</dd><dt>${t("m.time")}</dt><dd>${med(m.times) ?? "—"}</dd><dt>${t("m.completed")}</dt><dd>${m.completed}</dd></dl>
+        <button class="btn btn-soft btn-sm" id="rsMetrics">${t("m.export")}</button></div>`;
+    const dl = (name, text, type) => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); };
+    // обезличивание: без названия села и даты дня — только роль, месяц, ответы (свободный текст человек заполняет без ФИО)
+    const anon = () => (C.ls.get(RS_KEY, []) || []).map((x, i) => Object.assign({ n: i + 1, role: x.role, month: (x.date || "").slice(0, 7) }, Object.fromEntries(RS_Q.map(q => [q, x[q] || ""]))));
+    $("#rsForm").onsubmit = ev => {
+      ev.preventDefault();
+      const fd = new FormData(ev.target);
+      if (fd.get("consent") !== "on") { toast(t("rs.needConsent"), true); return; }
+      const rec = { role: fd.get("role"), village: String(fd.get("village") || "").trim(), date: fd.get("date"), saved: new Date().toISOString() };
+      for (const q of RS_Q) rec[q] = String(fd.get(q) || "").trim();
+      if (RS_Q.every(q => !rec[q])) { toast(t("rs.empty"), true); return; }
+      C.ls.set(RS_KEY, (C.ls.get(RS_KEY, []) || []).concat([rec]));
+      toast(t("rs.saved")); renderResearch();
+    };
+    $("#rsJson").onclick = () => dl("jaiylym-interviews-anon.json", JSON.stringify(anon(), null, 2), "application/json");
+    $("#rsCsv").onclick = () => { const rows = anon(); const cols = ["n", "role", "month"].concat(RS_Q);
+      dl("jaiylym-interviews-anon.csv", [cols.join(",")].concat(rows.map(r => cols.map(c => '"' + String(r[c]).replace(/"/g, '""') + '"').join(","))).join("\n"), "text/csv"); };
+    let armed = false;
+    $("#rsClear").onclick = e => { if (!armed) { armed = true; e.currentTarget.textContent = t("past.delConfirm"); return; } C.ls.del(RS_KEY); renderResearch(); };
+    $("#rsMetrics").onclick = () => dl("jaiylym-pilot-metrics.json", JSON.stringify(Object.assign({ note: t("rs.metricsNote") }, m, { lastKey: undefined }), null, 2), "application/json");
   }
 
   // ---------- сценарии ----------
   function scenarioPayload(name, shared) {
-    return { name, shared: !!shared, village: S.D.village,
-      herds: S.herds.filter(h => !h.from_bot).map(h => ({ id: h.id, name: h.name, sheep: h.sheep || 0, goats: h.goats || 0, cattle: h.cattle || 0, horses: h.horses || 0, home: h.home, daily_return: !!h.daily_return })),
-      water: [...S.added], params: { season_days: S.P.season_days, intake: S.P.intake, util: S.P.util, k_ndvi: S.P.k_ndvi, hay_price: S.P.hay_price },
+    return { name, shared: !!shared, village: S.D.village, request_id: "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10),
+      herds: S.herds.filter(h => !h.from_bot).map(h => ({ id: h.id, name: h.name, sheep: h.sheep || 0, goats: h.goats || 0, cattle: h.cattle || 0, horses: h.horses || 0,
+        home: h.home, daily_return: !!h.daily_return, allowed_plots: h.allowed_plots || [], demo: !!h.demo })),
+      water: [...S.added], forbidden: [...S.forbidden], water_status: Object.assign({}, S.waterSet), params: Object.assign({}, S.userP),
       summary: summary() };
   }
   async function saveScenario(shared) {
@@ -770,12 +1032,14 @@
     try {
       await C.saveScenario(scenarioPayload(name, shared));
       toast(shared ? t("act.published") : C.loggedIn ? t("act.saved") : t("act.savedLocal"));
+      metric("saved");
       C.addHistory({ kind: shared ? "publish" : "save", village: S.D.village, summary: summary() });
     } catch (e) { toast(errText(e), true); }
   }
   function loadScenario(sc) {
     // сценарий применяется при открытии карты (onRoute) — так не бывает двух параллельных загрузок
-    S.pending = { key: cacheKey(sc.village.lat, sc.village.lon), opts: { herds: sc.herds || [], water: sc.water || [], params: sc.params || null } };
+    S.pending = { key: cacheKey(sc.village.lat, sc.village.lon), opts: { herds: (sc.herds || []).map(h => Object.assign({}, h, { allowed_plots: (h.allowed_plots || []).length ? h.allowed_plots : undefined })),
+      water: sc.water || [], forbidden: sc.forbidden || [], water_status: sc.water_status || {}, params: sc.params || null } };
     const h = `#/map?lat=${sc.village.lat}&lon=${sc.village.lon}&name=${encodeURIComponent(sc.village.name)}`;
     if (location.hash === h) onRoute(); else location.hash = h;
   }
@@ -1039,8 +1303,23 @@
   }
 
   // ---------- «Главное»: понятная сводка без терминов ----------
-  function saveParams() {
-    C.ls.set("jaiylym:params", { season_days: S.P.season_days, intake: S.P.intake, util: S.P.util, k_ndvi: S.P.k_ndvi, hay_price: S.P.hay_price });
+  function saveParams() { C.ls.set("jaiylym:params", S.userP || {}); }
+
+  // ---------- пилотные показатели: только счётчики в этом браузере, никуда не отправляются ----------
+  function metric(kind, d) {
+    const m = C.ls.get("jaiylym:metrics", null) || { plans: 0, feasible: 0, saved: 0, pdf: 0, completed: 0, times: [], last: null };
+    if (kind === "plan") {
+      if (!d.herds) return;
+      const key = JSON.stringify([S.D && S.D.village.lat, d.status, Math.round(d.after), d.herds]);
+      if (m.lastKey === key) return;                      // перерисовка того же расчёта — не новый расчёт
+      m.lastKey = key; m.plans++; if (d.status === "feasible") m.feasible++;
+      m.last = { status: d.status, before_t: +(+d.before).toFixed(1), after_t: +(+d.after).toFixed(1), overloaded: d.over, missing: d.missing, herds: d.herds };
+    }
+    if (kind === "saved" || kind === "pdf") {
+      m[kind]++; m.completed++;
+      if (S.t0) { m.times = (m.times || []).concat([Math.round((Date.now() - S.t0) / 6000) / 10]).slice(-50); S.t0 = Date.now(); }
+    }
+    C.ls.set("jaiylym:metrics", m);
   }
   const sheepOf = au => au / S.P.au.sheep;
   function briefData() {
@@ -1065,6 +1344,7 @@
     const b = briefData();
     const st = b.ratio <= 0.7 ? ["ok", "brief.ok"] : b.ratio <= 1 && b.deficitT < 1 ? ["tight", "brief.tight"] : ["short", "brief.short"];
     const lines = [];
+    const res = resultHtml();
     lines.push(t("brief.cap", { ha: fmt(b.water.reduce((s, p) => s + p.pasture_ha, 0)), sheep: fmt(sheepOf(b.capAU)), au: fmt(b.capAU), myau: fmt(b.au), mysheep: fmt(sheepOf(b.au)) }));
     lines.push(b.worst ? t("brief.curOver", { n: S.cur.overloaded, id: `<b>${esc(b.worst.id)}</b>`, pct: pct(S.cur.load[b.worst.id].load) }) : t("brief.curOk"));
     if (b.deficitT < 1) lines.push(t("brief.planOk"));
@@ -1081,7 +1361,7 @@
     if (b.deficitT >= 1) todo.push(t("brief.do.reduce"));
     todo.push(t("brief.do.bot"));
     todo.push(t("brief.do.calib"));
-    return `<div class="brief"><span class="brief-status st-${st[0]}">${t(st[1])}</span>
+    return `${demoBanner()}${res}<div class="brief"><span class="brief-status st-${st[0]}">${t(st[1])}</span>
       ${lines.map(x => `<p>${x}</p>`).join("")}
       <h3 style="margin:12px 0 2px;font-size:15px">${t("brief.do")}</h3>
       <ul class="todo">${todo.slice(0, 4).map(x => `<li>${ic("check")}<span>${x}</span></li>`).join("")}</ul>
@@ -1089,7 +1369,56 @@
       <div class="aibox" id="aiBox"><button class="btn btn-green btn-sm" id="aiBriefBtn">${ic("spark")} ${t("brief.ai")}</button>
         ${S.aiBrief && S.aiBrief.key === briefKey() ? `<p class="aitext">${esc(S.aiBrief.text)}</p><p class="fine">${t("brief.aiNote")}</p>` : ""}</div>`;
   }
-  const briefKey = () => S.D ? JSON.stringify([S.D.village.lat, S.D.village.lon, S.herds.map(h => [h.sheep, h.goats, h.cattle, h.horses, h.home, h.daily_return]), [...S.added], S.P.k_ndvi, S.P.season_days, I.lang]) : "";
+  const briefKey = () => S.D ? JSON.stringify([S.D.village.lat, S.D.village.lon, S.herds.map(h => [h.sheep, h.goats, h.cattle, h.horses, h.home, h.daily_return, h.allowed_plots]), [...S.added], [...S.forbidden], S.waterSet, S.P.k_ndvi, S.P.util, S.P.season_days, I.lang]) : "";
+
+  // ---------- итог плана простыми словами: возможно ли, почему, что использовано, где дефицит, что изменить, насколько надёжно ----------
+  const plotIds = ids => (ids || []).map(esc).join(", ");
+  function whyHerd(h, dg) {
+    const reasons = Object.entries(dg.excluded || {}).filter(([, ids]) => ids.length).map(([r, ids]) => `${t("rsn." + r)}: ${plotIds(ids)}`).join("; ");
+    return t("why." + dg.reason, { name: esc(h.name), d: Math.round(S.P.season_days - (S.pl.coverage[h.id] || 0)), r: reasons || "—" });
+  }
+  function sgText(s) {
+    if (s.type === "add_water") return t("sg.add_water", { id: esc(s.plot), n: fmt(s.au_days / S.P.season_days / S.P.au.sheep) });
+    if (s.type === "check_data") return t("sg.check_data", { ids: plotIds(s.plots) });
+    if (s.type === "extend_rights") return t("sg.extend_rights", { ids: plotIds(s.plots) });
+    if (s.type === "split_daily_herd") return t("sg.split_daily_herd");
+    if (s.type === "reduce_herd") return t("sg.reduce_herd", { au: fmt(s.au), sheep: fmt(s.sheep) });
+    if (s.type === "hay") return t("sg.hay", { t: fmt(s.tonnes) });
+    return "";
+  }
+  function wrText(w) {
+    if (w.type === "no_data_excluded" || w.type === "low_quality_used") return t("wr." + w.type, { ids: plotIds(w.plots) });
+    if (w.type === "water_unconfirmed") return t("wr.water_unconfirmed", { n: w.plots.length });
+    if (w.type === "rights_not_specified") return t("wr.rights_not_specified", { n: w.herds.length });
+    return t("wr." + w.type);
+  }
+  function resultHtml() {
+    const pl = S.pl, meta = M.metaOf(S.D);
+    if (!S.herds.length || pl.status === "no_demand") return "";
+    const ok = pl.status === "feasible";
+    const head = ok ? t("res.feasible") : pl.status === "infeasible" ? t("res.infeasible") : t("res.partial");
+    const short = S.herds.filter(h => pl.unmet[h.id]);
+    const q = { high: 0, medium: 0, low: 0, none: 0 }; S.plots.forEach(p => q[confidence(p)]++);
+    const why = short.map(h => `<li>${whyHerd(h, pl.diagnostics[h.id])}</li>`).join("");
+    const sg = (pl.suggestions || []).map(sgText).filter(Boolean).map(x => `<li>${x}</li>`).join("");
+    const wr = (pl.warnings || []).map(wrText).filter(Boolean).map(x => `<li>${x}</li>`).join("");
+    const worst = Object.keys(pl.load).filter(id => pl.load[id].used > 0).sort((a, b) => pl.load[b].used - pl.load[a].used)[0] || S.plots[0].id;
+    return `<div class="result ${ok ? "res-ok" : "res-short"}" role="status">
+      <p class="res-head">${ic(ok ? "check" : "info")} <b>${head}</b></p>
+      ${ok ? "" : `<h4>${t("res.why")}</h4><ul>${why}</ul><h4>${t("res.where")}</h4><p>${t("res.whereLine", { t: fmt(J.hayTonnes(pl.deficit_kg, S.P)), names: short.map(h => esc(h.name)).join(", ") })} ${src("model")}</p>
+        <h4>${t("res.change")}</h4><ul>${sg}</ul>`}
+      <h4>${t("res.used")}</h4><p>${t("res.usedLine", { k: meta.imagery_count, year: meta.year ?? "—", lc: meta.landcover_year || "", n: S.herds.length, v: M.MODEL_VERSION })}</p>
+      <h4>${t("res.trust")}</h4><p>${t("res.trustLine", { h: q.high, m: q.medium, l: q.low, n: q.none })}</p>
+      ${wr ? `<details class="more"><summary>${t("res.warnings")} (${(pl.warnings || []).length})</summary><ul>${wr}</ul></details>` : ""}
+      <p style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button type="button" class="btn btn-soft btn-sm" data-how="${esc(worst)}">${ic("info")} ${t("pop.how")} (${esc(worst)})</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-goto="whatif">${ic("layers")} ${t("tab.whatif")}</button></p></div>`;
+  }
+  function demoBanner() {
+    const n = S.herds.filter(h => h.demo).length;
+    if (!n && !(S.D && isKegen(S.D.village.lat, S.D.village.lon))) return "";
+    return `<div class="note warn demo-banner">${n ? t("demo.banner", { n }) : t("demo.kegenNote")}
+      <button type="button" class="btn btn-ghost btn-sm" id="demoToggle">${n ? t("demo.hide") : t("demo.show")}</button></div>`;
+  }
 
   function movesHtml() {
     if (!S.herds.length) return "";
@@ -1137,7 +1466,16 @@
       (S.herds.length ? `<details class="more"><summary>${ic("chart")} ${t("brief.details")}</summary><div id="briefDetails"></div></details>` : "");
     const det = $("#briefDetails", el);
     if (det) paneOverview(det);
-    const add = $("#addDemo", el); if (add) add.onclick = () => { S.herds = DEMO_HERDS.map(h => Object.assign({ demo: true }, h)); render(); };
+    el.querySelectorAll("[data-how]").forEach(b => b.onclick = () => openHow(b.dataset.how));
+    el.querySelectorAll("[data-goto]").forEach(b => b.onclick = () => renderPane(b.dataset.goto));
+    const dt = $("#demoToggle", el);
+    if (dt) dt.onclick = () => {
+      const has = S.herds.some(h => h.demo);
+      S.herds = has ? S.herds.filter(h => !h.demo) : demoHerds().concat(S.herds);
+      C.ls.set("jaiylym:demo", !has);
+      render();
+    };
+    const add = $("#addDemo", el); if (add) add.onclick = () => { S.herds = demoHerds(); render(); };
     const add0 = $("#addHerd0", el); if (add0) add0.onclick = () => { addHerd(); renderPane("herds"); };
     const btn = $("#aiBriefBtn", el);
     if (btn) btn.onclick = async () => {
@@ -1163,12 +1501,23 @@
       ёмкость_всех_участков_с_водой_овец_за_сезон_оценка: Math.round(sheepOf(b.capAU)),
       поголовье_усл_голов: Math.round(b.au), поголовье_в_пересчёте_на_овец: Math.round(sheepOf(b.au)), сезон_дней: b.Sd,
       хватает_ли_корма: b.deficitT < 1 ? (b.ratio <= 0.7 ? "да, с запасом" : "да, впритык") : "нет, не на весь сезон",
+      статус_плана: S.pl.status, алгоритм: "жадная эвристика (не оптимизатор)", версия_модели: M.MODEL_VERSION,
+      модель_проверена_в_поле: M.fieldValidated(S.P), демо_стада: S.herds.some(h => h.demo),
+      метаданные: M.metaOf(S.D),
+      причины_дефицита: S.herds.filter(h => S.pl.unmet[h.id]).map(h => ({ стадо: h.name, причина: S.pl.diagnostics[h.id].reason,
+        исключённые_участки: S.pl.diagnostics[h.id].excluded, не_хватает_дней: Math.round(S.P.season_days - S.pl.coverage[h.id]) })),
+      что_можно_изменить: (S.pl.suggestions || []).map(sgText).map(x => x.replace(/<[^>]+>/g, "")),
+      предупреждения: (S.pl.warnings || []).map(wrText).map(x => x.replace(/<[^>]+>/g, "")),
       участки: S.plots.map(p => ({ id: p.id, кольцо: p.ring === "near" ? "ближний" : "дальний", км_от_села: p.dist_km, направление: p.dir,
         пастбище_га_спутник: p.pasture_ha, ndvi_спутник: p.ndvi, трава_за_лето_проц: (p.series || []).length >= 2 ? Math.round((p.series[p.series.length - 1].v - p.series[0].v) / p.series[0].v * 100) : null,
-        достоверность: confidence(p), вода: p.water ? (S.added.has(p.id) ? "смоделированный водопой" : "есть") : "нет",
-        ёмкость_овец_оценка: Math.round(sheepOf(J.plotCapacity(p, S.P).au_season)),
-        нагрузка_если_все_у_села_проц: Math.round(S.cur.load[p.id].load * 100), нагрузка_по_плану_проц: Math.round(S.pl.load[p.id].load * 100) })),
-      стада: S.herds.map(h => ({ имя: h.name, овцы: h.sheep || 0, козы: h.goats || 0, крс: h.cattle || 0, лошади: h.horses || 0, дойное: !!h.daily_return,
+        качество_снимка: confidence(p), достоверность_корма: M.forageConfidence(p, S.P), статус_данных: capOf(p).status,
+        вода: t("ws." + M.waterStatus(p)), закрыт_по_вводу: !!p.forbidden,
+        ёмкость_овец_оценка: capOf(p).known ? Math.round(sheepOf(capOf(p).au_season)) : null,
+        как_рассчитано: J.explainCapacity(p, S.P).steps.map(s => `${s.key}: ${s.formula}`).join("; "),
+        нагрузка_если_все_у_села_проц: S.cur.load[p.id].known ? Math.round(S.cur.load[p.id].load * 100) : null,
+        нагрузка_по_плану_проц: S.pl.load[p.id].known ? Math.round(S.pl.load[p.id].load * 100) : null })),
+      стада: S.herds.map(h => ({ имя: h.name, демо: !!h.demo, права_на_участки: h.allowed_plots && h.allowed_plots.length ? { участки: h.allowed_plots, источник: "ввод пользователя, не госреестр" } : "не указаны",
+        овцы: h.sheep || 0, козы: h.goats || 0, крс: h.cattle || 0, лошади: h.horses || 0, дойное: !!h.daily_return,
         усл_голов: Math.round(J.herdAU(h, S.P)), дней_корма_по_плану: Math.round((S.pl.coverage || {})[h.id] ?? b.Sd),
         маршрут: (S.pl.herdPlans[h.id] || []).map(s => `${s.plot || "нет корма"} д.${s.from}-${s.to}`).join("; ") })),
       итог: { перегружено_если_все_у_села: S.cur.overloaded, перегружено_по_плану: S.pl.overloaded,
@@ -1189,10 +1538,10 @@
     el.innerHTML = `<div class="chat"><div class="chat-head"><h1>${ic("spark")} ${t("ai.title")}</h1><p class="fine" style="margin:0">${t("ai.lead")}</p>
         <span class="chat-ctx">${ic("pin")} ${ctxLine}</span></div>
       <div class="chat-log" id="chatLog" aria-live="polite">${hist.map(m => `<div class="msg ${m.role}">${esc(m.text)}</div>`).join("")}</div>
-      <div class="chips-q">${["ai.q1", "ai.q2", "ai.q3", "ai.q4"].map(k => `<button type="button" data-q="${esc(t(k))}">${t(k)}</button>`).join("")}</div>
+      <div class="chips-q">${["ai.q1", "ai.q5", "ai.q6", "ai.q7", "ai.q8", "ai.q2", "ai.q3", "ai.q4"].map(k => `<button type="button" data-q="${esc(t(k))}">${t(k)}</button>`).join("")}</div>
       <form class="chat-form" id="chatForm"><textarea id="chatIn" rows="1" placeholder="${t("ai.ph")}" aria-label="${t("ai.ph")}"></textarea>
         <button class="btn btn-primary">${ic("send")} <span>${t("ai.send")}</span></button></form></div>
-      <p class="fine" style="margin-top:10px">${t("ai.disclaimer")} ${hist.length ? `<button class="linkbtn" id="chatClear">${t("ai.clear")}</button>` : ""}</p>`;
+      <p class="fine" style="margin-top:10px">${t("ai.disclaimer")} ${t("ai.note")} ${hist.length ? `<button class="linkbtn" id="chatClear">${t("ai.clear")}</button>` : ""}</p>`;
     const log = $("#chatLog"), inp = $("#chatIn");
     log.scrollTop = log.scrollHeight;
     const send = async text => {
@@ -1219,22 +1568,42 @@
 
   // ---------- настройки ----------
   function renderSettings() {
-    const f = [["season_days", "params.season"], ["intake", "params.intake"], ["util", "params.util"], ["k_ndvi", "params.k"], ["hay_price", "params.hay"]];
+    const cal = S.calib || {};
     $("#setPage").innerHTML = `<div class="card">
         <div class="setrow"><span>${t("set.lang")}</span><div class="seg"><button data-l="ru" class="${I.lang === "ru" ? "on" : ""}">Русский</button><button data-l="kk" class="${I.lang === "kk" ? "on" : ""}">Қазақша</button></div></div>
         <div class="setrow"><span>${t("set.mode")}</span><div class="seg">${["current", "plan", "ndvi"].map(m => `<button data-m="${m}" class="${S.mode === m ? "on" : ""}">${t("map.mode." + m)}</button>`).join("")}</div></div>
         <div class="setrow"><span>${t("set.demo")}</span><label class="switch"><input type="checkbox" id="setDemo" ${C.ls.get("jaiylym:demo", true) ? "checked" : ""}><span></span></label></div></div>
       <div class="card"><h2>${ic("chart")} ${t("set.model")} ${src("model")}</h2><p class="fine">${t("set.modelNote")}</p>
-        <div class="params">${f.map(([k, l]) => `<label class="field">${t(l)}<input type="number" step="any" min="0" data-param="${k}" value="${S.P[k]}"></label>`).join("")}</div>
+        <p>${t("set.modelVer")}: <b>${M.MODEL_VERSION}</b> · ${t("set.field")}: <b>${M.fieldValidated(S.P) ? t("how.yes") : t("how.no")}</b></p>
+        <div class="params">${paramInputs()}
+          <label class="field">${t("set.veg")}<select id="setVeg">${M.VEGETATION.map(v => `<option value="${v}" ${S.P.vegetation_type === v ? "selected" : ""}>${t("veg." + v)}</option>`).join("")}</select><small class="fine">${t("set.vegNote")}</small></label></div>
         <button class="btn btn-ghost btn-sm" id="setReset">${t("params.reset")}</button></div>
+      <form class="card" id="calibForm"><h2>${ic("leaf")} ${t("set.calib")}</h2><p class="fine">${t("set.calibD")}</p>
+        <div class="formgrid"><label class="field">${t("set.calibK")}<input name="k" type="number" step="any" min="${M.SPEC.k_ndvi.min}" max="${M.SPEC.k_ndvi.max}" value="${cal.values ? cal.values.k_ndvi : ""}" required></label>
+          <label class="field span2">${t("set.calibSrc")}<input name="src" maxlength="120" value="${esc(cal.source || "")}" required></label>
+          <label class="field">${t("set.calibDate")}<input name="date" type="date" value="${esc(cal.date || "")}" required></label>
+          <label class="check span4"><input type="checkbox" name="field" ${cal.field ? "checked" : ""}> ${t("set.calibField")}</label></div>
+        <p class="perr" id="calibErr" hidden></p>
+        <p style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary btn-sm">${t("set.calibSave")}</button>${S.calib ? `<button type="button" class="btn btn-ghost btn-sm" id="calibClear">${t("set.calibClear")}</button>` : ""}</p></form>
       <div class="card"><h2>${ic("send")} ${t("set.notify")}</h2><p>${t("set.notifyD")}</p><a class="btn btn-tg" href="https://t.me/JAIYLYM_bot" target="_blank" rel="noopener">${ic("send")} @JAIYLYM_bot</a></div>
       <div class="card"><h2>${ic("save")} ${t("set.data")}</h2><p style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost btn-sm" id="setClear">${t("set.clear")}</button>
         <button class="btn btn-ghost btn-sm" id="setGuest">${t("set.clearGuest")}</button></p><p class="fine">${t("set.version")}: 2026.11 · ${esc(navigator.onLine ? "online" : "offline")}</p></div>`;
     $$("#setPage [data-l]").forEach(b => b.onclick = () => setLang(b.dataset.l));
     $$("#setPage [data-m]").forEach(b => b.onclick = () => { S.mode = b.dataset.m; C.ls.set("jaiylym:mode", S.mode); if (S.D) paintMap(); renderSettings(); });
     $("#setDemo").onchange = e => C.ls.set("jaiylym:demo", e.target.checked);
-    $$("#setPage [data-param]").forEach(i => i.onchange = () => { const v = +i.value; if (!Number.isFinite(v) || v <= 0) { i.value = S.P[i.dataset.param]; return; } S.P[i.dataset.param] = v; saveParams(); if (S.D) render(); });
-    $("#setReset").onclick = () => { S.P = J.params(); saveParams(); if (S.D) render(); renderSettings(); };
+    $$("#setPage [data-param]").forEach(i => i.onchange = () => { if (setParam(i.dataset.param, i.value, i, $("#setPage")) && S.D) render(); });
+    $("#setVeg").onchange = e => { S.userP = Object.assign({}, S.userP, { vegetation_type: e.target.value }); S.P = resolveParams(S.userP, S.calib); saveParams(); };
+    $("#setReset").onclick = () => { S.userP = {}; S.P = resolveParams({}, S.calib); saveParams(); if (S.D) render(); renderSettings(); };
+    $("#calibForm").onsubmit = ev => {
+      ev.preventDefault();
+      const fd = new FormData(ev.target);
+      const cal2 = { values: { k_ndvi: +fd.get("k") }, source: String(fd.get("src")).trim(), date: String(fd.get("date")), field: fd.get("field") === "on" };
+      const r = M.validate(cal2.values);
+      if (!r.ok) { const e = $("#calibErr"); e.hidden = false; e.textContent = t("set.bad", { v: fd.get("k"), r: r.errors[0].reason }); return; }
+      S.calib = cal2; C.ls.set("jaiylym:calibration", cal2); S.P = resolveParams(S.userP, S.calib);
+      if (S.D) render(); renderSettings(); toast(t("set.calibSaved"));
+    };
+    const cc = $("#calibClear"); if (cc) cc.onclick = () => { S.calib = null; C.ls.del("jaiylym:calibration"); S.P = resolveParams(S.userP, null); if (S.D) render(); renderSettings(); };
     $("#setClear").onclick = () => { try { Object.keys(localStorage).filter(k => k.startsWith("jaiylym:v")).forEach(k => localStorage.removeItem(k)); } catch (_) {} toast(t("set.cleared")); };
     $("#setGuest").onclick = () => { C.ls.del("jaiylym:guest:scenarios"); C.ls.del("jaiylym:guest:history"); toast(t("set.cleared")); };
   }
@@ -1317,7 +1686,7 @@
     $("#pdfBtn").onclick = async () => {
       if (!S.D) return;
       toast(t("rep.making"));
-      try { await window.Report.export(reportCtx()); C.addHistory({ kind: "pdf", village: S.D.village, summary: summary() }); }
+      try { await window.Report.export(reportCtx()); C.addHistory({ kind: "pdf", village: S.D.village, summary: summary() }); metric("pdf"); }
       catch (e) { toast(t("rep.printFallback"), true); }
     };
     $("#accountBtn").onclick = () => (C.loggedIn ? go("profile") : openLogin());
@@ -1336,9 +1705,12 @@
 
   // данные для PDF-отчёта
   function reportCtx() {
-    return { t, fmt, fmt1, pct, esc, src, J, S, scheme, loadColor, confidence, summary: summary(), trend: trendLine(), lang: I.lang };
+    let scen = [];
+    try { scen = S.herds.length ? J.compareScenarios(S.plots, S.herds, S.P, J.defaultVariants(S.plots, S.herds, S.P)) : []; } catch (_) {}
+    return { t, fmt, fmt1, pct, esc, src, J, M, S, scheme, loadColor, confidence, summary: summary(), trend: trendLine(), lang: I.lang,
+      meta: M.metaOf(S.D), scenarios: scen, variantName, sgText, wrText, whyHerd, dateStr };
   }
 
-  window.JaiylymApp = { S, openVillage, render, summary, confidence, scheme, reportCtx, pickVillageOnMap, aiContext, briefData };   // для отладки и тестов
+  window.JaiylymApp = { S, openVillage, render, summary, confidence, scheme, reportCtx, pickVillageOnMap, aiContext, briefData, openHow, renderPane, rebuildPlots };   // для отладки и тестов
   init();
 })();
