@@ -598,3 +598,16 @@ table.wi tr.wi-base td{background:#f2f7f1}
   table.wi th,table.wi td,table.plots-t th,table.plots-t td{font-size:12px;padding:5px 6px}
   .demo-banner .btn{width:100%}
 }
+/* поля в формах и настройках не шире экрана телефона */
+.formgrid > *, .params > *, .params .field, .field { min-width: 0; }
+.field input, .field select, .field textarea { max-width: 100%; min-width: 0; box-sizing: border-box; }
+.field small { overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .formgrid { grid-template-columns: 1fr 1fr; }
+  .formgrid .span2, .formgrid .span4 { grid-column: 1 / -1; }
+}
+/* параметр: название и поле в строку, диапазон/единицы/происхождение — отдельной строкой ниже */
+.params .field { flex-wrap: wrap; }
+.params .field > small.fine { order: 3; flex: 1 1 100%; margin-top: -2px; font-size: 11.5px; line-height: 1.35; }
+.params .field > .perr { order: 4; flex: 1 1 100%; }
+.params .field .origin { white-space: nowrap; }
