@@ -18,3 +18,19 @@ test("своё пастбище: реальный снимок", { timeout: 2400
   assert.ok(Math.abs(r.area_ha - 100) < 0.5);
   assert.ok(r.pasture_ha + r.excluded_ha + r.uncertain_ha <= r.area_ha + 0.5);
 });
+
+for (const [name, lat, lon] of [["Кеген", 43.02, 79.22], ["Бесколь (СКО)", 54.79, 69.12]]) {
+  test(`${name}: прошлое лето по реальным снимкам и сравнение с годом раньше`, { timeout: 300000 }, async () => {
+    const a = await PL.buildSeason({ lat, lon, year: 2025 }), b = await PL.buildSeason({ lat, lon, year: 2024 });
+    for (const s of [a, b]) {
+      assert.equal(s.plots.length, 16);
+      for (const p of s.plots) {
+        assert.ok(p.ndvi == null || (p.ndvi > -1 && p.ndvi < 1));
+        assert.ok(p.water_ha == null || (p.water_ha >= 0 && p.water_ha <= p.water_max_ha));
+      }
+    }
+    const c = PL.compareSeasons(a, b);
+    assert.deepEqual(c.years, [2024, 2025]);
+    assert.ok(c.plots.length === 16);
+  });
+}

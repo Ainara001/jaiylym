@@ -19,6 +19,8 @@ const PL = require("./web/pipeline.js");
 const M = require("./web/model.js");
 const G = require("./gemini.js");
 const F = require("./ai-facts.js");
+const X = require("./ai-context.js");
+const AI_CTX_MAX = +process.env.AI_CONTEXT_CHARS || 24000;   // ~7–8 тыс. токенов данных села
 
 // ---------- ИИ: инструкции модели ----------
 const AI_DAILY = +process.env.AI_DAILY_LIMIT || 1500;
@@ -33,6 +35,9 @@ const AI_RULES = "Используй только данные из блока �
   "Чтобы объяснить, откуда число, используй поле «как_рассчитано» (шаги формулы) — перескажи шаги с их числами. " +
   "Право пользования участком в данных — только ввод пользователя, его НЕ проверяли по госреестру; никогда не утверждай, что право подтверждено. " +
   "Вода «по карте WorldCover» — это водоём на снимке, а не проверенный водопой. Ёмкость не подтверждена полевыми измерениями. " +
+  "Блок «прошлый_год» — те же участки и то же окно июнь–август прошлого лета; изменения уже посчитаны, бери их оттуда. " +
+  "Изменение NDVI меньше порога — «без изменений», а не тренд; NDVI — зелёность травы, а не урожай; один год к другому — не многолетний тренд. " +
+  "Если сравнение_надёжно = false — скажи об этом. «Устойчивая вода по снимкам» — вода, видимая большую часть лета, а не проверенный водопой. " +
   "Если в блоке ПРОБЛЕМЫ_ДАННЫХ что-то указано — начни ответ с этого. Ты не агроном и не госорган: твой ответ — пояснение расчёта, а не заключение. " +
   G.SCOPE;
 const AI_SYSTEM = {
@@ -307,11 +312,13 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         const b = await body(req);
         const lang = b.lang === "kk" ? "kk" : "ru";
         const issues = aiContextIssues(b.context);
-        const ctx = b.context && typeof b.context === "object" ? JSON.stringify(b.context).slice(0, 24000) : "{}";
+        // сжатие под предел по протоколу ai-context.js (без обрезки строки): последние вопросы задают, какие участки важнее
+        const userQ = (Array.isArray(b.messages) ? b.messages : []).slice(-12).filter(m => m && m.role !== "ai").map(m => str(m.text, 1200)).join("\n");
+        const packed = X.compactContext(b.context && typeof b.context === "object" ? b.context : {}, { max: AI_CTX_MAX, focusText: userQ });
+        const ctx = packed.json;
         const msgs = (Array.isArray(b.messages) ? b.messages : []).slice(-12)
           .map(m => `${m.role === "ai" ? "Помощник" : "Пользователь"}: ${str(m.text, 1200)}`).join("\n");
-        // числа из вопросов пользователя (не из прошлых ответов ИИ) — допустимы в ответе
-        const userText = (Array.isArray(b.messages) ? b.messages : []).slice(-12).filter(m => m && m.role !== "ai").map(m => str(m.text, 1200)).join("\n");
+        const userText = userQ;   // числа из вопросов пользователя (не из прошлых ответов ИИ) допустимы в ответе
         const task = b.mode === "summary" ? AI_SUMMARY[lang] : AI_CHAT[lang];
         const input = `ДАННЫЕ (JSON):\n${ctx}\n\nПРОБЛЕМЫ_ДАННЫХ: ${issues.length ? issues.join(" ") : "нет"}\n\n` +
           `${msgs ? "РАЗГОВОР:\n" + msgs + "\n\n" : ""}ЗАДАЧА: ${task}`;
@@ -335,13 +342,13 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         }
         // Проверка чисел: всё, чего нет в данных и в вопросах пользователя, — выдумано или посчитано моделью.
         // Один повтор с просьбой убрать такие числа, если хватает времени (сайт ждёт 90 с).
-        let check = F.verifyNumbers(r.text, b.context, userText);
+        let check = F.verifyNumbers(r.text, packed.obj, userText);
         const left = 80000 - (Date.now() - started);
         if (!check.ok && left > 15000) {
           const again = await G.ask(Object.assign({}, opts, { budgetMs: Math.min(30000, left), input: input +
             `\n\nПРОВЕРКА: в черновике ответа были числа, которых нет в ДАННЫХ: ${check.unknown.join(", ")}. ` +
             "Напиши ответ заново, используя только числа из ДАННЫХ; если нужного числа нет — скажи, что его нет в расчёте." }));
-          if (again.ok) { const c2 = F.verifyNumbers(again.text, b.context, userText); if (c2.unknown.length <= check.unknown.length) { r = again; check = c2; } }
+          if (again.ok) { const c2 = F.verifyNumbers(again.text, packed.obj, userText); if (c2.unknown.length <= check.unknown.length) { r = again; check = c2; } }
         }
         return json(res, 200, { text: r.text, model: r.model, issues, numbers: check,
           note: "Ответ ИИ — пояснение расчёта, а не заключение агронома или госоргана." }), true;
