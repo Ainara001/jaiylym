@@ -14,7 +14,7 @@ const URL = BASE + "/interactions";
 const configured = () => (process.env.GEMINI_MODELS || "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.5-flash").split(",").map(s => s.trim()).filter(Boolean);
 const MODELS = configured();
 
-const state = { lastErrors: [], discovered: null, discoveredAt: 0, lastOk: null, blocked: new Set(), noThinking: new Set() };
+const state = { lastErrors: [], discovered: null, discoveredAt: 0, lastOk: null, blocked: new Set(), noThinking: new Set(), noSearch: new Set() };
 
 /**
  * Рамка ассистента — общая для сайта и бота. Модель решает по смыслу, без списков запрещённых слов.
@@ -72,19 +72,28 @@ async function tryModel(model, body, key, timeoutMs) {
       body: JSON.stringify(Object.assign({ model }, b)),
       signal: AbortSignal.timeout(Math.max(1000, timeoutMs - (Date.now() - started))),
     });
-    const lean = state.noThinking.has(model) ? withoutThinking(body) : body;
+    let lean = state.noThinking.has(model) ? withoutThinking(body) : body;
+    if (state.noSearch.has(model)) lean = withoutSearch(lean);
     let r = await post(lean);
     let d = await r.json().catch(() => ({}));
-    // старые модели не знают thinking_level (400) — повторяем без него и запоминаем модель
+    // старые модели не знают thinking_level или поиск Google (400) — повторяем без них и запоминаем модель
     if (r.status === 400 && lean.generation_config.thinking_level && /thinking/i.test(JSON.stringify(d.error || ""))) {
       state.noThinking.add(model);
-      r = await post(withoutThinking(body));
+      lean = withoutThinking(lean);
+      r = await post(lean);
+      d = await r.json().catch(() => ({}));
+    }
+    if (r.status === 400 && lean.tools && /search|tool/i.test(JSON.stringify(d.error || ""))) {
+      state.noSearch.add(model);
+      lean = withoutSearch(lean);
+      r = await post(lean);
       d = await r.json().catch(() => ({}));
     }
     if (r.ok) {
-      const text = (d.steps || []).filter(s => s.type === "model_output")
-        .flatMap(s => s.content || []).filter(c => c.type === "text").map(c => c.text).join("").trim();
-      if (text) return { ok: true, text, model };
+      const out = parseSteps(d.steps);
+      // поля поиска — только если поиск был: ответ без поиска остаётся { ok, text, model }
+      if (out.text) return Object.assign({ ok: true, text: out.text, model }, out.searches || out.sources.length
+        ? { sources: out.sources, cited: out.cited, suggestions: out.suggestions, searches: out.searches } : {});
       remember(model, "empty"); return { ok: false, error: "empty" };
     }
     const err = (d.error && (d.error.code || d.error.status || d.error.message)) || "HTTP " + r.status;
@@ -100,6 +109,33 @@ async function tryModel(model, body, key, timeoutMs) {
 }
 
 const withoutThinking = b => Object.assign({}, b, { generation_config: Object.assign({}, b.generation_config, { thinking_level: undefined }) });
+const withoutSearch = b => Object.assign({}, b, { tools: undefined });
+
+/**
+ * Ответ модели из шагов Interactions API: текст (блоки model_output), источники поиска Google (аннотации url_citation
+ * с позициями в тексте), подсказки поиска (HTML от Google, показывать обязательно по условиям Grounding) и число запросов поиска.
+ */
+function parseSteps(steps) {
+  let text = "", searches = 0, suggestions = "";
+  const cites = [];
+  for (const s of steps || []) {
+    if (s.type === "google_search_call") searches += ((s.arguments && s.arguments.queries) || []).length || 1;
+    if (s.type === "google_search_result") for (const x of s.result || []) if (x && x.search_suggestions && !suggestions) suggestions = String(x.search_suggestions);
+    if (s.type !== "model_output") continue;
+    for (const c of s.content || []) {
+      if (c.type !== "text" || !c.text) continue;
+      const base = text.length;
+      text += c.text;
+      for (const a of c.annotations || []) if (a && a.type === "url_citation" && /^https?:\/\//.test(a.url || ""))
+        cites.push({ url: a.url, title: String(a.title || "").slice(0, 120), segment: c.text.slice(a.start_index || 0, a.end_index || 0) });
+    }
+  }
+  const lead = text.length - text.trimStart().length;
+  text = text.trim();
+  const seen = new Set(), sources = [];
+  for (const c of cites) if (!seen.has(c.url)) { seen.add(c.url); sources.push({ url: c.url, title: c.title }); }
+  return { text, sources: sources.slice(0, 6), cited: cites.map(c => c.segment).filter(Boolean), suggestions, searches };
+}
 
 /**
  * Классификация неудачи по HTTP-кодам всех попыток. Ответ 5xx от Google — «overloaded»;
@@ -122,11 +158,12 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
  * Если причина — перегрузка (503) или лимит (429), ждём и повторяем круг (до 3 кругов: пауза 3 с и 7 с),
  * но не дольше budgetMs, чтобы сайт (тайм-аут 90 с) получил ответ. Модели, которые Google закрыл (404), больше не пробуем.
  */
-async function ask({ system, input, maxTokens = 700, temperature = 0.4, timeoutMs = 20000, budgetMs = 45000, thinking = process.env.GEMINI_THINKING || "low" }) {
+async function ask({ system, input, maxTokens = 700, temperature = 0.4, timeoutMs = 20000, budgetMs = 45000, thinking = process.env.GEMINI_THINKING || "low", search = false }) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return { ok: false, error: "no_key" };
   // thinking_level "low": пояснение расчёта не требует долгих рассуждений — быстрее ответ и меньше токенов
   const body = { input, system_instruction: system, generation_config: { max_output_tokens: maxTokens, temperature, thinking_level: thinking || undefined } };
+  if (search) body.tools = [{ type: "google_search" }];   // модель сама решает, искать ли; каждый запрос поиска платный сверх квоты
   const started = Date.now(), tried = [], statuses = [], errors = [];
   const left = () => budgetMs - (Date.now() - started);
   let fallback = null;
@@ -177,8 +214,8 @@ async function status() {
     configured_available: list.ok ? MODELS.map(m => ({ model: m, available: list.models.includes(m) })) : null,
     fallback_candidates: list.ok ? fallbackModels(list.models, MODELS) : [],
     models_list: list.ok ? "ok" : list.error,
-    last_ok: state.lastOk, last_errors: state.lastErrors, blocked_models: [...state.blocked], no_thinking_models: [...state.noThinking],
+    last_ok: state.lastOk, last_errors: state.lastErrors, blocked_models: [...state.blocked], no_thinking_models: [...state.noThinking], no_search_models: [...state.noSearch],
   };
 }
 
-module.exports = { ask, status, listModels, fallbackModels, classify, MODELS, SCOPE, _state: state };
+module.exports = { ask, status, listModels, fallbackModels, classify, parseSteps, MODELS, SCOPE, _state: state };
