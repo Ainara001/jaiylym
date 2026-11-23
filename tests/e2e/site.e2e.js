@@ -133,6 +133,21 @@ async function journey(page, label) {
     });
     assert.equal(wide, null, `${label}: #/${route} шире экрана: ${wide}`);
   }
+  // телефон: поля не мельче 16px (иначе iPhone увеличивает страницу при вводе), кнопки и поля не меньше 40px по высоте
+  if (/телефон/.test(label)) for (const route of ["map?lat=43.02&lon=79.22&name=Кеген", "ai", "settings", "research", "scenarios"]) {
+    await page.goto(base + "#/" + route);
+    await page.waitForTimeout(300);
+    const bad = await page.evaluate(() => {
+      const vis = e => { const r = e.getBoundingClientRect(), s = getComputedStyle(e); return r.width && r.height && s.visibility !== "hidden" && s.display !== "none"; };
+      const name = e => `${e.tagName.toLowerCase()}${e.id ? "#" + e.id : ""} «${(e.innerText || e.value || "").trim().slice(0, 30)}»`;
+      const out = [];
+      for (const e of document.querySelectorAll("input, select, textarea")) if (vis(e) && !/checkbox|radio|range|hidden/.test(e.type) && parseFloat(getComputedStyle(e).fontSize) < 16) out.push("шрифт " + name(e));
+      for (const e of document.querySelectorAll("main button, main a.btn, main select, main input:not([type=checkbox]):not([type=radio]), .topbar button, .topbar a.btn"))
+        if (vis(e) && !e.closest(".leaflet-control-attribution") && e.getBoundingClientRect().height < 40) out.push(`высота ${Math.round(e.getBoundingClientRect().height)} ` + name(e));
+      return out.slice(0, 8);
+    });
+    assert.deepEqual(bad, [], `${label}: #/${route} мелкие поля или кнопки`);
+  }
   assert.deepEqual(errors, [], label + ": ошибки JavaScript");
 }
 
