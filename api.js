@@ -18,6 +18,7 @@ const crypto = require("crypto");
 const PL = require("./web/pipeline.js");
 const M = require("./web/model.js");
 const G = require("./gemini.js");
+const F = require("./ai-facts.js");
 
 // ---------- ИИ: инструкции модели ----------
 const AI_DAILY = +process.env.AI_DAILY_LIMIT || 1500;
@@ -309,23 +310,41 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         const ctx = b.context && typeof b.context === "object" ? JSON.stringify(b.context).slice(0, 24000) : "{}";
         const msgs = (Array.isArray(b.messages) ? b.messages : []).slice(-12)
           .map(m => `${m.role === "ai" ? "Помощник" : "Пользователь"}: ${str(m.text, 1200)}`).join("\n");
+        // числа из вопросов пользователя (не из прошлых ответов ИИ) — допустимы в ответе
+        const userText = (Array.isArray(b.messages) ? b.messages : []).slice(-12).filter(m => m && m.role !== "ai").map(m => str(m.text, 1200)).join("\n");
         const task = b.mode === "summary" ? AI_SUMMARY[lang] : AI_CHAT[lang];
         const input = `ДАННЫЕ (JSON):\n${ctx}\n\nПРОБЛЕМЫ_ДАННЫХ: ${issues.length ? issues.join(" ") : "нет"}\n\n` +
           `${msgs ? "РАЗГОВОР:\n" + msgs + "\n\n" : ""}ЗАДАЧА: ${task}`;
         // Казахский текст занимает больше токенов, чем русский: сводке нужен запас по длине и времени.
         // Сайт ждёт 90 с, поэтому общий бюджет — 60 с, на одну модель — до 30 с.
         const summary = b.mode === "summary";
-        const r = await G.ask({ system: AI_SYSTEM[lang], input,
-          maxTokens: summary ? (lang === "kk" ? 900 : 600) : (lang === "kk" ? 900 : 700),
-          timeoutMs: summary ? 30000 : 25000, budgetMs: 60000 });
+        const started = Date.now();
+        const opts = { system: AI_SYSTEM[lang], maxTokens: summary ? (lang === "kk" ? 900 : 600) : (lang === "kk" ? 900 : 700),
+          timeoutMs: summary ? 30000 : 25000 };
+        let r = await G.ask(Object.assign({ input, budgetMs: 60000 }, opts));
         if (!r.ok) {
+          // Gemini не ответил — шаблон из тех же данных: сайт и демо не зависят от перегрузок Google
           const ERR = { no_key: "ИИ не настроен на сервере", timeout: "ИИ не ответил вовремя, попробуйте ещё раз",
             quota: "у ИИ закончился лимит запросов Google, попробуйте позже", key: "ключ ИИ на сервере не принят Google",
             model_not_found: "модели ИИ из настроек сервера недоступны",
             overloaded: "серверы Google сейчас перегружены, ИИ не ответил — попробуйте через минуту" };
-          return json(res, 503, { error: ERR[r.error] || "ИИ сейчас перегружен, попробуйте через минуту", reason: r.error, issues }), true;
+          const SHORT = { ru: { overloaded: "серверы Google перегружены", timeout: "не успел ответить", quota: "закончился лимит Google" },
+            kk: { overloaded: "Google серверлері жүктелген", timeout: "уақытында жауап бермеді", quota: "Google лимиті бітті" } };
+          return json(res, 200, { text: F.templateAnswer(b.context, lang, issues, SHORT[lang][r.error] || ""), fallback: true, model: null,
+            error: ERR[r.error] || "ИИ сейчас перегружен, попробуйте через минуту", reason: r.error, issues }), true;
         }
-        return json(res, 200, { text: r.text, model: r.model, issues, note: "Ответ ИИ — пояснение расчёта, а не заключение агронома или госоргана." }), true;
+        // Проверка чисел: всё, чего нет в данных и в вопросах пользователя, — выдумано или посчитано моделью.
+        // Один повтор с просьбой убрать такие числа, если хватает времени (сайт ждёт 90 с).
+        let check = F.verifyNumbers(r.text, b.context, userText);
+        const left = 80000 - (Date.now() - started);
+        if (!check.ok && left > 15000) {
+          const again = await G.ask(Object.assign({}, opts, { budgetMs: Math.min(30000, left), input: input +
+            `\n\nПРОВЕРКА: в черновике ответа были числа, которых нет в ДАННЫХ: ${check.unknown.join(", ")}. ` +
+            "Напиши ответ заново, используя только числа из ДАННЫХ; если нужного числа нет — скажи, что его нет в расчёте." }));
+          if (again.ok) { const c2 = F.verifyNumbers(again.text, b.context, userText); if (c2.unknown.length <= check.unknown.length) { r = again; check = c2; } }
+        }
+        return json(res, 200, { text: r.text, model: r.model, issues, numbers: check,
+          note: "Ответ ИИ — пояснение расчёта, а не заключение агронома или госоргана." }), true;
       }
       // --- вход ---
       if (p === "/auth/start" && req.method === "POST") {

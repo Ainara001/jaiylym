@@ -1373,7 +1373,7 @@
       <ul class="todo">${todo.slice(0, 4).map(x => `<li>${ic("check")}<span>${x}</span></li>`).join("")}</ul>
       <p class="fine" style="margin-top:10px">${t("brief.trust", { k: S.D.source.dates.length, year: S.D.source.year })} ${src("sat")} ${src("model")}</p></div>
       <div class="aibox" id="aiBox"><button class="btn btn-green btn-sm" id="aiBriefBtn">${ic("spark")} ${t("brief.ai")}</button>
-        ${S.aiBrief && S.aiBrief.key === briefKey() ? `<p class="aitext">${esc(S.aiBrief.text)}</p><p class="fine">${t("brief.aiNote")}</p>` : ""}</div>`;
+        ${S.aiBrief && S.aiBrief.key === briefKey() ? `<p class="aitext">${esc(S.aiBrief.text)}</p>${S.aiBrief.mark || ""}<p class="fine">${t("brief.aiNote")}</p>` : ""}</div>`;
   }
   const briefKey = () => S.D ? JSON.stringify([S.D.village.lat, S.D.village.lon, S.herds.map(h => [h.sheep, h.goats, h.cattle, h.horses, h.home, h.daily_return, h.allowed_plots]), [...S.added], [...S.forbidden], S.waterSet, S.P.k_ndvi, S.P.util, S.P.season_days, I.lang]) : "";
 
@@ -1506,11 +1506,18 @@
       box.insertAdjacentHTML("beforeend", `<p class="fine" id="aiWait">${t("brief.aiWait")}</p>`);
       try {
         const r = await C.ai({ mode: "summary", lang: I.lang, context: aiContext() });
-        S.aiBrief = { key: k, text: r.text };
+        S.aiBrief = { key: k, text: r.text, mark: aiMark(r) };
         if (S.tab === "brief") renderPane("brief");
       } catch (e) { const w = $("#aiWait", el); if (w) w.textContent = t("brief.aiFail") + ": " + errText(e); btn.disabled = false; }
     };
     loadWeather();
+  }
+
+  /** Пометка под ответом ИИ: шаблон без Gemini или числа, которых нет в расчёте (проверка на сервере, ai-facts.js). */
+  function aiMark(r) {
+    if (r.fallback) return `<p class="fine ai-mark">${t("ai.fallback")}</p>`;
+    if (r.numbers && !r.numbers.ok) return `<p class="fine ai-mark warn">${t("ai.unverified", { n: esc(r.numbers.unknown.join(", ")) })}</p>`;
+    return "";
   }
 
   /** Данные открытого села для ИИ: только то, что видит пользователь, с пометками источника. */
@@ -1580,7 +1587,7 @@
       try {
         const r = await C.ai({ mode: "chat", lang: I.lang, context: aiContext(), messages: hist.slice(-10) });
         hist.push({ role: "ai", text: r.text });
-        $("#aiTyping").outerHTML = `<div class="msg ai">${esc(r.text)}</div>`;
+        $("#aiTyping").outerHTML = `<div class="msg ai">${esc(r.text)}${aiMark(r)}</div>`;
       } catch (e) {
         hist.pop();
         $("#aiTyping").outerHTML = `<div class="msg ai err">${esc(t("brief.aiFail") + ": " + errText(e))}</div>`;
