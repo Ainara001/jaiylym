@@ -242,24 +242,133 @@
     }
     return nd;
   }
-  async function sceneNdvi(bbox, it) {
+  /** Классы SCL по пикселям (0 — нет данных). Тот же запрос, что и для NDVI: вода видна без лишних загрузок. */
+  function sclFromBands(d, N) {
+    const s = new Uint8Array(N);
+    for (let i = 0; i < N; i++) if (d[3 * N + i]) s[i] = d[2 * N + i];
+    return s;
+  }
+  async function sceneData(bbox, it) {
     const N = SIZE * SIZE;
     const { data: d } = await raster(bbox, "sentinel-2-l2a", it.id, ["B04", "B08", "SCL"]);
-    return ndviFromBands(d, N, boaOffset(it.properties));
+    return { nd: ndviFromBands(d, N, boaOffset(it.properties)), scl: sclFromBands(d, N) };
   }
+  async function sceneNdvi(bbox, it) { return (await sceneData(bbox, it)).nd; }
   /**
    * Тайлы одной даты (один пролёт спутника) — одно наблюдение: склеиваем, а не считаем дважды в медиане.
-   * per — массивы NDVI по сценам, dates — их даты. Возвращает { per, dates } по уникальным датам.
+   * per — массивы по сценам (NDVI: пропуск — NaN; SCL: пропуск — 0), dates — их даты. Возвращает { per, dates } по уникальным датам.
    */
-  function mergeSameDate(per, dates) {
+  function mergeSameDate(per, dates, missing = v => Number.isNaN(v)) {
     const order = [], byDate = new Map();
     per.forEach((nd, j) => {
       const d = dates[j];
-      if (!byDate.has(d)) { byDate.set(d, Float32Array.from(nd)); order.push(d); return; }
+      if (!byDate.has(d)) { byDate.set(d, nd.slice()); order.push(d); return; }
       const acc = byDate.get(d);
-      for (let i = 0; i < acc.length; i++) if (Number.isNaN(acc[i]) && !Number.isNaN(nd[i])) acc[i] = nd[i];
+      for (let i = 0; i < acc.length; i++) if (missing(acc[i]) && !missing(nd[i])) acc[i] = nd[i];
     });
     return { per: order.map(d => byDate.get(d)), dates: order };
+  }
+
+  // ---------- вода по снимкам (SCL), а не по карте 2021 года ----------
+  const SCL_WATER = 6;
+  const SCL_SEEN = [2, 4, 5, 6, 7, 11];    // поверхность видна: не облако, не тень облака, не нет данных
+  /**
+   * Вода на каждом участке за лето по классу SCL «вода». Пиксель — устойчивая вода, если он виден минимум на 2 снимках
+   * и был водой хотя бы на половине из них: так отсекаются тени гор, мокрая почва и одиночные лужи, которые SCL путает с водой.
+   * water_ha — устойчивая вода, water_max_ha — вода хотя бы на одном снимке. water_obs — сколько снимков видели ≥ 50 % участка.
+   * null — участок почти не виден ни на одном снимке.
+   */
+  function plotWater(scls, idx, pxHa, nPlots = 16) {
+    const acc = Array.from({ length: nPlots }, () => ({ all: 0, seen: 0, stable: 0, any: 0 }));
+    const n = scls.length ? scls[0].length : 0;
+    const dateSeen = Array.from({ length: nPlots }, () => new Array(scls.length).fill(0));
+    for (let i = 0; i < n; i++) {
+      const k = idx[i];
+      if (k < 0) continue;
+      let seen = 0, water = 0;
+      scls.forEach((scl, j) => { if (SCL_SEEN.includes(scl[i])) { seen++; dateSeen[k][j]++; if (scl[i] === SCL_WATER) water++; } });
+      const a = acc[k]; a.all++;
+      if (seen) a.seen++;
+      if (seen >= 2 && water / seen >= 0.5) a.stable++;
+      if (water) a.any++;
+    }
+    return acc.map((a, k) => {
+      const obs = dateSeen[k].filter(s => a.all && s / a.all >= 0.5).length;
+      if (!obs) return { water_ha: null, water_max_ha: null, water_obs: 0 };
+      return { water_ha: +(a.stable * pxHa).toFixed(1), water_max_ha: +(a.any * pxHa).toFixed(1), water_obs: obs };
+    });
+  }
+
+  /** Снимки одного лета: NDVI и SCL по уникальным датам. null — безоблачных снимков нет. */
+  async function seasonArrays(bbox, year) {
+    const scenes = await findScenes(bbox, year);
+    if (!scenes.length) return null;
+    const raw = await Promise.all(scenes.map(it => sceneData(bbox, it)));
+    const d0 = scenes.map(s => s.properties.datetime.slice(0, 10));
+    const { per, dates } = mergeSameDate(raw.map(x => x.nd), d0);
+    const { per: scls } = mergeSameDate(raw.map(x => x.scl), d0, v => v === 0);
+    return { scenes, per, scls, dates };
+  }
+
+  /**
+   * Одно лето для участков села (любое село, любой год): NDVI (медиана июнь–август по пастбищному покрову)
+   * и вода по снимкам. Тот же расчёт, что у buildVillage, без картинки. Для сравнения с прошлым годом и многолетнего ряда.
+   */
+  async function buildSeason({ lat, lon, year, onProgress }) {
+    const say = m => onProgress && onProgress(m);
+    const bbox = bboxFor(lat, lon);
+    say(`Ищу снимки лета ${year}…`);
+    const arr = await seasonArrays(bbox, year);
+    const plots = makePlots(lat, lon);
+    if (!arr) return { year, dates: [], status: "no_data", valid_fraction: 0, plots: plots.map(p => ({ id: p.id, ndvi: null, valid_fraction: 0, obs_count: 0, water_ha: null, water_max_ha: null, water_obs: 0 })) };
+    say(`Считаю лето ${year}…`);
+    return seasonFromArrays({ lat, lon, bbox, year, per: arr.per, scls: arr.scls, dates: arr.dates, land: await loadLand(bbox) });
+  }
+  /** Вычислительная часть buildSeason без сети (для тестов). */
+  function seasonFromArrays({ lat, lon, bbox, year, per, scls, dates, land }) {
+    const N = SIZE * SIZE;
+    const { idx, pxHa } = plotIndex(lat, lon, bbox);
+    const med = plotMeans(medianComposite(per, N), land, idx);
+    const perPlot = per.map(nd => plotMeans(nd, land, idx));
+    const water = plotWater(scls, idx, pxHa);
+    let vSum = 0, vN = 0;
+    const plots = makePlots(lat, lon).map((p, k) => {
+      if (med[k].n) { vSum += med[k].valid; vN++; }
+      return { id: p.id, ndvi: med[k].ndvi, valid_fraction: +med[k].valid.toFixed(3),
+        obs_count: perPlot.filter(m => m[k].valid >= 0.5).length, water_ha: water[k].water_ha, water_max_ha: water[k].water_max_ha, water_obs: water[k].water_obs };
+    });
+    return { year, dates: dates.slice().sort(), status: plots.every(p => p.ndvi == null) ? "no_data" : "measured",
+      valid_fraction: vN ? +(vSum / vN).toFixed(3) : 0, plots };
+  }
+
+  /**
+   * Сравнение двух лет по участкам. cur и prev — { year, dates, plots: [{ id, ndvi, water_ha }] }.
+   * Изменение NDVI меньше NDVI_SAME_PCT % считается «без изменений» (разные даты и облака дают шум такого порядка).
+   * Сравнение ненадёжно, если в каком-то году меньше minDates безоблачных дат или общих участков с NDVI меньше половины.
+   */
+  const NDVI_SAME_PCT = 5;
+  function compareSeasons(cur, prev, { minDates = 4 } = {}) {
+    const byId = Object.fromEntries((prev.plots || []).map(p => [p.id, p]));
+    const plots = (cur.plots || []).map(c => {
+      const p = byId[c.id] || {};
+      const n0 = p.ndvi ?? null, n1 = c.ndvi ?? null, w0 = p.water_ha ?? null, w1 = c.water_ha ?? null;
+      const pct = n0 != null && n1 != null && n0 > 0 ? Math.round((n1 - n0) / n0 * 100) : null;
+      return { id: c.id, ndvi: [n0, n1], ndvi_change_pct: pct,
+        trend: pct == null ? null : pct >= NDVI_SAME_PCT ? "greener" : pct <= -NDVI_SAME_PCT ? "browner" : "same",
+        water_ha: [w0, w1], water_change_ha: w0 != null && w1 != null ? +(w1 - w0).toFixed(1) : null };
+    });
+    const both = plots.filter(p => p.ndvi_change_pct != null);
+    const s = both.map(p => p.ndvi_change_pct).sort((a, b) => a - b), m = s.length >> 1;
+    const sumW = i => { const xs = plots.map(p => p.water_ha[i]).filter(v => v != null); return xs.length ? +xs.reduce((a, b) => a + b, 0).toFixed(1) : null; };
+    const reasons = [];
+    if ((prev.dates || []).length < minDates) reasons.push(`prev_dates:${(prev.dates || []).length}`);
+    if ((cur.dates || []).length < minDates) reasons.push(`cur_dates:${(cur.dates || []).length}`);
+    if (both.length < plots.length / 2) reasons.push(`plots:${both.length}/${plots.length}`);
+    return { years: [prev.year, cur.year], dates: [(prev.dates || []).length, (cur.dates || []).length], reliable: !reasons.length, reasons,
+      threshold_pct: NDVI_SAME_PCT, plots,
+      summary: { ndvi_median_change_pct: s.length ? (s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2)) : null,
+        greener: both.filter(p => p.trend === "greener").length, browner: both.filter(p => p.trend === "browner").length,
+        same: both.filter(p => p.trend === "same").length, water_total_ha: [sumW(0), sumW(1)] } };
   }
   function medianComposite(per, N) {
     const out = new Float32Array(N).fill(NaN), buf = [];
@@ -340,8 +449,10 @@
     if (!scenes.length) throw new Error("Нет безоблачных летних снимков для этого места");
 
     say(`Загружаю ${scenes.length} снимков и карту покрытия земли…`);
-    const [rawPer, land] = await Promise.all([Promise.all(scenes.map(it => sceneNdvi(bbox, it))), loadLand(bbox)]);
-    const { per, dates } = mergeSameDate(rawPer, scenes.map(s => s.properties.datetime.slice(0, 10)));
+    const [raw, land] = await Promise.all([Promise.all(scenes.map(it => sceneData(bbox, it))), loadLand(bbox)]);
+    const d0 = scenes.map(s => s.properties.datetime.slice(0, 10));
+    const { per, dates } = mergeSameDate(raw.map(x => x.nd), d0);
+    const { per: scls } = mergeSameDate(raw.map(x => x.scl), d0, v => v === 0);
 
     say("Считаю NDVI и пастбища…");
     const ndvi = medianComposite(per, N);
@@ -360,6 +471,7 @@
     }
     const med = plotMeans(ndvi, land, idx);
     const perPlot = per.map(nd => plotMeans(nd, land, idx));
+    const water = plotWater(scls, idx, pxHa);
     let vSum = 0, vN = 0;
     plots.forEach((p, k) => {
       const a = acc[k];
@@ -378,6 +490,8 @@
         .filter(x => x.v != null).sort((x, y) => x.d < y.d ? -1 : 1);
       p.obs_count = p.series.length;
       p.water_px = a.water;
+      // вода, видимая на снимках этого лета (SCL): для сравнения с прошлым годом; статус водопоя ниже не меняется
+      p.water_obs_ha = water[k].water_ha; p.water_obs_max_ha = water[k].water_max_ha;
       // вода: у села — допущение модели; дальний участок — водоём на карте (это ещё не пригодный водопой); иначе — нет информации
       p.water_status = p.ring === "near" ? "assumed" : (a.water * pxHa >= 0.5 ? "satellite" : "unknown");
       p.water = p.water_status !== "unknown";
@@ -588,7 +702,7 @@
     return m ? (m[1] === "N" ? "Б" : "Д") + "-" + DIRS[+m[2]] : null;
   }
 
-  return { geocode, reverseGeocode, buildVillage, latestScene, polygonStats, latestPolygonScene, polygonAreaHa, closeRing, checkRing, ringSelfIntersects,
+  return { geocode, reverseGeocode, buildVillage, buildSeason, seasonFromArrays, compareSeasons, plotWater, sclFromBands, NDVI_SAME_PCT, latestScene, polygonStats, latestPolygonScene, polygonAreaHa, closeRing, checkRing, ringSelfIntersects,
     plotCode, plotFromCode, bboxFor, makePlots, setUserAgent, summerYear, SIZE,
     LANDCOVER, LANDCOVER_YEAR, SCL_OK, SCL_NAMES, classifyLandcover, landcoverComposition, sanitizeScenes, pickScenes, boaOffset, ndviFromBands,
     mergeSameDate, medianComposite, fetchRetry, plotMeans, maskedMean, insideMask, ringBbox, polygonFromArrays, plotIndex, metaFor };
