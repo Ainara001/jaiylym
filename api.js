@@ -21,6 +21,17 @@ const G = require("./gemini.js");
 const F = require("./ai-facts.js");
 const X = require("./ai-context.js");
 const AI_CTX_MAX = +process.env.AI_CONTEXT_CHARS || 24000;   // ~7–8 тыс. токенов данных села
+// поиск Google: 150 запросов в день ≈ 4 500 в месяц — в пределах бесплатных 5 000 у Gemini 3+
+const AI_SEARCH_DAILY = process.env.AI_SEARCH_DAILY != null ? +process.env.AI_SEARCH_DAILY : 150;
+const searchDay = { day: "", n: 0 };
+const SEARCH_RULE = {
+  ru: "Поиск Google: ищи, только если для ответа нужны свежие внешние сведения, которых нет в ДАННЫХ, — погода и прогноз, цены на сено и скот, " +
+    "ветеринарные и правовые нормы Казахстана, новости района. Цифры села (участки, поголовье, ёмкость, нагрузка) бери только из ДАННЫХ, не из поиска. " +
+    "Для посторонних задач не ищи. Предпочитай официальные и казахстанские источники; найденное в интернете прямо называй найденным в интернете.",
+  kk: "Google іздеуі: жауапқа ДЕРЕКТЕРДЕ жоқ жаңа сыртқы мәлімет керек болса ғана ізде — ауа райы мен болжам, шөп пен мал бағасы, " +
+    "Қазақстанның ветеринарлық және құқықтық нормалары, аудан жаңалықтары. Ауыл сандарын (учаскелер, мал саны, сыйымдылық, жүктеме) тек ДЕРЕКТЕРДЕН ал. " +
+    "Бөгде тапсырмалар үшін іздеме. Ресми және қазақстандық дереккөздерді таңда; интернеттен табылғанды солай ата.",
+};
 
 // ---------- ИИ: инструкции модели ----------
 const AI_DAILY = +process.env.AI_DAILY_LIMIT || 1500;
@@ -328,7 +339,12 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         const started = Date.now();
         const opts = { system: AI_SYSTEM[lang], maxTokens: summary ? (lang === "kk" ? 900 : 600) : (lang === "kk" ? 900 : 700),
           timeoutMs: summary ? 30000 : 25000 };
-        let r = await G.ask(Object.assign({ input, budgetMs: 60000 }, opts));
+        // Поиск Google — только в чате и в пределах дневного лимита (сверх бесплатной квоты Google каждый запрос поиска платный);
+        // сводка строится только по данным села. Искать ли — решает модель по правилу SEARCH_RULE.
+        if (searchDay.day !== day) { searchDay.day = day; searchDay.n = 0; }
+        const search = !summary && searchDay.n < AI_SEARCH_DAILY;
+        let r = await G.ask(Object.assign({ input, budgetMs: 60000, search }, opts, search ? { system: opts.system + " " + SEARCH_RULE[lang] } : {}));
+        if (r.ok && r.searches) searchDay.n += r.searches;
         if (!r.ok) {
           // Gemini не ответил — шаблон из тех же данных: сайт и демо не зависят от перегрузок Google
           const ERR = { no_key: "ИИ не настроен на сервере", timeout: "ИИ не ответил вовремя, попробуйте ещё раз",
@@ -342,15 +358,17 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         }
         // Проверка чисел: всё, чего нет в данных и в вопросах пользователя, — выдумано или посчитано моделью.
         // Один повтор с просьбой убрать такие числа, если хватает времени (сайт ждёт 90 с).
-        let check = F.verifyNumbers(r.text, packed.obj, userText);
+        // числа из фрагментов ответа, подтверждённых источником поиска, тоже допустимы (источник показан под ответом)
+        let check = F.verifyNumbers(r.text, packed.obj, userText + "\n" + (r.cited || []).join("\n"));
         const left = 80000 - (Date.now() - started);
-        if (!check.ok && left > 15000) {
+        if (!check.ok && left > 15000 && !(r.sources || []).length) {   // ответ с поиском не переписываем без поиска — только помечаем
           const again = await G.ask(Object.assign({}, opts, { budgetMs: Math.min(30000, left), input: input +
             `\n\nПРОВЕРКА: в черновике ответа были числа, которых нет в ДАННЫХ: ${check.unknown.join(", ")}. ` +
             "Напиши ответ заново, используя только числа из ДАННЫХ; если нужного числа нет — скажи, что его нет в расчёте." }));
           if (again.ok) { const c2 = F.verifyNumbers(again.text, packed.obj, userText); if (c2.unknown.length <= check.unknown.length) { r = again; check = c2; } }
         }
         return json(res, 200, { text: r.text, model: r.model, issues, numbers: check,
+          sources: r.sources || [], suggestions: (r.sources || []).length ? r.suggestions || "" : "",
           note: "Ответ ИИ — пояснение расчёта, а не заключение агронома или госоргана." }), true;
       }
       // --- вход ---

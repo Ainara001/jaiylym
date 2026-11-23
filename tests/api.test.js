@@ -286,6 +286,30 @@ test("ИИ: ключ не нужен браузеру, проблемы данн
   } finally { G.ask = orig; }
 });
 
+test("ИИ: поиск Google только в чате; источники и подсказки в ответе; числа из цитат допустимы", async () => {
+  const orig = G.ask;
+  const calls = [];
+  G.ask = async args => {
+    calls.push(args);
+    return args.search
+      ? { ok: true, text: "Сено в районе стоит 45 000 тенге за тонну.", model: "t", searches: 1,
+          sources: [{ url: "https://example.kz/seno", title: "example.kz" }], cited: ["Сено в районе стоит 45 000 тенге за тонну."], suggestions: "<div>chips</div>" }
+      : { ok: true, text: "ответ", model: "t" };
+  };
+  try {
+    const chat = await call("POST", "/api/ai", { ip: "10.7.8.1", body: { mode: "chat", lang: "ru", context: { село: "Кеген" }, messages: [{ role: "user", text: "почём сено?" }] } });
+    assert.equal(calls[0].search, true);
+    assert.match(calls[0].system, /Поиск Google: ищи, только если/);
+    assert.deepEqual(chat.data.sources, [{ url: "https://example.kz/seno", title: "example.kz" }]);
+    assert.equal(chat.data.suggestions, "<div>chips</div>");
+    assert.equal(chat.data.numbers.ok, true, "45 000 — из фрагмента с источником");
+    assert.equal(calls.length, 1, "ответ с поиском не переписывается");
+    await call("POST", "/api/ai", { ip: "10.7.8.2", body: { mode: "summary", lang: "ru", context: { село: "Кеген" } } });
+    assert.equal(calls[1].search, false, "сводка — без поиска");
+    assert.doesNotMatch(calls[1].system, /Поиск Google/);
+  } finally { G.ask = orig; }
+});
+
 test("ограничение частоты запросов на вход", async () => {
   let last;
   for (let i = 0; i < 11; i++) last = await call("POST", "/auth/start", { ip: "10.1.1.1" });
