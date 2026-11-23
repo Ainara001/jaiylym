@@ -904,7 +904,7 @@
     if (data.prev_season && data.prev_season.year === year) return done(data.prev_season);
     const hit = C.ls.get(pk, null);
     if (hit && hit.plots) return done(hit);
-    if (!navigator.onLine) { S.prev = { year, state: "error" }; return; }
+    if (!navigator.onLine || typeof PL.buildSeason !== "function") { S.prev = { year, state: "error" }; return; }   // офлайн или старый pipeline.js из кэша
     S.prev = { year, state: "loading" };
     PL.buildSeason({ lat: data.village.lat, lon: data.village.lon, year })
       .then(s => { C.ls.set(pk, s); done(s); })
