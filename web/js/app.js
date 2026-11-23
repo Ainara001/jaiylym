@@ -1421,7 +1421,7 @@
       <ul class="todo">${todo.slice(0, 4).map(x => `<li>${ic("check")}<span>${x}</span></li>`).join("")}</ul>
       <p class="fine" style="margin-top:10px">${t("brief.trust", { k: S.D.source.dates.length, year: S.D.source.year })} ${src("sat")} ${src("model")}</p></div>
       <div class="aibox" id="aiBox"><button class="btn btn-green btn-sm" id="aiBriefBtn">${ic("spark")} ${t("brief.ai")}</button>
-        ${S.aiBrief && S.aiBrief.key === briefKey() ? `<p class="aitext">${esc(S.aiBrief.text)}</p>${S.aiBrief.mark || ""}<p class="fine">${t("brief.aiNote")}</p>` : ""}</div>`;
+        ${S.aiBrief && S.aiBrief.key === briefKey() ? `<div class="aitext">${aiText(S.aiBrief.text)}</div>${S.aiBrief.mark || ""}<p class="fine">${t("brief.aiNote")}</p>` : ""}</div>`;
   }
   const briefKey = () => S.D ? JSON.stringify([S.D.village.lat, S.D.village.lon, S.herds.map(h => [h.sheep, h.goats, h.cattle, h.horses, h.home, h.daily_return, h.allowed_plots]), [...S.added], [...S.forbidden], S.waterSet, S.P.k_ndvi, S.P.util, S.P.season_days, I.lang]) : "";
 
@@ -1568,6 +1568,8 @@
     return "";
   }
 
+  /** Ответ ИИ: вывод, заголовки, пункты, выделенные числа и ярлыки источника (js/aitext.js; весь текст экранируется). */
+  const aiText = text => (self.JaiylymAIText ? self.JaiylymAIText.toHtml(text, k => t("src." + k)) : `<p>${esc(text)}</p>`);
   /** Источники поиска Google под ответом ИИ (только http/https, открываются в новой вкладке). */
   function aiSources(list) {
     const ok = (list || []).filter(s => s && /^https?:\/\//.test(s.url || ""));
@@ -1639,7 +1641,7 @@
     const ctxLine = S.D ? t("ai.ctx", { v: `${esc(S.D.village.name)} · ${S.plots.length} ${t("ai.plots")} · ${S.herds.length} ${t("sc.herds")}` }) : t("ai.noctx");
     el.innerHTML = `<div class="chat"><div class="chat-head"><h1>${ic("spark")} ${t("ai.title")}</h1><p class="fine" style="margin:0">${t("ai.lead")}</p>
         <span class="chat-ctx">${ic("pin")} ${ctxLine}</span></div>
-      <div class="chat-log" id="chatLog" aria-live="polite">${hist.map(m => `<div class="msg ${m.role}">${esc(m.text)}${m.role === "ai" ? aiSources(m.sources) : ""}</div>`).join("")}</div>
+      <div class="chat-log" id="chatLog" aria-live="polite">${hist.map(m => `<div class="msg ${m.role}">${m.role === "ai" ? aiText(m.text) + aiSources(m.sources) : esc(m.text)}</div>`).join("")}</div>
       <div class="chips-q">${["ai.q1", "ai.q5", "ai.q6", "ai.q7", "ai.q8", "ai.q2", "ai.q3", "ai.q4"].map(k => `<button type="button" data-q="${esc(t(k))}">${t(k)}</button>`).join("")}</div>
       <form class="chat-form" id="chatForm"><textarea id="chatIn" rows="1" placeholder="${t("ai.ph")}" aria-label="${t("ai.ph")}"></textarea>
         <button class="btn btn-primary">${ic("send")} <span>${t("ai.send")}</span></button></form></div>
@@ -1654,7 +1656,7 @@
       try {
         const r = await C.ai({ mode: "chat", lang: I.lang, context: aiContext(), messages: hist.slice(-10) });
         hist.push(Object.assign({ role: "ai", text: r.text }, r.sources && r.sources.length ? { sources: r.sources } : {}));
-        $("#aiTyping").outerHTML = `<div class="msg ai">${esc(r.text)}${aiMark(r)}${aiSources(r.sources)}${aiSuggest(r.suggestions)}</div>`;
+        $("#aiTyping").outerHTML = `<div class="msg ai">${aiText(r.text)}${aiMark(r)}${aiSources(r.sources)}${aiSuggest(r.suggestions)}</div>`;
       } catch (e) {
         hist.pop();
         $("#aiTyping").outerHTML = `<div class="msg ai err">${esc(t("brief.aiFail") + ": " + errText(e))}</div>`;
