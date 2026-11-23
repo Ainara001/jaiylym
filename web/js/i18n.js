@@ -67,7 +67,7 @@
     "water.note": "Мы не строим водопои. Мы показываем, куда вложить деньги, чтобы открыть дальние участки. Наличие воды на карте определено по ESA WorldCover и требует проверки на месте.",
     "plots.id": "Участок", "plots.ha": "Пастбище, га", "plots.ndvi": "NDVI", "plots.cap": "Ёмкость, овец", "plots.load": "План", "plots.conf": "Достоверность",
     "conf.high": "высокая", "conf.medium": "средняя", "conf.low": "низкая",
-    "src.sat": "Спутник", "src.input": "Ввод", "src.model": "Модель",
+    "src.sat": "Спутник", "src.input": "Ввод", "src.model": "Модель", "src.web": "Интернет",
 
     "pop.near": "ближний", "pop.far": "дальний", "pop.pasture": "Пастбище", "pop.ndvi": "NDVI", "pop.forage": "Корм на сезон",
     "pop.cap": "Выдержит", "pop.load": "Нагрузка", "pop.herds": "Стада", "pop.water": "Вода", "pop.hasWater": "есть водопой (сценарий)",
@@ -590,7 +590,7 @@
     "water.note": "Біз суат салмаймыз. Алыс учаскелерді ашу үшін қаражатты қайда салу керектігін көрсетеміз. Картадағы су ESA WorldCover бойынша анықталған, орнында тексеру қажет.",
     "plots.id": "Учаске", "plots.ha": "Жайылым, га", "plots.ndvi": "NDVI", "plots.cap": "Сыйымдылық, қой", "plots.load": "Жоспар", "plots.conf": "Сенімділік",
     "conf.high": "жоғары", "conf.medium": "орташа", "conf.low": "төмен",
-    "src.sat": "Спутник", "src.input": "Енгізу", "src.model": "Модель",
+    "src.sat": "Спутник", "src.input": "Енгізу", "src.model": "Модель", "src.web": "Интернет",
 
     "pop.near": "жақын", "pop.far": "алыс", "pop.pasture": "Жайылым", "pop.ndvi": "NDVI", "pop.forage": "Маусымдық жем",
     "pop.cap": "Көтереді", "pop.load": "Жүктеме", "pop.herds": "Табындар", "pop.water": "Су", "pop.hasWater": "суат бар (сценарий)",
