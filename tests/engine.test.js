@@ -20,8 +20,11 @@ test("ёмкость участка считается по формуле из 
   assert.ok(Math.abs(c.biomass - biomass) < 1e-9);
   assert.ok(Math.abs(c.forage - 100 * biomass * P.util) < 1e-6);
   assert.ok(Math.abs(c.au_days - c.forage / P.intake) < 1e-6);
-  assert.equal(J.plotCapacity({ ndvi: 0.05, pasture_ha: 100 }).forage, 0);   // NDVI ниже почвы — корма нет
-  assert.equal(J.plotCapacity({ ndvi: null, pasture_ha: 100 }).forage, 0);
+  assert.equal(J.plotCapacity({ ndvi: 0.05, pasture_ha: 100 }).forage, 0);   // NDVI измерен и ниже почвы — по модели корма нет
+  const nd = J.plotCapacity({ ndvi: null, pasture_ha: 100 });                 // NDVI нет — ёмкость НЕИЗВЕСТНА, а не ноль
+  assert.equal(nd.status, "no_data");
+  assert.equal(nd.forage, null);
+  assert.equal(nd.known, false);
 });
 
 test("план не загружает ни один участок больше 100 %", () => {
