@@ -112,7 +112,9 @@
         <tr><td ${td}>${t("kpi.excess")}</td><td ${tdn}>${fmt(hc)}</td><td ${tdn}>${fmt(hp)}</td><td ${td}>${tag("model")}</td></tr>
         <tr><td ${td}>${t("rep.cost")}</td><td ${tdn}>${fmt1(hc * P.hay_price / 1e6)}</td><td ${tdn}>${fmt1(hp * P.hay_price / 1e6)}</td><td ${td}>${tag("model")} ${tag("input")}</td></tr>
       </tbody></table>
-      <p style="font-size:10px;color:#555;margin:4px 0 0">${t("kpi.costNote")} ${t("rep.priceLine", { p: fmt(P.hay_price), c: tenge })} ${t("rep.algo")}</p>
+      <p style="font-size:10px;color:#555;margin:4px 0 0">${t("kpi.costNote")} ${t("rep.priceLine", { p: fmt(P.hay_price), c: tenge })}</p>
+      <p style="margin:4px 0"><b>${t("res.algo")}:</b> ${c.algoLine ? c.algoLine(S.pl) : ""}</p>
+      ${S.pl.bottleneck && S.pl.bottleneck.groups.length && c.bottleneckHtml ? c.bottleneckHtml(S.pl.bottleneck.groups[0]) : ""}
       <table ${tbl}><thead><tr><th ${th}>${t("herds.name")}</th><th ${th}>${t("tab.routes")} ${tag("model")}</th></tr></thead><tbody>
         ${S.herds.map(h => `<tr style="page-break-inside:avoid"><td ${td}>${esc(h.name)}</td>
           <td ${td}>${(S.pl.herdPlans[h.id] || []).map(s => `${s.plot ? esc(s.plot) : t("routes.nofeed")} (${s.from}–${s.to})`).join(" → ") || "—"}</td></tr>`).join("") || `<tr><td ${td} colspan="2">${t("ov.noherds")}</td></tr>`}

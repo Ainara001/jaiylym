@@ -133,7 +133,7 @@ function pointInPoly([x, y], ring) {
 // ---------- расчёты ----------
 function compute(v) {
   const herds = herdsOf(v), plots = v.data.plots;
-  return { herds, plots, byId: Object.fromEntries(plots.map(p => [p.id, p])), cur: J.current(plots, herds), pl: J.plan(plots, herds) };
+  return { herds, plots, byId: Object.fromEntries(plots.map(p => [p.id, p])), cur: J.current(plots, herds), pl: J.solve(plots, herds) };
 }
 
 async function ensureVillage(name, lat, lon, say) {
@@ -190,8 +190,10 @@ function textToday(v, herd, day) {
 function textPlan(v, herd) {
   const { pl, byId } = compute(v);
   const lines = pl.herdPlans[herd.id].map(s => `• дни ${s.from}–${s.to}: ${s.plot ? where(byId[s.plot]) : "корма не хватает (внимание)"}`);
+  const share = pl.shares && pl.shares[herd.id] != null ? Math.round(pl.shares[herd.id] * 100) : null;
   const head = pl.status === "feasible" ? "По введённым условиям возможен вариант распределения."
-    : "При текущих ограничениях полностью распределить стада не удалось" + (pl.unmet[herd.id] ? " — вашему стаду не хватает корма." : ".");
+    : "При текущих ограничениях полностью распределить стада не удалось" + (pl.unmet[herd.id] ? " — вашему стаду не хватает корма." : ".") +
+      (share != null ? ` Корм поделён справедливо: ваше стадо обеспечено на ${share}%; ни одно хозяйство не обеспечено меньше, если этого можно избежать.` : "");
   return `${head}\n\nМаршрут на сезон — ${herd.name}${herd.demo ? " (демо-стадо)" : ""} (${fmt(J.herdAU(herd))} усл. голов):\n\n${lines.join("\n")}\n\n` +
     `Правило: ни один участок не загружен больше 100% расчётной ёмкости. Ближние участки — дойному скоту и на отдых. ` +
     `Ёмкость — оценка модели (не проверена укосом), вода у села и водоёмы на карте не проверены на месте.`;
