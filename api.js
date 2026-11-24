@@ -31,6 +31,7 @@ function searchAllowed() {
   return searchDay.n < AI_SEARCH_DAILY;
 }
 const searchUsed = n => { searchDay.n += n || 0; };
+let lastAnswer = null;   // для /api/ai/status: искал ли ИИ в последнем ответе, были ли источники, прошла ли проверка чисел
 const SEARCH_RULE = {
   ru: "Поиск в интернете: ищи, только если для ответа нужны свежие внешние сведения, которых нет в ДАННЫХ, — погода и прогноз, цены на сено и скот, " +
     "ветеринарные и правовые нормы Казахстана, новости района. Цифры села (участки, поголовье, ёмкость, нагрузка) бери только из ДАННЫХ, не из поиска. " +
@@ -351,7 +352,7 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
       // --- состояние ИИ: есть ли ключ, какие модели доступны, последние ошибки (без ключа) ---
       if (p === "/api/ai/status" && req.method === "GET") {
         if (limited(req, "aistatus", 6, 60e3)) return json(res, 429, { error: "слишком часто" }), true;
-        return json(res, 200, await G.status()), true;
+        return json(res, 200, Object.assign(await G.status(), { last_answer: lastAnswer })), true;
       }
       // --- ИИ-помощник (DeepSeek или Gemini, ai.js): сводка по селу и чат. Доступен и гостю, с ограничением частоты ---
       if (p === "/api/ai" && req.method === "POST") {
@@ -402,12 +403,15 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         // числа из фрагментов ответа, подтверждённых источником поиска, тоже допустимы (источник показан под ответом)
         let check = F.verifyNumbers(r.text, packed.obj, userText + "\n" + (r.cited || []).join("\n"));
         const left = 80000 - (Date.now() - started);
-        if (!check.ok && left > 15000 && !(r.sources || []).length) {   // ответ с поиском не переписываем без поиска — только помечаем
+        // ответ, для которого модель искала в интернете, не переписываем без поиска (иначе теряются найденные сведения) — только помечаем
+        if (!check.ok && left > 15000 && !(r.sources || []).length && !r.searches) {
           const again = await G.ask(Object.assign({}, opts, { budgetMs: Math.min(30000, left), input: input +
             `\n\nПРОВЕРКА: в черновике ответа были числа, которых нет в ДАННЫХ: ${check.unknown.join(", ")}. ` +
             "Напиши ответ заново, используя только числа из ДАННЫХ; если нужного числа нет — скажи, что его нет в расчёте." }));
           if (again.ok) { const c2 = F.verifyNumbers(again.text, packed.obj, userText); if (c2.unknown.length <= check.unknown.length) { r = again; check = c2; } }
         }
+        lastAnswer = { at: new Date().toISOString(), mode: summary ? "summary" : "chat", search_allowed: search, web_task: web, searches: r.searches || 0,
+          sources: (r.sources || []).length, numbers_ok: check.ok, unknown_numbers: check.unknown.length };
         // [интернет] без единого источника — это общие знания модели, а не поиск: метка исправляется на [общее]
         if (!(r.sources || []).length) r.text = fixWebLabels(r.text);
         return json(res, 200, { text: r.text, model: r.model, issues, numbers: check,
