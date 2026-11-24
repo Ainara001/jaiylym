@@ -12,7 +12,7 @@
 const URL = "https://api.deepseek.com/chat/completions";
 const MODEL = () => process.env.DEEPSEEK_MODEL || "deepseek-flash";
 const RETRY_MS = () => (process.env.DEEPSEEK_RETRY_MS != null ? +process.env.DEEPSEEK_RETRY_MS : 3000);
-const state = { lastErrors: [], lastOk: null, noSearch: false, usage: { requests: 0, prompt: 0, cache_hit: 0, completion: 0, searches: 0 } };
+const state = { lastErrors: [], lastOk: null, noSearch: false, lastSearch: null, usage: { requests: 0, prompt: 0, cache_hit: 0, completion: 0, searches: 0 } };
 const clean = s => String(s == null ? "" : s).replace(/sk-[0-9A-Za-z_-]{8,}/g, "[ключ]").slice(0, 160);
 const remember = error => { state.lastErrors = state.lastErrors.concat([{ at: new Date().toISOString(), model: MODEL(), error: clean(error) }]).slice(-12); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -87,6 +87,14 @@ async function ask({ system, input, maxTokens = 700, temperature = 0.4, timeoutM
     }
     if (r.ok) {
       const out = parse(r.d);
+      // диагностика поиска для /api/ai/status: что DeepSeek вернул на запрос с инструментом поиска (без текста ответа)
+      if (search) {
+        const m = (r.d.choices && r.d.choices[0] && r.d.choices[0].message) || {};
+        state.lastSearch = { at: new Date().toISOString(), tools_sent: !!body.tools, model: (r.d && r.d.model) || MODEL(), finish: out.finish || null,
+          server_tool_use: (r.d.usage && r.d.usage.server_tool_use) || null, usage_keys: Object.keys(r.d.usage || {}),
+          annotations: (m.annotations || []).length, tool_calls: (m.tool_calls || []).map(t => (t && (t.type || (t.function && t.function.name))) || "?"),
+          message_keys: Object.keys(m), searches: out.searches, sources: out.sources.length };
+      }
       if (!out.text) { remember("empty " + (out.finish || "")); last = { status: 200, error: "empty" }; continue; }
       if (CJK.test(out.text)) {
         remember("cjk in answer");
@@ -111,7 +119,7 @@ async function ask({ system, input, maxTokens = 700, temperature = 0.4, timeoutM
 /** Состояние для /api/ai/status: без ключа, только модель, ошибки и расход токенов с запуска сервера. */
 async function status() {
   return { provider: "deepseek", key_configured: !!process.env.DEEPSEEK_API_KEY, configured_models: [MODEL()],
-    last_ok: state.lastOk, last_errors: state.lastErrors, search_available: !state.noSearch, usage_since_start: state.usage };
+    last_ok: state.lastOk, last_errors: state.lastErrors, search_available: !state.noSearch, last_search: state.lastSearch, usage_since_start: state.usage };
 }
 
 module.exports = { ask, status, parse, classify, MODELS: [MODEL()], _state: state };
