@@ -20,7 +20,9 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  const MIRRORS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
+  // публичные серверы Overpass; при тайм-ауте или 429/5xx — следующий
+  const MIRRORS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter"];
   const BUFFERS = [0, 100, 250, 500];
   const DEFAULT_BUFFER = 100;
   // флаги видов зон в маске
@@ -39,7 +41,7 @@
   function overpassQuery(bbox) {
     const [w, s, e, n] = bbox, b = `(${s},${w},${n},${e})`;
     const lu = Object.keys(LANDUSE_KIND).join("|"), pl = Object.keys(PLACE_RADIUS_M).join("|"), fb = FARM_BUILDINGS.join("|");
-    return `[out:json][timeout:40];(` +
+    return `[out:json][timeout:90];(` +
       `way["landuse"~"^(${lu})$"]${b};relation["landuse"~"^(${lu})$"]${b};` +
       `way["place"~"^(${pl})$"]${b};relation["place"~"^(${pl})$"]${b};node["place"~"^(${pl})$"]${b};` +
       `way["building"~"^(${fb})$"]${b};` +
@@ -47,20 +49,25 @@
   }
 
   /** Запрос к Overpass с запасным зеркалом и повтором при 429/5xx. */
-  async function fetchOSM(bbox, { fetchImpl = (typeof fetch !== "undefined" ? fetch : null), timeoutMs = 60000 } = {}) {
+  async function fetchOSM(bbox, { fetchImpl = (typeof fetch !== "undefined" ? fetch : null), timeoutMs = 100000, retryMs = 1500, mirrors = MIRRORS } = {}) {
     const body = "data=" + encodeURIComponent(overpassQuery(bbox));
-    let last;
-    for (let i = 0; i < 4; i++) {
-      const url = MIRRORS[i % MIRRORS.length];
+    const tried = [];
+    for (let i = 0; i < mirrors.length + 1; i++) {
+      const url = mirrors[i % mirrors.length], host = url.split("/")[2];
       try {
         const r = await fetchImpl(url, { method: "POST", body, signal: AbortSignal.timeout(timeoutMs),
           headers: Object.assign({ "content-type": "application/x-www-form-urlencoded" }, USER_AGENT ? { "User-Agent": USER_AGENT } : {}) });
-        if (r.ok) return await r.json();
-        last = new Error("OpenStreetMap (Overpass) ответил " + r.status);
-      } catch (e) { last = e; }
-      await new Promise(res => setTimeout(res, 1500 * (i + 1)));
+        if (r.ok) {
+          const j = await r.json();
+          // Overpass при нехватке времени отдаёт 200 с пометкой remark и пустым или неполным списком
+          if (j && j.remark && /timed out|runtime error|out of memory/i.test(j.remark)) { tried.push(host + ": " + j.remark.slice(0, 60)); continue; }
+          return j;
+        }
+        tried.push(host + ": HTTP " + r.status);
+      } catch (e) { tried.push(host + ": " + (e && e.name === "TimeoutError" ? "тайм-аут" : String(e && e.message || e).slice(0, 60))); }
+      if (retryMs) await new Promise(res => setTimeout(res, retryMs));
     }
-    throw last || new Error("OpenStreetMap недоступен");
+    throw new Error("OpenStreetMap (Overpass) не ответил — " + tried.join("; "));
   }
 
   // ---------- геометрия ----------
