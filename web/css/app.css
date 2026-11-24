@@ -937,3 +937,12 @@ main .kans .btn { min-height: 54px; font-size: 16px; padding-inline: 10px; }
 .obs3 .kef { margin: 0; padding-left: 16px; font-size: 13.5px; }
 .obs3 p { margin: 8px 0 0; font-size: 13.5px; }
 .obs-check { color: #6b5206; } .obs-match { color: #1d5532; }
+
+/* где проверять воду */
+.wcand { border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.wcand .row { border-bottom: 0; flex-wrap: wrap; }
+.wcand .row .grow { flex: 1 1 200px; }
+.wcand small .src { margin-left: 2px; }
+.wcand > details > summary, .wrest > summary { min-height: 44px; font-size: 13.5px; align-items: center; }
+.wcform { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding-bottom: 8px; }
+.wcform .field:last-child { grid-column: 1 / -1; }
