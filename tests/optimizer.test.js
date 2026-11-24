@@ -210,3 +210,31 @@ test("веса хозяйств: при нехватке доля с весом 
   assert.ok(Math.abs(w.shares.a / w.shares.b - 2) < 0.01, "доли 2 : 1 — " + (w.shares.a / w.shares.b).toFixed(3));
   assert.ok(Math.abs((w.shares.a + w.shares.b) - (eq.shares.a + eq.shares.b)) < 1e-3, "весь корм по-прежнему роздан");
 });
+
+test("explainPlan: факты совпадают с планом — маршрут, «заняты до предела», недоступные участки", () => {
+  const NG = require("../web/nograze.js");
+  const P0 = NG.apply(D.plots, D.nograze);
+  const r = B.rng(23);
+  const cases = [{ plots: P0, herds: H }, { plots: P0, herds: scale(6) }];
+  for (let i = 0; i < 25; i++) cases.push(B.randomVillage(r));
+  for (const c of cases) {
+    const res = J.solve(c.plots, c.herds, P, c.opts);
+    const ex = J.explainPlan(c.plots, c.herds, res, P, c.opts);
+    for (const h of c.herds) {
+      if (J.herdAU(h, P) <= 0) continue;
+      const e = ex[h.id];
+      assert.ok(e, h.id);
+      assert.deepEqual(e.маршрут.map(s => s.участок), res.herdPlans[h.id].map(s => s.plot), "маршрут как в плане");
+      assert.equal(e.не_хватает_усл_гол_сут, Math.round(res.unmet[h.id] || 0));
+      for (const s of e.маршрут) {
+        if (!s.участок) continue;
+        const m = /ближе были (.+?) — заняты другими стадами до предела/.exec(s.почему);
+        if (m) for (const id of m[1].split(", ").map(x => x.split(" ")[0])) {
+          const l = res.load[id];
+          assert.ok(l.used >= l.limit - 0.5 * 1.01, `${id} назван занятым, но свободен: ${l.used} из ${l.limit}`);
+        }
+      }
+      for (const [reason, ids] of Object.entries(e.недоступные_участки || {})) assert.deepEqual(ids, res.diagnostics[h.id].excluded[reason]);
+    }
+  }
+});
