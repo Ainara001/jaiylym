@@ -347,3 +347,17 @@ test("ИИ: какие вопросы требуют поиска в интер�
   for (const q of ["Откуда взялось число 313 овец на участке Б-С?", "Почему стадо Ерлана пасётся на Д-ЮЗ?", "ёмкость оценена верно?", "Сколько овец выдержит моё пастбище?"])
     assert.equal(needsWeb(q), false, q);
 });
+
+test("ИИ: ответ, для которого модель искала в интернете, не переписывается без поиска (даже если чисел нет в данных)", async () => {
+  const orig = G.ask;
+  let calls = 0;
+  try {
+    G.ask = async () => { calls++; return { ok: true, text: "В Кегене в среду до +3 °C, ночью −8 °C [интернет]", model: "t", searches: 3, sources: [], cited: [] }; };
+    const r = await call("POST", "/api/ai", { ip: "10.7.8.3", body: { mode: "chat", lang: "ru", context: {}, messages: [{ role: "user", text: "Какая погода в Кегене на неделе?" }] } });
+    assert.equal(calls, 1, "без второго запроса без поиска");
+    assert.match(r.data.text, /\+3 °C/);
+    const st = await call("GET", "/api/ai/status", { ip: "10.7.8.4" });
+    assert.equal(st.data.last_answer.searches, 3);
+    assert.equal(st.data.last_answer.web_task, true);
+  } finally { G.ask = orig; }
+});
