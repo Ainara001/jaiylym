@@ -182,8 +182,24 @@
     return { years, village, plots, rules: { alpha: ALPHA, min_years: MIN_YEARS, min_change: MIN_CHANGE, rain_r2: RAIN_R2, min_dates: MIN_DATES, plots_fdr: "Benjamini–Hochberg" } };
   }
 
+  /**
+   * Многолетний ряд как факты для ИИ — один формат для сайта и бота: годы, вывод по селу, участки с наклоном и p
+   * (у участков p с поправкой Бенджамини — Хохберга; при поправке на осадки — по остаткам).
+   */
+  function aiFacts(a) {
+    const basis = s => (s.basis === "resid" && s.resid ? { sl: s.resid, p: s.resid.p_adj ?? s.resid.p } : { sl: s, p: s.p_adj ?? s.p });
+    return {
+      годы: a.years.map(y => ({ год: y.year, ndvi_села: y.ndvi_median, осадки_апр_авг_мм: y.precip_mm, в_ряду: y.ok, причина: y.reason || undefined })),
+      вывод_по_селу: a.village.verdict, лет_в_ряду: a.village.n,
+      наклон_ndvi_в_год: a.village.slope_per_year != null ? +a.village.slope_per_year.toFixed(4) : null, p: a.village.p != null ? +a.village.p.toFixed(3) : null,
+      связь_с_осадками_r2: a.village.rain ? +a.village.rain.r2.toFixed(2) : null, поправка_на_осадки: a.village.rain ? a.village.rain.valid : false,
+      участки: Object.entries(a.plots).map(([id, s]) => { const b = basis(s); return `${id}: ${s.verdict}${b.sl.slope_per_year != null ? ` ${b.sl.slope_per_year.toFixed(4)}/год${s.basis === "resid" ? " с учётом осадков" : ""} p=${b.p.toFixed(2)}` : ""}`; }),
+      p_участков: "с поправкой на множественную проверку (Бенджамини — Хохберг)",
+    };
+  }
+
   /** Старое правило для сравнения: разница первого и последнего года больше порога — «тревога». */
   function twoYearAlarm(ndvi, thr = MIN_CHANGE) { return ndvi.length >= 2 && ndvi[0] - ndvi[ndvi.length - 1] >= thr; }
 
-  return { theilSen, mannKendall, mahonian, ols, seriesTrend, classify, bhAdjust, yearQuality, analyze, twoYearAlarm, median, ALPHA, MIN_YEARS, MIN_CHANGE, RAIN_R2 };
+  return { theilSen, mannKendall, mahonian, ols, seriesTrend, classify, bhAdjust, yearQuality, analyze, aiFacts, twoYearAlarm, median, ALPHA, MIN_YEARS, MIN_CHANGE, RAIN_R2 };
 });

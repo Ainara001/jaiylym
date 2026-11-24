@@ -1882,14 +1882,7 @@
         участков_без_изменений: c.summary.same, устойчивая_вода_по_снимкам_га: c.summary.water_total_ha,
         участки: c.plots.map(x => ({ id: x.id, ndvi: x.ndvi, изменение_проц: x.ndvi_change_pct, вода_га: x.water_ha })),
       } : { статус: S.prev ? { loading: "считается", none: "нет безоблачных снимков", error: "не загрузилось" }[S.prev.state] || "нет" : "нет" })(prevCmp()),
-      многолетний_ряд: (M => M && M.state === "ready" && M.a ? (a => ({
-        годы: a.years.map(y => ({ год: y.year, ndvi_села: y.ndvi_median, осадки_апр_авг_мм: y.precip_mm, в_ряду: y.ok, причина: y.reason || undefined })),
-        вывод_по_селу: a.village.verdict, лет_в_ряду: a.village.n,
-        наклон_ndvi_в_год: a.village.slope_per_year != null ? +a.village.slope_per_year.toFixed(4) : null, p: a.village.p != null ? +a.village.p.toFixed(3) : null,
-        связь_с_осадками_r2: a.village.rain ? +a.village.rain.r2.toFixed(2) : null, поправка_на_осадки: a.village.rain ? a.village.rain.valid : false,
-        участки: Object.entries(a.plots).map(([id, s]) => { const b = basisOf(s); return `${id}: ${s.verdict}${b.sl.slope_per_year != null ? ` ${b.sl.slope_per_year.toFixed(4)}/год${s.basis === "resid" ? " с учётом осадков" : ""} p=${b.p.toFixed(2)}` : ""}`; }),
-        p_участков: "с поправкой на множественную проверку (Бенджамини — Хохберг)",
-      }))(M.a) : { статус: !M ? "нет" : { idle: "не посчитан (кнопка на вкладке «Данные»)", loading: "считается", error: "не посчитался" }[M.state] || "нет" })(S.multi),
+      многолетний_ряд: (M => M && M.state === "ready" && M.a ? TR().aiFacts(M.a) : { статус: !M ? "нет" : { idle: "не посчитан (кнопка на вкладке «Данные»)", loading: "считается", error: "не посчитался" }[M.state] || "нет" })(S.multi),
       алгоритм: S.pl.algorithm === "fair-optimal-v2" ? "оптимизация: 1) у всех хозяйств одинаковая доля обеспеченности, насколько позволяют ограничения (max-min); 2) при этом максимум корма; 3) при тех же долях — меньше перегонов и коротких стоянок (< 14 дней), затем меньше км; затем календарь с учётом отдыха участков; приоритет хозяйств (если задан) действует только при нехватке"
         : "жадная эвристика (не оптимизатор)",
       доли_обеспеченности_проц: S.pl.shares ? Object.fromEntries(S.herds.filter(h => S.pl.shares[h.id] != null).map(h => [h.name, Math.round(S.pl.shares[h.id] * 100)])) : null,
