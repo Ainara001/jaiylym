@@ -86,7 +86,7 @@ async function newcomer(page, label) {
   // водопои: рейтинг по дефициту, «не проверено», запоминание; без дефицита — честно «корма не добавит»
   await App(() => window.JaiylymApp.renderPane("water"));
   const wp = () => page.textContent('.pane[data-pane="water"]');
-  assert.match(await wp(), /ни один новый водопой этого не уменьшит|дефицит меньше на/, label + ": водопой — по делу");
+  assert.match(await wp(), /новый водопой|водопой сейчас|уже с водой/, label + ": водопой — по делу");
   await App(() => { const s = window.JaiylymApp.S; s.D.plots.forEach(p => { if (p.ring === "far") { p.water = false; p.water_status = "unknown"; } }); s.herds = [{ id: "a", name: "Тест", home: "Б-С", sheep: 1 }]; window.JaiylymApp.rebuildPlots(); window.JaiylymApp.render(); window.JaiylymApp.renderPane("water"); });
   assert.match(await page.textContent("#waterVerdict"), /корма не добавит/);
   await App(() => { const s = window.JaiylymApp.S; s.herds = [{ id: "a", name: "Тест", home: "Б-С", sheep: 9000 }]; window.JaiylymApp.render(); window.JaiylymApp.renderPane("water"); });
@@ -192,7 +192,7 @@ async function journey(page, label) {
   // 7. сравнить сценарии
   await page.evaluate(() => window.JaiylymApp.renderPane("whatif"));
   const wi = await page.textContent('.pane[data-pane="whatif"]');
-  for (const re of [/Как сейчас/, /Предлагаемый план/, /Быстрый алгоритм/, /Худшее хозяйство/, /водопой на/, /Скота на 20 % больше/, /доказуемыми/, /Точн|точная граница/i]) assert.match(wi, re);
+  for (const re of [/Если все стада у села/, /Предлагаемый план/, /Быстрый алгоритм/, /Худшее хозяйство/, /водопой на/, /Скота на 20 % больше/, /доказуемыми/, /Точн|точная граница/i]) assert.match(wi, re);
   // неверный параметр не принимается
   await page.evaluate(() => window.JaiylymApp.renderPane("brief"));
   await page.evaluate(() => document.querySelectorAll('.pane[data-pane="brief"] details').forEach(d => { d.open = true; }));

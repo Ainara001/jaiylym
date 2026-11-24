@@ -16,7 +16,7 @@
   const fmt1 = n => (+n).toLocaleString("ru-RU", { maximumFractionDigits: 1 });
   const two = n => String(n).padStart(2, "0");
   const dateStr = (s, time = true) => { const d = new Date(s); if (isNaN(d)) return ""; return `${two(d.getDate())}.${two(d.getMonth() + 1)}.${d.getFullYear()}` + (time ? ` ${two(d.getHours())}:${two(d.getMinutes())}` : ""); };
-  const pct = x => (x == null ? "—" : isFinite(x) ? Math.round(x * 100).toLocaleString("ru-RU") + " %" : "∞");
+  const pct = x => (x == null ? "—" : x > 10 ? "> 1 000 %" : Math.round(x * 100).toLocaleString("ru-RU") + " %");   // больше десяти норм — точное число ничего не говорит
   const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const ic = id => `<svg class="ic"><use href="#i-${id}"/></svg>`;
   const src = k => `<span class="src src-${k}">${t("src." + k)}</span>`;
@@ -591,7 +591,7 @@
     for (const p of plots) {
       const c = capOf(p); if (!c.known || !c.norm) continue;
       o.n++; if (c.limited_by === "norm") o.limited++;
-      o.sat += c.sat.au_season / S.P.au.sheep; o.norm += c.norm.au_season / S.P.au.sheep; o.cap += c.au_season / S.P.au.sheep;
+      o.sat += c.sat.au_season / S.P.au.sheep; o.norm += c.norm.full_au_season / S.P.au.sheep; o.cap += c.au_season / S.P.au.sheep;
     }
     return o;
   }
@@ -846,7 +846,7 @@
       <tr><td>${t("pop.forageConf")}</td><td>${fcTag(p)}</td></tr>
       <tr><td>${t("pop.forage")}</td><td>${c.known ? fmt(c.forage / 1000) + " " + t("pop.t") : t("st.no_data")} ${src("model")}</td></tr>
       <tr><td>${t("pop.cap")}</td><td>${c.known ? "≈ " + sheepCap(c) + " " + t("pop.sheep") : t("st.no_data")} ${src(c.limited_by === "norm" ? "norm" : "model")}</td></tr>
-      ${c.norm ? `<tr><td>${t("nm.row")}</td><td style="white-space:normal">≈ ${fmt(c.sat.au_season / S.P.au.sheep)} ${src("model")} / ${fmt(c.norm.au_season / S.P.au.sheep)} ${src("norm")}<br>${normVerdictText(normVerdict(c) || { k: "match" })}</td></tr>` : ""}
+      ${c.norm ? `<tr><td>${t("nm.row")}</td><td style="white-space:normal">≈ ${fmt(c.sat.au_season / S.P.au.sheep)} ${src("model")} / ${fmt(c.norm.au_season / S.P.au.sheep)} ${src("norm")}<br>${normVerdictText(normVerdict(c) || { k: "match" })}${c.norm.green < 0.995 ? ` ${t("nm.green", { g: pct(c.norm.green), a: String(p.ndvi).replace(".", ","), b: String(p.ndvi_ref).replace(".", ",") })}` : ""}</td></tr>` : ""}
       <tr><td>${t("pop.load")}</td><td><b>${l.known ? pct(l.load) : t("st.no_data")}</b> (${S.mode === "current" ? t("kpi.before") : t("kpi.after")})</td></tr>
       <tr><td>${t("pop.herds")}</td><td style="white-space:normal">${esc(names.join(", ")) || "—"}</td></tr>
       <tr><td>${t("pop.water")}</td><td style="white-space:normal">${esc(t("ws." + ws))}</td></tr>
@@ -1948,7 +1948,7 @@
     const capAU = water.reduce((s, p) => s + J.plotCapacity(p, S.P).au_season, 0);
     const au = S.herds.reduce((s, h) => s + J.herdAU(h, S.P), 0);
     const ratio = capAU > 0 ? au / capAU : Infinity;
-    const worst = S.plots.filter(p => S.cur.load[p.id].load > 1).sort((a, b) => S.cur.load[b.id].load - S.cur.load[a.id].load)[0];
+    const worst = S.plots.filter(p => S.cur.load[p.id].load > 1 && p.pasture_ha >= 5).sort((a, b) => S.cur.load[b.id].load - S.cur.load[a.id].load)[0];
     const shortHerds = S.herds.filter(h => S.pl.coverage && S.pl.coverage[h.id] < Sd - 0.5);
     const deficitT = J.hayTonnes(S.pl.deficit_kg, S.P);
     const excessAU = Object.values(S.pl.unmet || {}).reduce((s, x) => s + x, 0) / Sd;
@@ -2015,7 +2015,7 @@
       { v: fmt(st.sheep.value), u: t("pop.sheep"), l: t(st.norm ? "cap.s.sheepSat" : "cap.s.sheep"), f: `${fmt1(st.au_season.value)} × ${per("sheep")}`, s: "model" },
     ];
     if (st.norm) steps.push(
-      { v: fmt(st.norm.value), u: t("pop.sheep"), l: t("cap.s.norm"), f: t("cap.f.norm", { ha: fmt1(st.area.value), n: fmt2(p.norm.au_ha * au.sheep) }) + (e.capacity.norm.season_factor < 1 ? ` × ${p.norm.days[1]} / ${P.season_days}` : ""), s: "norm" },
+      { v: fmt(st.norm.value), u: t("pop.sheep"), l: t("cap.s.norm"), f: t("cap.f.norm", { ha: fmt1(st.area.value), n: fmt2(p.norm.au_ha * au.sheep) }) + (e.capacity.norm.season_factor < 1 ? ` × ${p.norm.days[1]} / ${P.season_days}` : "") + (e.capacity.norm.green < 0.995 ? ` × ${fmt2(e.capacity.norm.green)}` : ""), s: "norm" },
       { v: fmt(st.limit.value), u: t("pop.sheep"), l: t("cap.s.limit"), f: `${t("cap.f.limit", { a: fmt(st.sheep.value), b: fmt(st.norm.value) })} ${normVerdictText(normVerdict(e.capacity) || { k: "match" })}`, s: e.capacity.limited_by === "norm" ? "norm" : "model" });
     return `<section class="chain" aria-labelledby="chainH"><h3 id="chainH">${ic("leaf")} ${t("cap.title")}</h3>
       <label class="field chain-pick">${t("cap.plot")}<select id="chainPlot">${known.map(x => `<option value="${esc(x.id)}" ${x.id === p.id ? "selected" : ""}>${esc(x.id)}</option>`).join("")}</select></label>
@@ -2023,6 +2023,7 @@
         <div class="cl">${esc(x.l)} ${src(x.s)}<small>${esc(x.f)}</small></div></li>`).join("")}</ol>
       <ul class="chain-notes">
         <li>${st.norm ? normNote(p.norm) : `${t("nm.noRegion")} <button type="button" class="linkbtn" data-goto="data">${t("nm.choose")}</button>`}</li>
+        ${st.norm && e.capacity.norm.green < 0.995 ? `<li>${t("nm.green", { g: pct(e.capacity.norm.green), a: String(p.ndvi).replace(".", ","), b: String(p.ndvi_ref).replace(".", ",") })} ${src("sat")}</li>` : ""}
         <li>${t("cap.n.au", { cattle: fmt2(au.cattle), horses: fmt2(au.horses), sheep: fmt2(au.sheep), goats: fmt2(au.goats) })}</li>
         ${st.nograze ? `<li>${t("cap.n.ng", { g: fmt(p.pasture_ha_gross), n: fmt1(st.nograze.value), a: fmt1(st.area.value), b: p.nograze_buffer_m })}</li>` : ""}
         <li>${t("cap.n.season", { d: P.season_days })}</li>
@@ -2046,7 +2047,6 @@
     if (s.type === "add_water") return t("sg.add_water", { id: esc(s.plot), n: fmt(s.au_days / S.P.season_days / S.P.au.sheep) });
     if (s.type === "check_data") return t("sg.check_data", { ids: plotIds(s.plots) });
     if (s.type === "extend_rights") return t("sg.extend_rights", { ids: plotIds(s.plots) });
-    if (s.type === "split_daily_herd") return t("sg.split_daily_herd");
     if (s.type === "reduce_herd") return t("sg.reduce_herd", { au: fmt(s.au), sheep: fmt(s.sheep) });
     if (s.type === "hay") return t("sg.hay", { t: fmt(s.tonnes) });
     return "";
@@ -2068,6 +2068,7 @@
     if (w.type === "no_data_excluded" || w.type === "low_quality_used") return t("wr." + w.type, { ids: plotIds(w.plots) });
     if (w.type === "water_unconfirmed") return t("wr.water_unconfirmed", { n: w.plots.length });
     if (w.type === "rights_not_specified") return t("wr.rights_not_specified", { n: w.herds.length });
+    if (w.type === "daily_far_used") return t("wr.daily_far_used", { h: w.herds.map(id => esc((S.herds.find(h => h.id === id) || {}).name || id)).join(", "), ids: plotIds(w.plots) });
     return t("wr." + w.type);
   }
   function resultHtml() {
@@ -2258,6 +2259,7 @@
         качество_снимка: confidence(p), достоверность_корма: M.forageConfidence(p, S.P), статус_данных: capOf(p).status,
         вода: t("ws." + M.waterStatus(p)), закрыт_по_вводу: !!p.forbidden, отдых_выпас_только_дни: p.window ? `${p.window.from}-${p.window.to}` : undefined,
         ёмкость_овец_оценка: capOf(p).known ? Math.round(sheepOf(capOf(p).au_season)) : null,
+        трава_слабее_обычной_норма_уменьшена_до_проц: (n => (n && n.green < 0.995 ? Math.round(n.green * 100) : undefined))(capOf(p).norm),
         что_ограничивает: capOf(p).limited_by ? (capOf(p).limited_by === "norm" ? "норма МСХ" : "трава по снимку") : undefined,
         как_рассчитано: J.explainCapacity(p, S.P).steps.map(s => `${s.key}: ${s.formula}`).join("; "),
         нагрузка_если_все_у_села_проц: S.cur.load[p.id].known ? Math.round(S.cur.load[p.id].load * 100) : null,
