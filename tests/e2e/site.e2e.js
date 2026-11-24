@@ -208,15 +208,15 @@ async function accountFlow(page, label) {
   await stubNetwork(page);
   const user = { uid: "aTest", name: "Айгерим", login: "+77011234567", via: "password", role: "farmer", created: "2026-11-24T10:00:00Z", farm: null, pastures: [], villages: [] };
   let regBody = null;
-  // сервер на другом адресе: ответы с заголовками CORS, предварительный запрос OPTIONS (WebKit шлёт его на POST с JSON)
-  const CORS = { "access-control-allow-origin": "*", "access-control-allow-headers": "content-type, authorization", "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS" };
-  const reply = (r, status, data) => r.fulfill({ status, headers: Object.assign({ "content-type": "application/json" }, CORS), body: JSON.stringify(data) });
-  await page.route(/jaiylym-bot\.onrender\.com\/auth\/register/, r => {
-    if (r.request().method() === "OPTIONS") return r.fulfill({ status: 204, headers: CORS });
+  // сервер — на том же адресе, что и сайт (/__api): WebKit в Playwright не перехватывает предварительный CORS-запрос к другому домену
+  await page.addInitScript(() => { window.JAIYLYM_API_URL = location.origin + "/__api"; });
+  const reply = (r, status, data) => r.fulfill({ status, contentType: "application/json", body: JSON.stringify(data) });
+  await page.route(/\/__api\//, r => reply(r, 404, {}));   // остальное — 404 (маршруты ниже приоритетнее: Playwright берёт последний)
+  await page.route(/\/__api\/auth\/register/, r => {
     regBody = JSON.parse(r.request().postData());
     return regBody.login === "taken_login" ? reply(r, 409, { error: "занят", field: "login" }) : reply(r, 200, { status: "ok", token: "t".repeat(40), user }); });
-  await page.route(/jaiylym-bot\.onrender\.com\/(api\/me|auth\/logout)$/, r => r.request().method() === "OPTIONS" ? r.fulfill({ status: 204, headers: CORS })
-    : reply(r, 200, r.request().url().endsWith("/api/me") ? user : { ok: true }));
+  await page.route(/\/__api\/(api\/me|auth\/logout)$/, r => reply(r, 200, r.request().url().endsWith("/api/me") ? user : { ok: true }));
+  await page.route(/\/__api\/auth\/start/, r => reply(r, 200, { nonce: "n".repeat(30), code: "4821", link: "https://t.me/JAIYLYM_bot?start=login_x" }));
   await page.goto(base + "#/home");
   await page.waitForSelector("#accountBtn");
   await page.click("#accountBtn");
