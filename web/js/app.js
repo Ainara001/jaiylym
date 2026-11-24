@@ -1935,9 +1935,10 @@
     S.chatLoading = true;
     try {
       const last = C.ls.get("jaiylym:last", null);
-      const cached = last && !isKegen(last.lat, last.lon) && C.ls.get(cacheKey(last.lat, last.lon), null);
-      const v = cached ? last : DEFAULT.village;
-      await openVillage(v.name, v.lat, v.lon, { keepRoute: true });
+      // последнее открытое село пользователя (из кэша или заново по снимкам); не открылось — демо-село Кеген
+      const own = last && last.name && !isKegen(last.lat, last.lon) && (navigator.onLine || C.ls.get(cacheKey(last.lat, last.lon), null));
+      if (own) { try { await openVillage(last.name, last.lat, last.lon, { keepRoute: true }); } catch (_) {} }
+      if (!S.D) await openVillage(DEFAULT.village.name, DEFAULT.village.lat, DEFAULT.village.lon, { keepRoute: true });
       S.chatAuto = !!S.D && isKegen(S.D.village.lat, S.D.village.lon) ? "demo" : "last";
       return !!S.D;
     } finally { S.chatLoading = false; }
@@ -1963,6 +1964,12 @@
       log.insertAdjacentHTML("beforeend", `<div class="msg user">${esc(text)}</div><div class="msg ai" id="aiTyping">${t("ai.thinking")}</div>`);
       log.scrollTop = log.scrollHeight; inp.value = "";
       try {
+        // вопрос о том, как менялась трава по годам, а ряд для этого села ещё не посчитан — сначала считаем (1–2 минуты)
+        if (S.D && TR() && TR().asksYears(text) && S.multi && S.multi.state === "idle" && navigator.onLine) {
+          const ty = $("#aiTyping"); if (ty) ty.textContent = t("ai.multiFirst");
+          await runMulti();
+          const ty2 = $("#aiTyping"); if (ty2) ty2.textContent = t("ai.thinking");
+        }
         const r = await C.ai({ mode: "chat", lang: I.lang, context: aiContext(), messages: hist.slice(-10) });
         hist.push(Object.assign({ role: "ai", text: r.text }, r.sources && r.sources.length ? { sources: r.sources } : {}));
         $("#aiTyping").outerHTML = `<div class="msg ai">${aiText(r.text)}${aiMark(r)}${aiSources(r.sources)}${aiSuggest(r.suggestions)}</div>`;

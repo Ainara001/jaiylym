@@ -142,13 +142,14 @@ function compute(v) {
 
 async function ensureVillage(name, lat, lon, say) {
   const key = vkey(lat, lon);
-  if (state.villages[key]) { ensurePrev(key); return key; }
+  if (state.villages[key]) { ensurePrev(key); ensureMulti(key); return key; }
   await say(`Считаю пастбища «${name}» по снимкам Sentinel-2… это ~10–20 секунд.`);
   const res = await PL.buildVillage({ name, lat, lon });
   delete res.grid;
   state.villages[key] = { data: res, herds: [] };
   save();
   ensurePrev(key);
+  ensureMulti(key);
   return key;
 }
 
@@ -165,6 +166,38 @@ function ensurePrev(key) {
     .then(s => { v.prev = s; save(); })
     .catch(e => console.error("прошлое лето:", e.message))
     .finally(() => prevPending.delete(key));
+}
+// многолетний ряд села («трава по годам»: лето каждого года с 2019 и осадки) — для любого села, в фоне и по одному селу за раз
+// (снимки за 6–7 лет — 1–2 минуты). У Кегена посчитан заранее (scripts/add_multiyear.js). Результат хранится с селом.
+const MULTI_FIRST = 2019;
+let multiBusy = null;
+function ensureMulti(key) {
+  const v = state.villages[key];
+  if (!v || !v.data || !v.data.source || TEST || multiBusy) return;
+  const last = v.data.source.year;
+  if ((v.data.multiyear && v.data.multiyear.last === last) || (v.multi && v.multi.last === last)) return;
+  multiBusy = key;
+  const { lat, lon } = v.data.village, D = v.data;
+  const years = Array.from({ length: last - MULTI_FIRST + 1 }, (_, i) => MULTI_FIRST + i);
+  // это лето уже посчитано, прошлое — если готово: их не качаем заново
+  const have = { [last]: { year: last, status: (D.meta && D.meta.data_status) || "measured", dates: D.source.dates || [], window: D.source.window || null,
+    plots: D.plots.map(p => ({ id: p.id, ndvi: p.ndvi, valid_fraction: p.valid_fraction ?? 1 })) } };
+  if (v.prev && v.prev.year === last - 1 && v.prev.plots) have[last - 1] = v.prev;
+  Promise.all([PL.buildYears({ lat, lon, years, have }), PL.fetchPrecip({ lat, lon, years }).catch(() => null)])
+    .then(([seasons, precip]) => {
+      v.multi = { first: MULTI_FIRST, last, calculated_at: new Date().toISOString(), precip,
+        seasons: seasons.map(s => ({ year: s.year, status: s.status, dates: s.dates, window: s.window || null, valid_fraction: s.valid_fraction,
+          plots: (s.plots || []).map(p => ({ id: p.id, ndvi: p.ndvi, valid_fraction: p.valid_fraction })) })) };
+      save();
+    })
+    .catch(e => console.error("трава по годам:", e.message))
+    .finally(() => { multiBusy = null; });
+}
+/** Многолетний ряд для ИИ: факты (trend.aiFacts) или статус — считается / не посчитан. */
+function multiContext(v, key) {
+  const my = v.data.multiyear || v.multi;
+  if (my && Array.isArray(my.seasons) && my.seasons.length) return TR.aiFacts(TR.analyze(my.seasons, my.precip));
+  return { статус: multiBusy === key ? "считается в фоне (снимки за несколько лет, 1–2 минуты) — спросите ещё раз чуть позже" : "ещё не посчитан — посчитается в фоне" };
 }
 /** Сравнение лет для контекста ИИ: итог и участки, коротко. null — прошлое лето ещё не готово. */
 function prevContext(v) {
@@ -274,7 +307,9 @@ function templateCtx(v, herd) {
 async function askGemini(question, v, herd) {
   if (!AI_ON()) return null;
   const ctx = { село: v.data.village.name, лето: v.data.source.year };
-  ensurePrev(vkey(v.data.village.lat, v.data.village.lon));   // если прошлого лета ещё нет — к следующему вопросу будет
+  const vk = vkey(v.data.village.lat, v.data.village.lon);
+  ensurePrev(vk);    // если прошлого лета ещё нет — к следующему вопросу будет
+  ensureMulti(vk);   // то же для многолетнего ряда
   try {
     const { pl, cur } = compute(v);
     ctx.участки = v.data.plots.map(p => ({ id: p.id, кольцо: p.ring === "near" ? "ближний" : "дальний", км: p.dist_km, направление: p.dir,
@@ -284,9 +319,7 @@ async function askGemini(question, v, herd) {
     const prev = prevContext(v);
     if (prev) ctx.прошлый_год = prev;
     if (herd) ctx.стадо = { имя: herd.name, демо: !!herd.demo, овцы: herd.sheep, козы: herd.goats, крс: herd.cattle, лошади: herd.horses, маршрут: pl.herdPlans[herd.id], не_хватает_усл_гол_дней: Math.round(pl.unmet[herd.id] || 0) };
-    const my = v.data.multiyear;
-    ctx.многолетний_ряд = my && Array.isArray(my.seasons) && my.seasons.length ? TR.aiFacts(TR.analyze(my.seasons, my.precip))
-      : { статус: "не посчитан для этого села (на сайте — вкладка «Данные», «Трава по годам»)" };
+    ctx.многолетний_ряд = multiContext(v, vk);
     const { plots, herds } = compute(v);
     ctx.почему_план = Object.values(J.explainPlan(plots, herds, pl)).filter(x => !herd || x.стадо === herd.name);
   } catch (_) {}
@@ -952,4 +985,4 @@ if (require.main === module) {
   else { console.log("Нужен TELEGRAM_TOKEN в .env (или проверка: node bot.js --test)"); process.exit(1); }
 }
 
-module.exports = { handle, parseHerd, runCron, cronRoute, buildInfo, villageApi, siteApi, alertText, pastureAlert, trendWords, getState: () => state, setTest: () => { TEST = true; } };
+module.exports = { multiContext, ensureMulti, handle, parseHerd, runCron, cronRoute, buildInfo, villageApi, siteApi, alertText, pastureAlert, trendWords, getState: () => state, setTest: () => { TEST = true; } };

@@ -1,11 +1,13 @@
 /*
  * Проверка продакшна JAIYLYM (запускается в GitHub Actions: .github/workflows/live-check.yml).
- * Ничего не меняет: только читает и задаёт ИИ три вопроса (это расходует 3 запроса дневного лимита).
+ * Ничего не меняет: только читает и задаёт ИИ шесть вопросов (это расходует 6 запросов дневного лимита).
  * Выход с ошибкой — если сайт или сервер не отвечают, или ИИ не ответил.
  */
 const { Jaiylym: J, loadPlots, loadHerds } = require("../data");
 const M = require("../web/model.js");
 const NG = require("../web/nograze.js");
+const PL = require("../web/pipeline.js");
+PL.setUserAgent("Jaiylym-live-check/1.0 (+https://github.com/Ainara001/jaiylym)");
 const SITE = process.env.SITE_URL || "https://ainara001.github.io/jaiylym/";
 const API = process.env.API_URL || "https://jaiylym-bot.onrender.com";
 const fails = [], notes = [];
@@ -21,9 +23,9 @@ async function wake() {
   return null;
 }
 
-/** Данные Кегена в том же виде, в каком их передаёт сайт (сокращённо). */
-function context() {
-  const D0 = loadPlots(), D = Object.assign({}, D0, { plots: NG.apply(D0.plots, D0.nograze) }), H = loadHerds().map(h => Object.assign({ demo: true }, h)), P = J.params();
+/** Данные села в том же виде, в каком их передаёт сайт (сокращённо). По умолчанию — Кеген с демо-стадами. */
+function context(D0 = loadPlots(), H = loadHerds().map(h => Object.assign({ demo: true }, h))) {
+  const D = Object.assign({}, D0, { plots: NG.apply(D0.plots, D0.nograze) }), P = J.params();
   const pl = J.solve(D.plots, H, P), cur = J.current(D.plots, H, P);
   return {
     село: D.village.name, лето_снимков: D.source.year, статус_плана: pl.status, версия_модели: M.MODEL_VERSION, демо_стада: true,
@@ -107,8 +109,19 @@ async function ask(body, label) {
     else note("ИИ ответил о погоде без источников — поиск не сработал (проверьте лимит AI_SEARCH_DAILY и поддержку поиска у провайдера)");
     if (/\[интернет\]/.test(a5.d.text) && !(a5.d.sources || []).length) ok(false, "метка [интернет] без источников");
   }
+  // другое село (не демо): ИИ должен помогать по любому селу — Нарынкол считается по снимкам здесь же, как в браузере
+  try {
+    const N = await PL.buildVillage({ name: "Нарынкол", lat: 42.717, lon: 80.183 });
+    const nctx = context(N, [{ id: "h1", name: "Стадо 1", sheep: 400, cattle: 20, horses: 10, home: N.plots[0].id }]);
+    const top = nctx.участки.filter(x => x.ёмкость_овец_оценка != null).sort((a, b) => b.ёмкость_овец_оценка - a.ёмкость_овец_оценка)[0];
+    const a6 = await ask({ mode: "chat", lang: "ru", context: nctx, messages: [{ role: "user", text: `Сколько овец выдержит участок ${top.id} и откуда это число?` }] }, `ru, другое село: Нарынкол, ${top.id}`);
+    aiOk(a6, "ИИ отвечает по другому селу (Нарынкол)");
+    if (a6.d.text && !new RegExp(String(top.ёмкость_овец_оценка)).test(a6.d.text.replace(/\s/g, ""))) note(`ИИ не назвал ёмкость ${top.ёмкость_овец_оценка} овец участка ${top.id} Нарынкола — проверьте ответ выше`);
+    if ((a6.d.issues || []).some(x => /Село не открыто/.test(x))) ok(false, "данные Нарынкола не дошли до ИИ");
+  } catch (e) { note("Нарынкол не посчитался по снимкам (внешний сбой Planetary Computer/OSM?): " + e.message); }
+
   // что DeepSeek вернул на запрос с поиском (инструмент передан? был ли вызов поиска?) — для разбора, если источников нет
-  try { const st = await (await get(API + "/api/ai/status")).json(); console.log("\n--- поиск: последний запрос с инструментом ---\n" + JSON.stringify({ search_available: st.search_available, last_search: st.last_search, usage: st.usage_since_start }, null, 1)); }
+  try { const st = await (await get(API + "/api/ai/status")).json(); console.log("\n--- поиск: последний запрос с инструментом ---\n" + JSON.stringify({ search_available: st.search_available, last_search: st.last_search, last_answer: st.last_answer, usage: st.usage_since_start }, null, 1)); }
   catch (e) { note("/api/ai/status после вопроса о погоде: " + e.message); }
 
   // 4. бот в Telegram
