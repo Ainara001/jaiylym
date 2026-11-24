@@ -730,3 +730,8 @@ main .btn > span { min-width: 0; overflow-wrap: anywhere; }
 .mt-g.mt-decline_unexplained { background: var(--accent-soft); }
 .mt-t td, .mt-t th { font-size: 12.5px; }
 .mt-legend > span { white-space: nowrap; }
+
+/* отдых участка в карточке */
+.rest { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px 10px; margin: 10px 0 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: end; }
+.rest legend { font-size: 12.5px; font-weight: 700; padding: 0 4px; }
+.rest small { grid-column: 1 / -1; }

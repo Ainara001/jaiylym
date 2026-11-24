@@ -80,7 +80,7 @@ async function journey(page, label) {
   assert.match(res, /полностью распределить стада не удалось/);
   assert.match(res, /Узкое место \(доказательство\)/, "показано доказательство узкого места");
   assert.match(res, /Справедливая оптимизация/);
-  assert.equal(await page.evaluate(() => window.JaiylymApp.S.pl.algorithm), "fair-optimal-v1");
+  assert.equal(await page.evaluate(() => window.JaiylymApp.S.pl.algorithm), "fair-optimal-v2");
   // «Как рассчитано?»
   await page.click('.result [data-how]');
   const how = await page.textContent("dialog[open]");
