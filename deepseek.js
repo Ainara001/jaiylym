@@ -22,6 +22,35 @@ const CJK = /[⺀-⿿　-ヿ㐀-䶿一-鿿가-힯豈-﫿＀-￯]/;
 const CJK_ALL = new RegExp(CJK.source, "g");
 const LANG_GUARD = " Пиши только буквами языка ответа (кириллица русского или казахского алфавита) и цифрами: никаких китайских, японских, корейских символов и английских вставок.";
 
+/**
+ * Результаты встроенного поиска приходят в message.server_tool_calls (проверено на проде: annotations пустые, tool_search > 0).
+ * Формат вложенности не документирован у нас — обходим дерево: объект с http(s)-url — найденная страница (url + заголовок),
+ * длинные строки рядом — текст найденного (по нему проверяются числа ответа). Лимиты — чтобы не раздувать память.
+ */
+function walkResults(node, out, depth = 0) {
+  if (!node || depth > 8 || out.texts.length > 200) return out;
+  if (Array.isArray(node)) { for (const x of node) walkResults(x, out, depth + 1); return out; }
+  if (typeof node === "string") {
+    // аргументы и результаты инструмента иногда приходят строкой JSON
+    const t = node.trim();
+    if ((t[0] === "{" || t[0] === "[") && t.length < 400000) { try { return walkResults(JSON.parse(t), out, depth + 1); } catch (_) {} }
+    if (t.length >= 20 && !/^https?:\/\/\S+$/.test(t)) out.texts.push(t.slice(0, 2000));
+    return out;
+  }
+  if (typeof node !== "object") return out;
+  const url = node.url || node.link || node.href;
+  if (typeof url === "string" && /^https?:\/\//.test(url)) out.pages.push({ url, title: String(node.title || node.name || "").slice(0, 120) });
+  for (const [k, v] of Object.entries(node)) if (!["url", "link", "href"].includes(k)) walkResults(v, out, depth + 1);
+  return out;
+}
+/** Вид server_tool_calls без содержимого — ключи и типы (для /api/ai/status, чтобы видеть формат на проде). */
+function shapeOf(node, depth = 0) {
+  if (depth > 4) return "…";
+  if (Array.isArray(node)) return node.length ? [shapeOf(node[0], depth + 1), node.length] : [];
+  if (node && typeof node === "object") return Object.fromEntries(Object.entries(node).slice(0, 12).map(([k, v]) => [k, shapeOf(v, depth + 1)]));
+  return typeof node === "string" ? "str" + (node.length > 40 ? ":" + node.length : "") : typeof node;
+}
+
 /** Ответ DeepSeek → тот же вид, что у gemini.js: текст, источники с процитированными фрагментами, число поисков. */
 function parse(d) {
   const msg = (d.choices && d.choices[0] && d.choices[0].message) || {};
@@ -32,10 +61,12 @@ function parse(d) {
     const u = a && a.type === "url_citation" && a.url_citation;
     if (u && /^https?:\/\//.test(u.url || "")) cites.push({ url: u.url, title: String(u.title || "").slice(0, 120), segment: chars.slice(u.start_index || 0, u.end_index || 0).join("") });
   }
+  // без аннотаций — найденные страницы из server_tool_calls (сначала процитированные, затем просмотренные)
+  const found = walkResults(msg.server_tool_calls || [], { pages: [], texts: [] });
   const seen = new Set(), sources = [];
-  for (const c of cites) if (!seen.has(c.url)) { seen.add(c.url); sources.push({ url: c.url, title: c.title && c.title !== c.url ? c.title : "" }); }
+  for (const c of cites.concat(found.pages)) if (!seen.has(c.url)) { seen.add(c.url); sources.push({ url: c.url, title: c.title && c.title !== c.url ? c.title : "" }); }
   const tool = (d.usage && d.usage.server_tool_use) || {};
-  return { text, sources: sources.slice(0, 6), cited: cites.map(c => c.segment).filter(Boolean), searches: (tool.tool_search || 0) + (tool.tool_fetch || 0),
+  return { text, sources: sources.slice(0, 6), cited: cites.map(c => c.segment).filter(Boolean).concat(found.texts), searches: (tool.tool_search || 0) + (tool.tool_fetch || 0),
     finish: d.choices && d.choices[0] && d.choices[0].finish_reason, usage: d.usage || {} };
 }
 
@@ -93,7 +124,8 @@ async function ask({ system, input, maxTokens = 700, temperature = 0.4, timeoutM
         state.lastSearch = { at: new Date().toISOString(), tools_sent: !!body.tools, model: (r.d && r.d.model) || MODEL(), finish: out.finish || null,
           server_tool_use: (r.d.usage && r.d.usage.server_tool_use) || null, usage_keys: Object.keys(r.d.usage || {}),
           annotations: (m.annotations || []).length, tool_calls: (m.tool_calls || []).map(t => (t && (t.type || (t.function && t.function.name))) || "?"),
-          message_keys: Object.keys(m), searches: out.searches, sources: out.sources.length };
+          message_keys: Object.keys(m), searches: out.searches, sources: out.sources.length, found_texts: out.cited.length,
+          server_tool_calls_shape: m.server_tool_calls ? shapeOf(m.server_tool_calls) : null };
       }
       if (!out.text) { remember("empty " + (out.finish || "")); last = { status: 200, error: "empty" }; continue; }
       if (CJK.test(out.text)) {
@@ -122,4 +154,4 @@ async function status() {
     last_ok: state.lastOk, last_errors: state.lastErrors, search_available: !state.noSearch, last_search: state.lastSearch, usage_since_start: state.usage };
 }
 
-module.exports = { ask, status, parse, classify, MODELS: [MODEL()], _state: state };
+module.exports = { ask, status, parse, classify, walkResults, shapeOf, MODELS: [MODEL()], _state: state };

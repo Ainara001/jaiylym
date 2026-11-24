@@ -115,3 +115,17 @@ test("иероглифы в ответе: правило в системном �
   await withFetch(async () => { n++; return okBody("Жем 草原 жетеді"); }, async () => assert.equal((await DS.ask({ system: "S", input: "i", budgetMs: 60000 })).text, "Жем жетеді"));
   assert.equal(n, 3);
 });
+
+test("поиск: найденные страницы и тексты из message.server_tool_calls (без аннотаций; объектами и строкой JSON)", async () => {
+  const m = { content: "В среду до +3 °C.", server_tool_calls: [
+    { type: "web_search", name: "search", arguments: "{\"query\":\"погода Кеген\"}",
+      results: [{ url: "https://pogoda.kz/kegen", title: "Погода в Кегене", snippet: "Среда: днём до +3 °C, ночью −8 °C, без осадков." },
+        { url: "javascript:void(0)", title: "x", snippet: "не ссылка" }] },
+    { type: "web_search", output: JSON.stringify({ items: [{ link: "https://meteo.example/kz", name: "Meteo", content: "Прогноз для Райымбекского района на 7 дней" }] }) }] };
+  const out = DS.parse({ model: "deepseek-flash", choices: [{ message: m, finish_reason: "stop" }], usage: { server_tool_use: { tool_search: 2 } } });
+  assert.deepEqual(out.sources, [{ url: "https://pogoda.kz/kegen", title: "Погода в Кегене" }, { url: "https://meteo.example/kz", title: "Meteo" }]);
+  assert.ok(out.cited.some(t => /\+3 °C/.test(t)), "текст найденного — для проверки чисел");
+  assert.equal(out.searches, 2);
+  const sh = DS.shapeOf(m.server_tool_calls);
+  assert.doesNotMatch(JSON.stringify(sh), /Кеген|pogoda/, "вид без содержимого");
+});

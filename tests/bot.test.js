@@ -79,3 +79,12 @@ test("ИИ в боте: многолетний ряд в данных, поис�
     assert.doesNotMatch(last(), /\[интернет\]|Найдено в интернете/);
   } finally { AI.ask = orig; if (key === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = key; }
 });
+
+test("ИИ в боте для любого села: многолетний ряд села (не Кегена) из фонового расчёта, иначе — статус", () => {
+  const D = require("../data").loadPlots();
+  const other = { data: Object.assign({}, D, { village: { name: "Нарынкол", lat: 42.72, lon: 80.18 }, multiyear: undefined }), herds: [] };
+  assert.match(bot.multiContext(other, "42.720,80.180").статус, /посчитается в фоне/);
+  other.multi = D.multiyear;   // результат фонового расчёта хранится с селом
+  const f = bot.multiContext(other, "42.720,80.180");
+  assert.ok(f.вывод_по_селу && f.годы.length >= 2);
+});
