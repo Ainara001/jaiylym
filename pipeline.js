@@ -555,7 +555,7 @@
       source: {
         ndvi: "Sentinel-2 L2A (ESA Copernicus), медиана безоблачных снимков лета",
         landcover: "ESA WorldCover 10 м",
-        base_year: null, year, dates, calculated_at: new Date().toISOString(),
+        base_year: null, year, dates, window: scenes.window || null, calculated_at: new Date().toISOString(),
       },
       meta: metaFor({ year, dates, valid, warnings, status: noData.length === plots.length ? "no_data" : "measured" }),
       plots,
