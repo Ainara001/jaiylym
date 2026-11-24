@@ -27,6 +27,21 @@ test("все ключи, которые использует интерфейс,
   for (const f of ["web/js/app.js", "web/js/report.js"]) {
     for (const m of read(f).matchAll(/\bt\("([a-zA-Z0-9._]+)"/g)) used.add(m[1]);
   }
+  // экраны Келісім: tt("x") → kel.x; ключи по кодам расчёта
+  const kel = read("web/js/kelisim-ui.js"), K = require("../web/kelisim.js");
+  for (const m of kel.matchAll(/\btt\("([\w.]+[\w])"/g)) used.add("kel." + m[1]);
+  for (const m of kel.matchAll(/tt\([^()]*?\? "([\w.]+)" : "([\w.]+)"/g)) { used.add("kel." + m[1]); used.add("kel." + m[2]); }
+  for (const m of kel.matchAll(/\bt\("([\w.]+[\w])"/g)) if (!/^herds\.w$/.test(m[1])) used.add(m[1]);
+  for (const r of K.REASONS) used.add("kel.rs." + r);
+  for (const r of K.RULES) { used.add("kel.rule." + r); used.add("kel.rule." + r + "D"); }
+  for (const x of K.TYPES) used.add("kel.pt." + x);
+  for (const v of ["free", "own", "others", "impossible", "none", "not_calculated", "error"]) { used.add("kel.vd." + v); used.add("kel.vd." + v + "Org"); }
+  for (const x of ["daily", "far", "nearest", "closer_full", "shared", "preferred"]) used.add("kel.why." + x);
+  for (const x of ["start", "proposal", "add", "remove", "edit", "rule", "restore"]) used.add("kel.wh." + x);
+  for (const x of ["open", "accepted", "declined", "withdrawn"]) used.add("kel.pst." + x);
+  for (const x of ["not_a_contract", "no_land_rights", "herds_declared", "model_estimate"]) used.add("kel.lim." + x);
+  for (const x of ["none", "entered", "declared", "confirmed"]) used.add("kel.hs." + x);
+  for (const m of read("kelisim.js").matchAll(/why: "(\w+)"/g)) used.add("kel.err." + m[1]);
   for (const m of read("web/index.html").matchAll(/data-i18n(?:-ph|-label)?="([a-zA-Z0-9._]+)"/g)) used.add(m[1]);
   // ключи, собираемые из переменной: t("conf." + c) — их полноту проверяет следующий тест
   const dynamic = /^(conf|role|herds|src|hist|ab|map\.mode|fc|how\.step|how\.f|unit|meta|rsn|set\.origin|veg|vt|why|wi\.a|wi\.st|wi\.v|wi\.v\.algo|algo|wr|ws|sg|rs|mt\.v|mt\.r|mt\.s)\.$/;
@@ -74,7 +89,7 @@ test("тексты README и интерфейса о достоверности 
 
 test("в интерфейсе и боте нет цветных смайликов", () => {
   const emoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{26FF}\u{2B00}-\u{2BFF}\u{FE0F}]/u;
-  for (const f of ["web/index.html", "web/js/app.js", "web/js/i18n.js", "web/js/report.js", "web/css/app.css", "web/model.js", "web/engine.js", "api.js"]) {
+  for (const f of ["web/index.html", "web/js/app.js", "web/js/i18n.js", "web/js/report.js", "web/js/kelisim-ui.js", "web/css/app.css", "web/model.js", "web/engine.js", "api.js"]) {
     const lines = read(f).split("\n").map((l, i) => [i + 1, l]).filter(([, l]) => emoji.test(l));
     assert.deepEqual(lines, [], f);
   }

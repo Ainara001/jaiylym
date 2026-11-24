@@ -14,12 +14,13 @@
   let token = ls.get(TOKEN_KEY, null);
   let user = null;
 
-  class ApiError extends Error { constructor(msg, status, field) { super(msg); this.status = status; this.field = field || null; } }
+  class ApiError extends Error { constructor(msg, status, field, data) { super(msg); this.status = status; this.field = field || null; this.data = data || null; } }
 
-  async function req(method, path, body, { timeout = 70000, auth = true } = {}) {
+  async function req(method, path, body, { timeout = 70000, auth = true, kel = "" } = {}) {
     const headers = {};
     if (body) headers["content-type"] = "application/json";
     if (auth && token) headers.authorization = "Bearer " + token;
+    if (kel) headers.authorization = "Kelisim " + kel;       // Келісім: секрет личной ссылки вместо входа
     let r;
     try {
       r = await fetch(API + path, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(timeout) });
@@ -29,7 +30,7 @@
     let data = null;
     try { data = await r.json(); } catch (_) {}
     if (r.status === 401 && auth && token) { setToken(null); user = null; }
-    if (!r.ok) throw new ApiError((data && data.error) || ("HTTP " + r.status), r.status, data && data.field);
+    if (!r.ok) throw new ApiError((data && data.error) || ("HTTP " + r.status), r.status, data && data.field, data);
     return data;
   }
   function setToken(tk) { token = tk; tk ? ls.set(TOKEN_KEY, tk) : ls.del(TOKEN_KEY); }
@@ -101,11 +102,14 @@
   // ---------- ИИ-помощник (Gemini через сервер; ключ хранится только на сервере) ----------
   const ai = body => req("POST", "/api/ai", body, { timeout: 90000 });
 
+  // ---------- Келісім: согласование по личным ссылкам, без аккаунта ----------
+  const kel = (method, path, key, body) => req(method, "/api/kelisim" + path, body, { auth: false, kel: key, timeout: 90000 });
+
   window.Client = {
     API, ApiError, ls,
     get user() { return user; }, get loggedIn() { return !!token; },
     startLogin, pollLogin, register, loginPw, logout, me, saveFarm, deleteAccount, addPasture, deletePasture,
     listScenarios, saveScenario, deleteScenario, listHistory, addHistory,
-    coordAddVillage, coordRemoveVillage, coordFarms, villageData, ai,
+    coordAddVillage, coordRemoveVillage, coordFarms, villageData, ai, kel,
   };
 })();

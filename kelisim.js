@@ -23,14 +23,14 @@ const DIST = { near: 1.8, far: 5.5 };
 const sha = s => crypto.createHash("sha256").update(String(s)).digest("hex");
 const rnd = n => crypto.randomBytes(n).toString("base64url");
 const err = (code, message, extra) => Object.assign(new Error(message), { code }, extra ? { extra } : {});
-const bad = m => err(400, m);
+const bad = (m, why) => err(400, m, why && { why });
 const same = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 const str = (x, max) => String(x == null ? "" : x).replace(/[\u0000-\u001f<>]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
 const PHONE = /(?:(?:\+?7|8)[\s(.-]*)?7\d{2}[\s).-]*\d{3}[\s.-]*\d{2}[\s.-]*\d{2}/, IIN = /\d{6}\s?\d{6}/;
 /** Текст от людей: без разметки и без того, что похоже на телефон или ИИН. */
 function text(x, max, what) {
   const s = str(x, max);
-  if (PHONE.test(s) || IIN.test(s)) throw bad(what + ": не указывайте телефон или ИИН");
+  if (PHONE.test(s) || IIN.test(s)) throw bad(what + ": не указывайте телефон или ИИН", "phone");
   return s;
 }
 function int(x, max, what) {
@@ -107,7 +107,7 @@ function checkSnapshot(plots, data) {
 function cleanHousehold(b, k) {
   const name = text(b && b.name, 60, "имя двора");
   if (!name) throw bad("укажите имя двора (например, «Двор у моста»)");
-  if (k.households.some(h => !h.removed && h.name.toLowerCase() === name.toLowerCase())) throw err(409, "двор с таким именем уже есть");
+  if (k.households.some(h => !h.removed && h.name.toLowerCase() === name.toLowerCase())) throw err(409, "двор с таким именем уже есть", { why: "name_taken" });
   const home = b.home && PLOT_RE.test(b.home) && isNear(b.home) ? b.home : k.snapshot.plots.filter(p => p.ring === "near").map(p => p.id)[0] || k.snapshot.plots[0].id;
   return Object.assign({ name, herd: herd(b.herd), home, daily_return: !!b.daily_return, weight: weight(b.weight), allowed: plotList(b.allowed, "участки двора"), avoid: [], prefer: [], prefer_soft: [],
     herd_status: b.herd ? "entered" : "none", joined: null, answer: null, herd_log: [] });
@@ -128,7 +128,7 @@ function cleanOfficial(b) {
 function cleanDeadline(x, now) {
   if (x == null || x === "") return null;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(x) || Number.isNaN(Date.parse(x))) throw bad("срок: дата ГГГГ-ММ-ДД");
-  if (Date.parse(x + "T23:59:59+05:00") < now) throw bad("срок уже прошёл");
+  if (Date.parse(x + "T23:59:59+05:00") < now) throw bad("срок уже прошёл", "deadline");
   return x;
 }
 const expired = (k, now) => !!k.deadline && Date.parse(k.deadline + "T23:59:59+05:00") < now;
@@ -238,8 +238,8 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
   }
   const onlyOrg = w => { if (w.role !== "org") throw err(403, "это может только организатор"); };
   const onlyHh = w => { if (w.role !== "household") throw err(403, "это может только двор по своей ссылке"); };
-  const notClosed = k => { if (k.status === "closed") throw err(409, "согласование закрыто"); };
-  const checkRev = (k, rev) => { if (rev !== k.rev) throw err(409, "данные изменились, обновите страницу", { rev: k.rev }); };
+  const notClosed = k => { if (k.status === "closed") throw err(409, "согласование закрыто", { why: "closed" }); };
+  const checkRev = (k, rev) => { if (rev !== k.rev) throw err(409, "данные изменились, обновите страницу", { why: "rev", rev: k.rev }); };
   /** Изменение: блокировка, права, правка копии, rev + 1, запись. fn возвращает добавку к ответу. */
   function change(id, key, fn) {
     return locked(id, async () => {
@@ -299,7 +299,7 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
         for (const p of k.proposals) if (p.household === hid && p.status === "open") p.status = "withdrawn";
         log(k, "org", "remove", { household: hid, name: h.name }, t); solve = true;
       } else {
-        if (b.name != null) { const name = text(b.name, 60, "имя двора"); if (!name) throw bad("имя двора пустое"); if (K.active(k).some(x => x.id !== hid && x.name.toLowerCase() === name.toLowerCase())) throw err(409, "двор с таким именем уже есть"); h.name = name; }
+        if (b.name != null) { const name = text(b.name, 60, "имя двора"); if (!name) throw bad("имя двора пустое", "name"); if (K.active(k).some(x => x.id !== hid && x.name.toLowerCase() === name.toLowerCase())) throw err(409, "двор с таким именем уже есть", { why: "name_taken" }); h.name = name; }
         if (b.herd != null) { const next = herd(b.herd); herdLog(h, next, "org", t); h.herd = next; h.herd_status = b.confirm ? "confirmed" : "entered"; log(k, "org", "herd", { household: hid, to: next }, t); solve = true; }
         else if (b.confirm != null) { if (h.herd_status === "none") throw bad("поголовье ещё не внесено"); h.herd_status = b.confirm ? "confirmed" : "declared"; log(k, "org", b.confirm ? "confirm" : "unconfirm", { household: hid }, t); }
         if (b.weight != null && weight(b.weight) !== h.weight) { log(k, "org", "weight", { household: hid, from: h.weight, to: weight(b.weight) }, t); h.weight = weight(b.weight); solve = true; }
@@ -326,8 +326,8 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
       onlyOrg(w); checkRev(k, b.rev);
       if (k.status !== "collect") throw err(409, "согласование уже начато");
       const list = K.active(k), empty = list.filter(h => K.SPECIES.every(s => !h.herd[s]));
-      if (list.length < 2) throw bad("нужно хотя бы два двора");
-      if (empty.length === list.length) throw bad("ни один двор не внёс поголовье");
+      if (list.length < 2) throw bad("нужно хотя бы два двора", "two");
+      if (empty.length === list.length) throw bad("ни один двор не внёс поголовье", "no_herd");
       k.status = "review";
       log(k, "org", "start", { without_herd: empty.map(h => h.id) }, t);
       newVersion(k, K.solve(k), { type: "start" }, t);
@@ -337,7 +337,7 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
       onlyOrg(w); notClosed(k); checkRev(k, b.rev);
       const p = k.proposals.find(x => x.id === b.proposal);
       if (!p) throw err(404, "предложение не найдено");
-      if (p.status !== "open") throw err(409, "предложение уже рассмотрено");
+      if (p.status !== "open") throw err(409, "предложение уже рассмотрено", { why: "decided" });
       const h = find(k, p.household);
       p.note = text(b.note, MAX.text, "пояснение") || undefined;
       p.decided_at = new Date(t).toISOString();
@@ -373,10 +373,10 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
     /** Двор вносит себя: имя, скот, домашний участок. До начала — свободно; после начала скот меняется только предложением. */
     join: (id, key, b) => change(id, key, (k, w, t) => {
       onlyHh(w); notClosed(k);
-      if (expired(k, t)) throw err(409, "срок ответа прошёл");
-      if (k.status !== "collect") throw err(409, "план уже рассчитан: изменение скота отправьте как предложение");
+      if (expired(k, t)) throw err(409, "срок ответа прошёл", { why: "expired" });
+      if (k.status !== "collect") throw err(409, "план уже рассчитан: изменение скота отправьте как предложение", { why: "started" });
       const h = find(k, w.id);
-      if (b.name != null) { const name = text(b.name, 60, "имя двора"); if (!name) throw bad("имя двора пустое"); if (K.active(k).some(x => x.id !== h.id && x.name.toLowerCase() === name.toLowerCase())) throw err(409, "двор с таким именем уже есть"); h.name = name; }
+      if (b.name != null) { const name = text(b.name, 60, "имя двора"); if (!name) throw bad("имя двора пустое", "name"); if (K.active(k).some(x => x.id !== h.id && x.name.toLowerCase() === name.toLowerCase())) throw err(409, "двор с таким именем уже есть", { why: "name_taken" }); h.name = name; }
       if (b.herd != null) { const next = herd(b.herd); herdLog(h, next, h.id, t); h.herd = next; h.herd_status = "declared"; }
       if (b.home != null) { if (!PLOT_RE.test(b.home) || !isNear(b.home)) throw bad("домашний участок — только ближний"); h.home = b.home; }
       if (b.daily_return != null) h.daily_return = !!b.daily_return;
@@ -393,9 +393,9 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
     /** Ответ на план версии N: согласен или возражение с предложением. Новое возражение заменяет прежнее открытое. */
     answer: (id, key, b) => change(id, key, (k, w, t) => {
       onlyHh(w); notClosed(k);
-      if (expired(k, t)) throw err(409, "срок ответа прошёл");
+      if (expired(k, t)) throw err(409, "срок ответа прошёл", { why: "expired" });
       if (!k.version) throw err(409, "план ещё не рассчитан");
-      if (b.version !== k.version) throw err(409, "план изменился, посмотрите новый", { version: k.version });
+      if (b.version !== k.version) throw err(409, "план изменился, посмотрите новый", { why: "stale", version: k.version });
       const h = find(k, w.id), at = new Date(t).toISOString();
       if (b.value !== "agree" && b.value !== "object") throw bad("ответ: agree или object");
       // «согласен» снимает своё нерассмотренное возражение; новое возражение заменяет прежнее
