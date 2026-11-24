@@ -291,11 +291,14 @@ function textMap(v, herd) {
 }
 
 function textWells(v) {
-  const { byId, plots } = compute(v);
-  const ws = J.wells(plots).slice(0, 4);
-  if (!ws.length) return "Все дальние участки уже с водой.";
-  return `Где новый водопой откроет больше всего корма:\n\n` +
-    ws.map((w, i) => `${i + 1}. ${where(byId[w.plot])} — ≈ ${fmt(w.sheep)} овец на сезон (оценка модели)`).join("\n") +
+  const { byId, plots, herds, pl } = compute(v);
+  const r = J.wellRank(plots, herds, undefined, undefined, pl), ws = r.list.filter(w => w.gain_t).slice(0, 4);
+  if (!r.list.length && r.status !== "no_help") return "Все дальние участки уже с водой.";
+  if (r.status === "no_herds") return `Стада села ещё не внесены, поэтому неизвестно, поможет ли новый водопой. Участков без воды: ${r.list.length}.\n\nВнесите стадо здесь или на карте: ${siteLink(v)}`;
+  if (r.status === "no_deficit") return "Корма хватает всем внесённым стадам: новый водопой сейчас корма не добавит.";
+  if (r.status === "no_help") return `Не хватает ≈ ${fmt(r.deficit_t)} т сена, но ни один новый водопой этого не уменьшит: причина не в воде. Подробности на карте: ${siteLink(v)}`;
+  return `Где проверять возможность нового водопоя (не хватает ≈ ${fmt(r.deficit_t)} т сена):\n\n` +
+    ws.map((w, i) => `${i + 1}. ${where(byId[w.plot])} — дефицит меньше на ≈ ${fmt(w.gain_t)} т, лучше станет стадам: ${w.better.length} (оценка модели)`).join("\n") +
     `\n\nЭто моделирование, а не рекомендация строить скважину: нужны гидрогеология, право на землю, дорога и смета. ` +
     `Водоём на спутниковой карте не означает пригодный водопой — проверьте на месте.`;
 }

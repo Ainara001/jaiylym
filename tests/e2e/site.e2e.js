@@ -83,6 +83,23 @@ async function newcomer(page, label) {
   assert.match(await page.textContent('.pane[data-pane="brief"]'), /Норма Минсельхоза ограничивает 16 из 16/);
   assert.equal(await page.isVisible(".tabs"), true);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), label + ": без горизонтальной прокрутки");
+  // водопои: рейтинг по дефициту, «не проверено», запоминание; без дефицита — честно «корма не добавит»
+  await App(() => window.JaiylymApp.renderPane("water"));
+  const wp = () => page.textContent('.pane[data-pane="water"]');
+  assert.match(await wp(), /ни один новый водопой этого не уменьшит|дефицит меньше на/, label + ": водопой — по делу");
+  await App(() => { const s = window.JaiylymApp.S; s.D.plots.forEach(p => { if (p.ring === "far") { p.water = false; p.water_status = "unknown"; } }); s.herds = [{ id: "a", name: "Тест", home: "Б-С", sheep: 1 }]; window.JaiylymApp.rebuildPlots(); window.JaiylymApp.render(); window.JaiylymApp.renderPane("water"); });
+  assert.match(await page.textContent("#waterVerdict"), /корма не добавит/);
+  await App(() => { const s = window.JaiylymApp.S; s.herds = [{ id: "a", name: "Тест", home: "Б-С", sheep: 9000 }]; window.JaiylymApp.render(); window.JaiylymApp.renderPane("water"); });
+  const gains = (await page.$$eval(".wcand small:first-of-type", x => x.map(e => +e.textContent.match(/≈ ([\d\s]+) из/)[1].replace(/\s/g, ""))));
+  assert.ok(gains.length > 1 && gains.every((g, i) => !i || gains[i - 1] >= g), label + ": по снижению дефицита");
+  await page.click(".wcand:first-child summary");
+  assert.match(await page.textContent(".wcand:first-child summary"), /не проверено/);
+  await page.selectOption('.wcand:first-child [data-f="right"]', "no");
+  await page.waitForFunction(() => /Права на землю нет/.test(document.querySelector(".wcand").textContent) && /1 из 3/.test(document.querySelector(".wcand summary").textContent));
+  assert.match(JSON.stringify(await App(() => window.JaiylymApp.aiContext()["где_проверять_воду"])), /Право на землю: нет; Источник воды: не проверено/);
+  if (process.env.KEL_SHOTS) await page.screenshot({ path: path.join(process.env.KEL_SHOTS, "water.png"), fullPage: true });
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), label + ": водопои без прокрутки вбок");
+  await App(() => window.JaiylymApp.renderPane("brief"));
   // новое село: сразу его имя и «считаем», прежнего села на карте и в панели нет
   await page.goto(base + "#/map?lat=50.1&lon=70.1&name=Новое");
   await page.waitForFunction(() => /Считаем пастбища: Новое/.test((document.querySelector(".start") || {}).textContent || ""));
