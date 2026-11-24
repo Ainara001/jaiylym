@@ -70,6 +70,13 @@ test("поиск: инструмент deepseek_web_search, источники �
     assert.deepEqual(r.cited, ["Шөп бағасы — 45 000 ₸."]);
     assert.equal(r.searches, 2);
   });
+  // диагностика для /api/ai/status: инструмент передан, вызовы поиска и аннотации посчитаны, текста ответа нет
+  const ls = (await DS.status()).last_search;
+  assert.equal(ls.tools_sent, true);
+  assert.deepEqual(ls.server_tool_use, { tool_search: 2 });
+  assert.equal(ls.annotations, 2);
+  assert.equal(ls.sources, 1);
+  assert.doesNotMatch(JSON.stringify(ls), /Шөп/);
 });
 
 test("поиск недоступен (400 об инструменте) — повтор без него, больше не пробуем", async () => {
