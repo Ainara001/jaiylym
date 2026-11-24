@@ -8,7 +8,8 @@
  *      доступный_корм = пастбище_га × биомасса × util × forage_factor
  * 2) Ёмкость участка в «голово-днях» условных голов (УГ):
  *      ёмкость = доступный_корм / intake                         ← 1 УГ ≈ 11 кг сухого корма в сутки
- * 3) Стадо в УГ: КРС 1, лошадь 1, овца/коза 0.2 (коэффициенты настраиваются).
+ *      к участку прикреплена норма МСХ (plot.norm, web/norms.js) → ёмкость = меньшее из оценки по снимку и нормы
+ * 3) Стадо в УГ: КРС 1, лошадь 1.2, овца/коза 0.2 (как в приказе о норме нагрузки; коэффициенты настраиваются).
  *
  * Нет NDVI → ёмкость НЕИЗВЕСТНА (status "no_data"), а не «корма нет». Такой участок не попадает в план.
  *
@@ -54,6 +55,7 @@
    *   quality: качество спутникового измерения (high|medium|low|none)
    *   forage_confidence: достоверность перевода NDVI в корм (none|unconfirmed|calibrated)
    * При no_data числа = null: ёмкость неизвестна.
+   * Есть plot.norm → sat (оценка по снимку) и norm (предел по приказу) отдельно, в расчёт идёт меньшее, limited_by: "norm" | "satellite".
    */
   function plotCapacity(plot, p) {
     p = params(p);
@@ -71,7 +73,25 @@
         warning: badNdvi ? "invalid_ndvi" : "no_ndvi" };
     const biomass = Math.max(0, +ndvi - p.ndvi0) * p.k_ndvi;            // кг/га — расчёт по формуле
     const forage = pasture * biomass * p.util * p.forage_factor;        // кг — оценка модели
-    return { status, quality, forage_confidence: fc, known: true, biomass, forage, au_days: forage / p.intake, au_season: forage / p.intake / p.season_days };
+    const sat = { forage, au_days: forage / p.intake, au_season: forage / p.intake / p.season_days };
+    const out = Object.assign({ status, quality, forage_confidence: fc, known: true, biomass }, sat);
+    const n = normLimit(plot, p);
+    if (!n) return out;
+    out.sat = sat; out.norm = n;
+    out.limited_by = n.au_days < sat.au_days ? "norm" : "satellite";
+    if (out.limited_by === "norm") Object.assign(out, { forage: n.au_days * p.intake, au_days: n.au_days, au_season: n.au_season });
+    return out;
+  }
+  /**
+   * Предел по норме нагрузки: голов на пастбищный период = га / (га на условную голову). Сезон длиннее нормативного периода —
+   * голов меньше пропорционально; короче — не больше (норма не смягчается).
+   */
+  function normLimit(plot, p) {
+    const n = plot.norm;
+    if (!n || !(n.au_ha > 0)) return null;
+    const k = n.days ? Math.min(1, n.days[1] / p.season_days) : 1;
+    const au = +plot.pasture_ha / n.au_ha * k;
+    return { au_season: au, au_days: au * p.season_days, au_ha: n.au_ha, season_factor: k };
   }
 
   /** Пошаговый расчёт для кнопки «Как рассчитано?» — его можно повторить на калькуляторе. */
@@ -88,15 +108,22 @@
     if (c.known) {
       steps.push({ key: "biomass", value: r(c.biomass), unit: "кг СВ/га", kind: "model",
         formula: `max(0, ${r(plot.ndvi, 3)} − ${p.ndvi0}) × ${p.k_ndvi} = ${r(c.biomass)}` });
-      steps.push({ key: "forage", value: r(c.forage), unit: "кг СВ", kind: "model",
-        formula: `${r(plot.pasture_ha, 1)} × ${r(c.biomass)} × ${p.util}${p.forage_factor !== 1 ? " × " + p.forage_factor : ""} = ${r(c.forage)}` });
-      steps.push({ key: "au_days", value: r(c.au_days), unit: "усл. гол.·сут", kind: "model", formula: `${r(c.forage)} / ${p.intake} = ${r(c.au_days)}` });
-      steps.push({ key: "au_season", value: r(c.au_season, 1), unit: "усл. гол. на сезон", kind: "model", formula: `${r(c.au_days)} / ${p.season_days} = ${r(c.au_season, 1)}` });
-      steps.push({ key: "sheep", value: r(c.au_season / p.au.sheep), unit: "овец на сезон", kind: "model", formula: `${r(c.au_season, 1)} / ${p.au.sheep} = ${r(c.au_season / p.au.sheep)}` });
+      const s = c.sat || c;                     // шаги формулы — всегда оценка по снимку; предел нормы — отдельными шагами после неё
+      steps.push({ key: "forage", value: r(s.forage), unit: "кг СВ", kind: "model",
+        formula: `${r(plot.pasture_ha, 1)} × ${r(c.biomass)} × ${p.util}${p.forage_factor !== 1 ? " × " + p.forage_factor : ""} = ${r(s.forage)}` });
+      steps.push({ key: "au_days", value: r(s.au_days), unit: "усл. гол.·сут", kind: "model", formula: `${r(s.forage)} / ${p.intake} = ${r(s.au_days)}` });
+      steps.push({ key: "au_season", value: r(s.au_season, 1), unit: "усл. гол. на сезон", kind: "model", formula: `${r(s.au_days)} / ${p.season_days} = ${r(s.au_season, 1)}` });
+      steps.push({ key: "sheep", value: r(s.au_season / p.au.sheep), unit: "овец на сезон", kind: "model", formula: `${r(s.au_season, 1)} / ${p.au.sheep} = ${r(s.au_season / p.au.sheep)}` });
+      if (c.norm) {
+        const ns = c.norm.au_season / p.au.sheep, ss = s.au_season / p.au.sheep;
+        steps.push({ key: "norm", value: r(ns), unit: "овец по норме", kind: "norm",
+          formula: `${r(plot.pasture_ha, 1)} / ${r(c.norm.au_ha * p.au.sheep, 2)}${c.norm.season_factor < 1 ? ` × ${plot.norm.days[1]} / ${p.season_days}` : ""} = ${r(ns)}` });
+        steps.push({ key: "limit", value: r(Math.min(ns, ss)), unit: "овец на сезон", kind: "model", formula: `min(${r(ss)}, ${r(ns)}) = ${r(Math.min(ns, ss))}` });
+      }
       if (herd) {
         const au = herdAU(herd, p), need = au * p.intake;
         steps.push({ key: "herd_intake", value: r(need), unit: "кг СВ/сут", kind: "model", formula: `${r(au, 1)} усл. гол. × ${p.intake} = ${r(need)}` });
-        steps.push({ key: "days", value: au > 0 ? r(c.forage / need) : null, unit: "сут", kind: "model", formula: au > 0 ? `${r(c.forage)} / ${r(need)} = ${r(c.forage / need)}` : "стадо пустое" });
+        steps.push({ key: "days", value: au > 0 ? r(c.forage / need) : null, unit: "сут", kind: "model", formula: au > 0 ? `${c.limited_by === "norm" ? `${r(c.au_days)} / ${r(au, 1)}` : `${r(c.forage)} / ${r(need)}`} = ${r(c.forage / need)}` : "стадо пустое" });
       }
     }
     const limits = [
@@ -106,6 +133,7 @@
       "Наличие травы не означает права выпаса и доступа к воде.",
     ];
     if (!c.known) limits.unshift("NDVI для участка нет — ёмкость неизвестна, участок не используется в плане.");
+    if (c.norm) limits.push("Норма нагрузки — предел по приказу МСХ № 3-3/332 для выбранного типа пастбища; тип выбирает человек, без выбора взята самая мягкая норма области.");
     if (c.status === "insufficient_quality") limits.unshift("Мало безоблачных снимков или пикселей — NDVI ненадёжен.");
     return { capacity: c, steps, params: { ndvi0: p.ndvi0, k_ndvi: p.k_ndvi, util: p.util, intake: p.intake, season_days: p.season_days, au_sheep: p.au.sheep, forage_factor: p.forage_factor },
       model_version: M.MODEL_VERSION, field_validated: M.fieldValidated(p), formula: M.FORMULA, limits };
