@@ -17,18 +17,18 @@
 const crypto = require("crypto");
 const PL = require("./web/pipeline.js");
 const M = require("./web/model.js");
-const G = require("./gemini.js");
+const G = require("./ai.js");   // DeepSeek (DEEPSEEK_API_KEY) или Gemini (GEMINI_API_KEY) — см. ai.js
 const F = require("./ai-facts.js");
 const X = require("./ai-context.js");
 const AI_CTX_MAX = +process.env.AI_CONTEXT_CHARS || 24000;   // ~7–8 тыс. токенов данных села
-// поиск Google: 150 запросов в день ≈ 4 500 в месяц — в пределах бесплатных 5 000 у Gemini 3+
+// поиск в интернете (DeepSeek web search или Google у Gemini): не больше AI_SEARCH_DAILY поисков в день — найденные страницы оплачиваются как входные токены
 const AI_SEARCH_DAILY = process.env.AI_SEARCH_DAILY != null ? +process.env.AI_SEARCH_DAILY : 150;
 const searchDay = { day: "", n: 0 };
 const SEARCH_RULE = {
-  ru: "Поиск Google: ищи, только если для ответа нужны свежие внешние сведения, которых нет в ДАННЫХ, — погода и прогноз, цены на сено и скот, " +
+  ru: "Поиск в интернете: ищи, только если для ответа нужны свежие внешние сведения, которых нет в ДАННЫХ, — погода и прогноз, цены на сено и скот, " +
     "ветеринарные и правовые нормы Казахстана, новости района. Цифры села (участки, поголовье, ёмкость, нагрузка) бери только из ДАННЫХ, не из поиска. " +
     "Для посторонних задач не ищи. Предпочитай официальные и казахстанские источники; найденное в интернете прямо называй найденным в интернете.",
-  kk: "Google іздеуі: жауапқа ДЕРЕКТЕРДЕ жоқ жаңа сыртқы мәлімет керек болса ғана ізде — ауа райы мен болжам, шөп пен мал бағасы, " +
+  kk: "Интернеттен іздеу: жауапқа ДЕРЕКТЕРДЕ жоқ жаңа сыртқы мәлімет керек болса ғана ізде — ауа райы мен болжам, шөп пен мал бағасы, " +
     "Қазақстанның ветеринарлық және құқықтық нормалары, аудан жаңалықтары. Ауыл сандарын (учаскелер, мал саны, сыйымдылық, жүктеме) тек ДЕРЕКТЕРДЕН ал. " +
     "Бөгде тапсырмалар үшін іздеме. Ресми және қазақстандық дереккөздерді таңда; интернеттен табылғанды солай ата.",
 };
@@ -331,7 +331,7 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         if (limited(req, "aistatus", 6, 60e3)) return json(res, 429, { error: "слишком часто" }), true;
         return json(res, 200, await G.status()), true;
       }
-      // --- ИИ-помощник (Gemini): сводка по селу и чат. Доступен и гостю, с ограничением частоты ---
+      // --- ИИ-помощник (DeepSeek или Gemini, ai.js): сводка по селу и чат. Доступен и гостю, с ограничением частоты ---
       if (p === "/api/ai" && req.method === "POST") {
         if (limited(req, "ai", 12, 60e3)) return json(res, 429, { error: "слишком много вопросов подряд, подождите минуту" }), true;
         const day = new Date().toISOString().slice(0, 10);
@@ -356,20 +356,21 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         const started = Date.now();
         const opts = { system: AI_SYSTEM[lang], maxTokens: summary ? (lang === "kk" ? 900 : 600) : (lang === "kk" ? 900 : 700),
           timeoutMs: summary ? 30000 : 25000 };
-        // Поиск Google — только в чате и в пределах дневного лимита (сверх бесплатной квоты Google каждый запрос поиска платный);
+        // Поиск в интернете — только в чате и в пределах дневного лимита (найденные страницы оплачиваются как токены);
         // сводка строится только по данным села. Искать ли — решает модель по правилу SEARCH_RULE.
         if (searchDay.day !== day) { searchDay.day = day; searchDay.n = 0; }
         const search = !summary && searchDay.n < AI_SEARCH_DAILY;
         let r = await G.ask(Object.assign({ input, budgetMs: 60000, search }, opts, search ? { system: opts.system + " " + SEARCH_RULE[lang] } : {}));
         if (r.ok && r.searches) searchDay.n += r.searches;
         if (!r.ok) {
-          // Gemini не ответил — шаблон из тех же данных: сайт и демо не зависят от перегрузок Google
+          // ИИ не ответил — шаблон из тех же данных: сайт и демо не зависят от перегрузок и баланса провайдера
           const ERR = { no_key: "ИИ не настроен на сервере", timeout: "ИИ не ответил вовремя, попробуйте ещё раз",
-            quota: "у ИИ закончился лимит запросов Google, попробуйте позже", key: "ключ ИИ на сервере не принят Google",
+            quota: "у ИИ закончился лимит запросов, попробуйте позже", key: "ключ ИИ на сервере не принят",
+            balance: "у ИИ закончился оплаченный баланс — сообщите администратору сервиса",
             model_not_found: "модели ИИ из настроек сервера недоступны",
-            overloaded: "серверы Google сейчас перегружены, ИИ не ответил — попробуйте через минуту" };
-          const SHORT = { ru: { overloaded: "серверы Google перегружены", timeout: "не успел ответить", quota: "закончился лимит Google" },
-            kk: { overloaded: "Google серверлері жүктелген", timeout: "уақытында жауап бермеді", quota: "Google лимиті бітті" } };
+            overloaded: "серверы ИИ сейчас перегружены, ИИ не ответил — попробуйте через минуту" };
+          const SHORT = { ru: { overloaded: "серверы ИИ перегружены", timeout: "не успел ответить", quota: "закончился лимит запросов", balance: "закончился баланс ИИ" },
+            kk: { overloaded: "ЖИ серверлері жүктелген", timeout: "уақытында жауап бермеді", quota: "сұраныс лимиті бітті", balance: "ЖИ балансы бітті" } };
           return json(res, 200, { text: F.templateAnswer(b.context, lang, issues, SHORT[lang][r.error] || ""), fallback: true, model: null,
             error: ERR[r.error] || "ИИ сейчас перегружен, попробуйте через минуту", reason: r.error, issues }), true;
         }

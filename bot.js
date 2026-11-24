@@ -6,9 +6,9 @@
  * 2. Пишет, сколько у него скота: «500 овец 30 коров 10 лошадей».
  * 3. Получает: «Сегодня» — где пасти, «План» — маршрут на сезон, «Карта села»,
  *    «Водопой» — куда акимату ставить воду, «Где я?» — на каком он участке.
- * 4. Любой другой вопрос — отвечает Gemini по данным его села (если задан GEMINI_API_KEY).
+ * 4. Любой другой вопрос — отвечает ИИ по данным его села (DeepSeek при DEEPSEEK_API_KEY или Gemini при GEMINI_API_KEY, см. ai.js).
  *
- * Запуск: заполнить .env (TELEGRAM_TOKEN=..., GEMINI_API_KEY=...) и  node bot.js
+ * Запуск: заполнить .env (TELEGRAM_TOKEN=..., DEEPSEEK_API_KEY=...) и  node bot.js
  * Проверка без Telegram:  node bot.js --test
  */
 const fs = require("fs");
@@ -21,8 +21,8 @@ const PL = require("./web/pipeline.js");
 const { loadPlots, loadHerds } = require("./data");
 
 const SITE = process.env.SITE_URL || "https://ainara001.github.io/jaiylym/";
-const GEMINI_KEY = process.env.GEMINI_API_KEY || "";
-const G = require("./gemini");
+const G = require("./ai");
+const AI_ON = () => G.configured();   // ключ DeepSeek или Gemini задан на сервере
 const UA = "Jaiylym-hackathon-bot/1.0 (+https://github.com/Ainara001/jaiylym)";
 PL.setUserAgent(UA);
 
@@ -246,9 +246,9 @@ function textWells(v) {
     `Водоём на спутниковой карте не означает пригодный водопой — проверьте на месте.`;
 }
 
-// ---------- Gemini: свободные вопросы ----------
+// ---------- ИИ: свободные вопросы ----------
 async function askGemini(question, v, herd) {
-  if (!GEMINI_KEY) return null;
+  if (!AI_ON()) return null;
   const ctx = { село: v.data.village.name, лето: v.data.source.year };
   ensurePrev(vkey(v.data.village.lat, v.data.village.lon));   // если прошлого лета ещё нет — к следующему вопросу будет
   try {
@@ -272,7 +272,8 @@ async function askGemini(question, v, herd) {
     "«прошлый_год» — то же окно июнь–август прошлого лета: изменения уже посчитаны; изменение NDVI меньше порога — «без изменений»; NDVI — зелёность, а не урожай; при сравнение_надёжно = false скажи об этом. " +
     "Пиши обычным текстом без markdown (без звёздочек и решёток) — это сообщение Telegram. " + G.SCOPE;
   const r = await G.ask({ system, input: `Данные села (JSON): ${JSON.stringify(ctx)}\n\nВопрос пастуха: ${String(question).slice(0, 1200)}`, maxTokens: kk ? 700 : 500 });
-  return r.ok ? r.text : null;
+  // Telegram получает обычный текст: убираем остатки markdown (**, __, `, # в начале строки), которые модели иногда добавляют
+  return r.ok ? r.text.replace(/\*\*|__|`+/g, "").replace(/^#+\s*/gm, "").trim() : null;
 }
 
 // ---------- подписки на участки ----------
@@ -708,12 +709,12 @@ async function handle(update, send, today = new Date()) {
   if (dm) return send(chatId, textToday(v, herd, dm[1] ? +dm[1] : J.seasonDay(today)), MENU);
   if (low === "план" || low === "/plan") return send(chatId, textPlan(v, herd), MENU);
 
-  // всё остальное — вопрос к Gemini
+  // всё остальное — вопрос к ИИ
   const isQuestion = text.includes("?") || text.split(/\s+/).length >= 4;
-  if (isQuestion && GEMINI_KEY) await send(chatId, "Думаю над ответом…");
+  if (isQuestion && AI_ON()) await send(chatId, "Думаю над ответом…");
   const answer = await askGemini(text, v, herd);
   if (answer) return send(chatId, answer, MENU);
-  return send(chatId, (isQuestion && GEMINI_KEY ? "ИИ-помощник сейчас перегружен, спросите чуть позже. " : "Не понял. ") +
+  return send(chatId, (isQuestion && AI_ON() ? "ИИ-помощник сейчас перегружен, спросите чуть позже. " : "Не понял. ") +
     "Кнопки внизу: «Сегодня», «План», «Карта села», «Водопой». " +
     "Чтобы записать стадо, напишите, например: «500 овец 30 коров 10 лошадей».", MENU);
 }
@@ -765,19 +766,35 @@ function villageApi(lat, lon) {
 // На своём компьютере — long polling: бот сам спрашивает Telegram о новых сообщениях.
 const PUBLIC_URL = process.env.WEBHOOK_URL || process.env.RENDER_EXTERNAL_URL || "";
 
+/** Повтор вызова при сетевой ошибке: паузы 2, 4, 8… с (до 60 с). Возвращает результат или null, если все попытки не удались. */
+async function retry(name, fn, tries = 5) {
+  for (let i = 0; i < tries; i++) {
+    try { return await fn(); }
+    catch (e) {
+      const wait = Math.min(60000, 2000 * 2 ** i);
+      console.error(`${name}: сеть (${(e.cause && e.cause.code) || e.message}), попытка ${i + 1} из ${tries}` + (i + 1 < tries ? `, повтор через ${wait / 1000} с` : ""));
+      if (i + 1 < tries) await new Promise(r => setTimeout(r, wait));
+    }
+  }
+  return null;
+}
+
 async function run(token) {
   const api = (m, body) => fetch(`https://api.telegram.org/bot${token}/${m}`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}),
     signal: AbortSignal.timeout(m === "getUpdates" ? 40000 : 20000),
   }).then(r => r.json());
-  const me = await api("getMe");
-  if (!me.ok) { console.error("Токен не подошёл:", me.description); process.exit(1); }
+  // Сеть Render ↔ Telegram иногда пропадает на минуты (ETIMEDOUT). Раньше это роняло весь сервер вместе с сайтом и API.
+  // Теперь вызовы Telegram при старте повторяются, а без ответа сервер всё равно поднимается.
+  let me = await retry("getMe", () => api("getMe"), 4);
+  if (me && !me.ok) { console.error("Токен не подошёл:", me.description); process.exit(1); }   // неверный токен — это не сбой сети
+  if (!me) { console.error("Telegram недоступен при старте — поднимаю сервер без проверки токена"); me = { ok: true, result: { username: BOT_USERNAME } }; }
   await loadState();
-  await api("setMyCommands", { commands: [
+  retry("setMyCommands", () => api("setMyCommands", { commands: [
     { command: "start", description: "Выбрать село" }, { command: "today", description: "Где пасти сегодня" },
     { command: "plan", description: "Маршрут на сезон" }, { command: "map", description: "Карта села" },
     { command: "water", description: "Где нужен водопой" },
-  ] });
+  ] }), 5);                                          // не ждём: меню команд не нужно для работы
   const send = (chat_id, text, reply_markup) => api("sendMessage", { chat_id, text, reply_markup, disable_web_page_preview: true });
   const onUpdate = u => {
     if (u.callback_query) api("answerCallbackQuery", { callback_query_id: u.callback_query.id }).catch(() => {});
@@ -786,7 +803,7 @@ async function run(token) {
     api("sendChatAction", { chat_id: chat, action: "typing" }).catch(() => {});
     handle(u, send).catch(e => { console.error("Ошибка:", e); send(chat, "Что-то пошло не так, попробуйте ещё раз.").catch(() => {}); });
   };
-  const info = `Бот @${me.result.username}. Хранилище: ${store.kind}. Gemini: ${GEMINI_KEY ? G.MODELS.join(", ") : "выключен"} (Interactions API).`;
+  const info = `Бот @${me.result.username}. Хранилище: ${store.kind}. ИИ: ${AI_ON() ? G.name() + " " + G.MODELS.join(", ") : "выключен"}.`;
 
   if (PUBLIC_URL) return serve(token, api, onUpdate, info, send);
 
@@ -828,8 +845,9 @@ function serve(token, api, onUpdate, info, send) {
     console.log(info + ` Режим: webhook, порт ${port}.`);
     if (process.env.SKIP_SET_WEBHOOK) return;
     const url = PUBLIC_URL.replace(/\/$/, "") + "/tg";
-    const r = await api("setWebhook", { url, secret_token: secret, allowed_updates: ["message", "callback_query"] });
-    console.log("setWebhook", url, r.ok ? "OK" : r.description);
+    // вебхук остаётся настроенным с прошлого запуска, поэтому неудача здесь не роняет сервер — повторяем в фоне
+    const r = await retry("setWebhook", () => api("setWebhook", { url, secret_token: secret, allowed_updates: ["message", "callback_query"] }), 6);
+    console.log("setWebhook", url, r ? (r.ok ? "OK" : r.description) : "Telegram недоступен — работает прежний вебхук");
   });
   return server;
 }
@@ -877,6 +895,10 @@ async function test() {
 }
 
 if (require.main === module) {
+  // Telegram с Render доступен только по IPv4 (IPv6 — ENETUNREACH): пробуем IPv4 первым
+  require("dns").setDefaultResultOrder("ipv4first");
+  // страховка: необработанная ошибка в фоне (сеть, внешний сервис) пишется в лог, а не останавливает сайт и бота
+  process.on("unhandledRejection", e => console.error("Необработанная ошибка (сервер продолжает работу):", (e && e.message) || e));
   if (process.argv.includes("--test")) test().catch(e => { console.error(e); process.exit(1); });
   else if (process.env.TELEGRAM_TOKEN) run(process.env.TELEGRAM_TOKEN);
   else { console.log("Нужен TELEGRAM_TOKEN в .env (или проверка: node bot.js --test)"); process.exit(1); }

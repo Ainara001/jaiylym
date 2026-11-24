@@ -13,6 +13,8 @@ services:
         value: "22"
       - key: TELEGRAM_TOKEN
         sync: false          # Render попросит вставить токен от @BotFather
+      - key: DEEPSEEK_API_KEY
+        sync: false          # ключ платного API DeepSeek (platform.deepseek.com); ИИ сайта и бота
       - key: GEMINI_API_KEY
         sync: false          # необязательно; можно оставить пустым
       - key: REDIS_URL

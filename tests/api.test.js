@@ -304,14 +304,14 @@ test("ИИ: поиск Google только в чате; источники и п
   try {
     const chat = await call("POST", "/api/ai", { ip: "10.7.8.1", body: { mode: "chat", lang: "ru", context: { село: "Кеген" }, messages: [{ role: "user", text: "почём сено?" }] } });
     assert.equal(calls[0].search, true);
-    assert.match(calls[0].system, /Поиск Google: ищи, только если/);
+    assert.match(calls[0].system, /Поиск в интернете: ищи, только если/);
     assert.deepEqual(chat.data.sources, [{ url: "https://example.kz/seno", title: "example.kz" }]);
     assert.equal(chat.data.suggestions, "<div>chips</div>");
     assert.equal(chat.data.numbers.ok, true, "45 000 — из фрагмента с источником");
     assert.equal(calls.length, 1, "ответ с поиском не переписывается");
     await call("POST", "/api/ai", { ip: "10.7.8.2", body: { mode: "summary", lang: "ru", context: { село: "Кеген" } } });
     assert.equal(calls[1].search, false, "сводка — без поиска");
-    assert.doesNotMatch(calls[1].system, /Поиск Google/);
+    assert.doesNotMatch(calls[1].system, /Поиск в интернете/);
   } finally { G.ask = orig; }
 });
 
