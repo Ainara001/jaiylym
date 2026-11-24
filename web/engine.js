@@ -998,6 +998,55 @@
     return { au_days, au_season: au_days / p.season_days, plots: ok.map(q => q.id), unknown: prep.filter(q => !q.c.known).map(q => q.id) };
   }
 
+  /**
+   * Почему план такой: проверяемые факты для каждого стада (для ИИ, шаблонного ответа и людей).
+   * Ничего не оценивается заново — только то, что уже есть в плане и ограничениях:
+   * участки маршрута с днями, расстоянием от дома, водой и причиной выбора; какие допустимые участки ближе
+   * и почему не взяты (заняты другими стадами до предела); недоступные участки по причинам; обеспеченность и узкое место.
+   */
+  function explainPlan(plots, herds, res, p, opts) {
+    p = params(p);
+    const prep = prepare(plots, p, opts);
+    const byId = Object.fromEntries(prep.map(q => [q.id, q]));
+    const inBottleneck = new Set(((res.bottleneck && res.bottleneck.groups) || []).flatMap(g => g.herds));
+    const r1 = x => Math.round(x * 10) / 10;
+    const out = {};
+    for (const h of herds) {
+      const au = herdAU(h, p);
+      if (au <= 0) continue;
+      const dg = (res.diagnostics && res.diagnostics[h.id]) || {};
+      const home = (byId[h.home] || prep[0]).pl;
+      const used = new Set((res.herdPlans[h.id] || []).filter(s => s.plot).map(s => s.plot));
+      const cand = (dg.candidates || []).map(id => byId[id]).filter(Boolean)
+        .map(q => ({ q, km: r1(dist(home, q.pl)), full: res.load[q.id] && res.load[q.id].used >= q.cap - EPS }))
+        .sort((a, b) => a.km - b.km);
+      const route = (res.herdPlans[h.id] || []).map(s => {
+        if (!s.plot) return { дни: `${s.from}-${s.to}`, участок: null, почему: s.reason === "no_feed" ? "корма на допустимых участках не хватило" : "участки закрыты в эти дни" };
+        const q = byId[s.plot], km = r1(dist(home, q.pl));
+        const why = [];
+        why.push(h.daily_return ? "дойное стадо — только ближние участки (возвращается в село)" : q.ring === "far" ? "дальний участок: отары уходят на жайлау, ближние берегут для дойных и отдыха" : "ближний участок: дальних допустимых не хватило");
+        const closer = cand.filter(c => c.km < km - 0.05 && !used.has(c.q.id) && c.q.ring === q.ring);
+        if (closer.length) why.push("ближе были " + closer.map(c => `${c.q.id} (${c.km} км)`).join(", ") + (closer.every(c => c.full) ? " — заняты другими стадами до предела ёмкости" : " — взяты другими стадами или не дали целого куска ≥ 14 дней"));
+        else why.push("ближайший к дому свободный допустимый участок этого кольца");
+        if (q.win && (q.win[0] > 1 || q.win[1] < p.season_days)) why.push(`участок открыт только в дни ${q.win[0]}-${q.win[1]} (отдых или ограничение)`);
+        return { дни: `${s.from}-${s.to}`, участок: s.plot, км_от_дома: km, вода: q.water, почему: why.join("; ") };
+      });
+      const ex = {};
+      for (const [r, ids] of Object.entries(dg.excluded || {})) if (ids.length) ex[r] = ids;
+      out[h.id] = {
+        стадо: h.name || h.id, усл_голов: r1(au), дойное: !!h.daily_return,
+        права: dg.rights === "entered" ? "участки указаны хозяйством (не госреестр)" : "участки не указаны — допустимы все",
+        обеспечено_дней: Math.round(res.coverage ? res.coverage[h.id] ?? p.season_days : p.season_days), сезон_дней: p.season_days,
+        не_хватает_усл_гол_сут: Math.round((res.unmet && res.unmet[h.id]) || 0),
+        доля_обеспеченности_проц: res.shares && res.shares[h.id] != null ? Math.round(res.shares[h.id] * 100) : undefined,
+        причина_дефицита: dg.reason || undefined, в_узком_месте: inBottleneck.has(h.id) || undefined,
+        маршрут: route, недоступные_участки: Object.keys(ex).length ? ex : undefined,
+        допустимых_участков: cand.length,
+      };
+    }
+    return out;
+  }
+
   function hayTonnes(kgDM, p) { p = params(p); return kgDM / p.hay_dm / 1000; }
 
   /** Какой участок у стада в день сезона N (1..season_days). */
@@ -1013,7 +1062,7 @@
   }
 
   const _internal = { flowModel, feasibleFlow, fairShares, minDistanceAlloc, consolidate, exchange, prune, schedule, herdWeight };
-  return { DIRS, DEFAULTS, ALGORITHM, MODEL: M, NEAR_PENALTY, MIN_STAY, _internal, params, herdAU, plotCapacity, explainCapacity, current, plan, optimize, solve, bottlenecks, planMetrics,
+  return { DIRS, DEFAULTS, ALGORITHM, MODEL: M, NEAR_PENALTY, MIN_STAY, _internal, params, herdAU, plotCapacity, explainCapacity, explainPlan, current, plan, optimize, solve, bottlenecks, planMetrics,
     schedule, exactBound, wells, wellEffect,
     compareScenarios, defaultVariants, sensitivity, totalCapacity, hayTonnes, plotOnDay, seasonDay, dist };
 });

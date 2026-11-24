@@ -34,6 +34,7 @@ function context() {
       нагрузка_если_все_у_села_проц: Math.round(cur.load[p.id].load * 100), нагрузка_по_плану_проц: Math.round(pl.load[p.id].load * 100) }; }),
     стада: H.map(h => ({ имя: h.name, демо: true, овцы: h.sheep, крс: h.cattle, лошади: h.horses, усл_голов: J.herdAU(h, P) })),
     итог: { перегружено_если_все_у_села: cur.overloaded, перегружено_по_плану: pl.overloaded, дефицит_сена_т_по_плану_оценка: Math.round(J.hayTonnes(pl.deficit_kg, P)) },
+    почему_план: Object.values(J.explainPlan(D.plots, H, pl, P)),
   };
 }
 
@@ -95,6 +96,17 @@ async function ask(body, label) {
   const a3 = await ask({ mode: "chat", lang: "ru", context: {}, messages: [{ role: "user", text: "Сколько овец выдержит моё пастбище?" }] }, "ru, без данных села");
   ok((a3.d.issues || []).length > 0, "без данных ИИ получает предупреждение «Село не открыто»");
   aiOk(a3, "ИИ отвечает без данных села");
+  const a4 = await ask({ mode: "chat", lang: "ru", context: ctx, messages: [{ role: "user", text: "Почему стадо Ерлана пасётся на участке Д-ЮЗ, а не ближе к дому?" }] }, "ru, почему Д-ЮЗ");
+  aiOk(a4, "ИИ объясняет выбор участка");
+  if (a4.d.text && !/Д-Ю\b|вод/i.test(a4.d.text)) note("ИИ не назвал причину из фактов (Д-Ю без подтверждённой воды) — проверьте ответ выше");
+  // поиск в интернете: свежие сведения (погода) — под ответом должны быть источники
+  const a5 = await ask({ mode: "chat", lang: "ru", context: ctx, messages: [{ role: "user", text: "Какая погода ожидается в Кегене на этой неделе?" }] }, "ru, поиск: погода");
+  aiOk(a5, "ИИ отвечает на вопрос о погоде");
+  if (a5.status === 200 && !a5.d.fallback) {
+    if ((a5.d.sources || []).length) ok(true, `поиск в интернете работает: ${a5.d.sources.length} источн.: ${a5.d.sources.map(x => x.url).slice(0, 3).join(" ")}`);
+    else note("ИИ ответил о погоде без источников — поиск не сработал (проверьте лимит AI_SEARCH_DAILY и поддержку поиска у провайдера)");
+    if (/\[интернет\]/.test(a5.d.text) && !(a5.d.sources || []).length) ok(false, "метка [интернет] без источников");
+  }
 
   // 4. бот в Telegram
   try {

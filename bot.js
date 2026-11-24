@@ -250,6 +250,25 @@ function textWells(v) {
 }
 
 // ---------- ИИ: свободные вопросы ----------
+const F = require("./ai-facts.js");
+/** Контекст для шаблонного ответа без ИИ — те же поля, что у сайта (ai-facts.templateAnswer). */
+function templateCtx(v, herd) {
+  const { plots, herds, cur, pl } = compute(v), P = J.params();
+  const capAU = plots.filter(p => M.waterUsable(p)).reduce((s, p) => { const c = J.plotCapacity(p, P); return s + (c.known ? c.au_season : 0); }, 0);
+  const au = herds.reduce((s, h) => s + J.herdAU(h, P), 0);
+  const defT = J.hayTonnes(pl.deficit_kg, P), excessAU = Object.values(pl.unmet || {}).reduce((s, x) => s + x, 0) / P.season_days;
+  const g = pl.bottleneck && pl.bottleneck.groups && pl.bottleneck.groups[0];
+  return {
+    село: v.data.village.name, демо_стада: herds.some(h => h.demo), модель_проверена_в_поле: false,
+    хватает_ли_корма: defT < 1 ? (au / Math.max(capAU, 1e-9) <= 0.7 ? "да, с запасом" : "да, впритык") : "нет, не на весь сезон",
+    ёмкость_всех_участков_с_водой_овец_за_сезон_оценка: Math.round(capAU / P.au.sheep), поголовье_в_пересчёте_на_овец: Math.round(au / P.au.sheep),
+    итог: { перегружено_если_все_у_села: cur.overloaded, перегружено_по_плану: pl.overloaded, дефицит_сена_т_по_плану_оценка: Math.round(defT),
+      чтобы_корма_хватило_сократить_на_овец: Math.round(excessAU / P.au.sheep) },
+    причины_дефицита: herds.filter(h => pl.unmet[h.id]).map(h => ({ стадо: h.name, не_хватает_дней: Math.round(P.season_days - pl.coverage[h.id]) })),
+    узкое_место: g ? { стада: g.herds.map(id => (herds.find(h => h.id === id) || {}).name || id), не_хватает_усл_гол_сут: Math.round(g.shortfall_au_days) } : null,
+    почему_план: Object.values(J.explainPlan(plots, herds, pl)).filter(x => !herd || x.стадо === herd.name),
+  };
+}
 async function askGemini(question, v, herd) {
   if (!AI_ON()) return null;
   const ctx = { село: v.data.village.name, лето: v.data.source.year };
@@ -263,6 +282,8 @@ async function askGemini(question, v, herd) {
     const prev = prevContext(v);
     if (prev) ctx.прошлый_год = prev;
     if (herd) ctx.стадо = { имя: herd.name, демо: !!herd.demo, овцы: herd.sheep, козы: herd.goats, крс: herd.cattle, лошади: herd.horses, маршрут: pl.herdPlans[herd.id], не_хватает_усл_гол_дней: Math.round(pl.unmet[herd.id] || 0) };
+    const { plots, herds } = compute(v);
+    ctx.почему_план = Object.values(J.explainPlan(plots, herds, pl)).filter(x => !herd || x.стадо === herd.name);
   } catch (_) {}
   const kk = /[әғқңөұүһі]/i.test(question);
   const system = "Ты — помощник пастуха в сервисе Jaiylym (Казахстан). Отвечай коротко (до 6 предложений), просто: " +
@@ -276,7 +297,10 @@ async function askGemini(question, v, herd) {
     "Пиши обычным текстом без markdown (без звёздочек и решёток) — это сообщение Telegram. " + G.SCOPE;
   const r = await G.ask({ system, input: `Данные села (JSON): ${JSON.stringify(ctx)}\n\nВопрос пастуха: ${String(question).slice(0, 1200)}`, maxTokens: kk ? 700 : 500 });
   // Telegram получает обычный текст: убираем остатки markdown (**, __, `, # в начале строки), которые модели иногда добавляют
-  return r.ok ? r.text.replace(/\*\*|__|`+/g, "").replace(/^#+\s*/gm, "").trim() : null;
+  if (r.ok) return r.text.replace(/\*\*|__|`+/g, "").replace(/^#+\s*/gm, "").trim();
+  // ИИ не ответил — шаблон из расчёта (те же факты движка), а не «попробуйте позже»
+  try { return F.templateAnswer(templateCtx(v, herd), kk ? "kk" : "ru", [], r.error === "overloaded" ? (kk ? "ЖИ серверлері жүктелген" : "серверы ИИ перегружены") : ""); }
+  catch (_) { return null; }
 }
 
 // ---------- подписки на участки ----------
