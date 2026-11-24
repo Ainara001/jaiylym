@@ -713,3 +713,20 @@ main .btn > span { min-width: 0; overflow-wrap: anywhere; }
   .chain { padding: 14px 12px; }
   .chain-steps li { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
+
+/* «Трава по годам» (P3) на вкладке «Данные» */
+.mt { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.mt h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
+.mt-verdict { font-size: 14.5px; line-height: 1.45; margin: 0 0 8px; }
+.mt-verdict.warn { background: var(--accent-soft); border-radius: 10px; padding: 10px 12px; }
+.mt-chart { width: 100%; max-width: 520px; height: auto; display: block; margin: 4px 0; font-variant-numeric: tabular-nums; }
+.mt-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+.mt-legend .sw { display: inline-block; width: 16px; height: 8px; margin-right: 2px; vertical-align: middle; }
+.mt-legend .sw-line { height: 2px; background: var(--primary-2); }
+.mt-legend .sw-bar { background: var(--water-soft); border-radius: 2px; }
+.mt-legend .sw-dash { height: 0; border-top: 2px dashed var(--accent); }
+.mt-plots { display: flex; flex-wrap: wrap; gap: 6px; font-size: 13px; margin: 8px 0; }
+.mt-g { background: var(--surface-2); border-radius: 999px; padding: 4px 10px; }
+.mt-g.mt-decline_unexplained { background: var(--accent-soft); }
+.mt-t td, .mt-t th { font-size: 12.5px; }
+.mt-legend > span { white-space: nowrap; }

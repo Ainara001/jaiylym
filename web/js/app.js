@@ -393,6 +393,7 @@
     render();
     if (!opts.herds) loadBotData();
     loadPrev(key, data);
+    loadMulti(key, data);
     if (S.histKey !== key) { S.histKey = key; C.addHistory({ kind: "open", village: data.village, summary: summary() }); }
     const want = opts.plot;
     if (want) setTimeout(() => focusPlot(want), 350);
@@ -613,6 +614,7 @@
       <tr><td>${t("pop.herds")}</td><td style="white-space:normal">${esc(names.join(", ")) || "—"}</td></tr>
       <tr><td>${t("pop.water")}</td><td style="white-space:normal">${esc(t("ws." + ws))}</td></tr>
       ${prevRow(p)}
+      ${multiRow(p)}
       </tbody></table>
       ${c.known ? "" : `<p class="note warn" style="margin:8px 0 0">${t("pop.noData")}</p>`}
       ${spark(p.series)}
@@ -977,6 +979,124 @@
     return `<tr><td>${t("prev.row", { y: c.years[0] })}</td><td style="white-space:normal">${[nd, wa].filter(Boolean).join("; ")} ${src("sat")}</td></tr>`;
   }
 
+  // ---------- трава по годам (P3): лето каждого года с 2019, осадки ERA5, Тейл — Сен, Манн — Кендалл, RESTREND (web/trend.js) ----------
+  // Кеген посчитан заранее (scripts/add_multiyear.js); другое село — по кнопке (около 8 лет снимков, 1–2 минуты), результат в кэше браузера.
+  const MULTI_FIRST = 2019;
+  const TR = () => self.JaiylymTrend;
+  const multiKey = (key, last) => key + ":multi:" + last;
+  const multiOk = (m, last) => m && Array.isArray(m.seasons) && m.last === last;
+  function loadMulti(key, data) {
+    const last = data.source.year;
+    if (multiOk(data.multiyear, last)) return setMulti(key, data.multiyear);
+    const hit = C.ls.get(multiKey(key, last), null);
+    if (multiOk(hit, last)) return setMulti(key, hit);
+    S.multi = { state: "idle", last };
+  }
+  function setMulti(key, m) {
+    if (S.loadingKey !== key) return;
+    S.multi = { state: "ready", last: m.last, m, a: TR() ? TR().analyze(m.seasons, m.precip) : null };
+    if (S.tab === "data") renderPane("data");
+    // архив осадков был недоступен при расчёте — тихо пробуем ещё раз (один раз за открытие), иначе поправка на осадки не появится никогда
+    if (!m.precip && navigator.onLine && !S.multi.precipTried && typeof PL.fetchPrecip === "function" && S.D) {
+      S.multi.precipTried = true;
+      const { lat, lon } = S.D.village, years = m.seasons.map(s => s.year);
+      PL.fetchPrecip({ lat, lon, years }).then(precip => {
+        if (S.loadingKey !== key || !precip) return;
+        const m2 = Object.assign({}, m, { precip });
+        if (!S.D.multiyear) C.ls.set(multiKey(key, m.last), m2);
+        setMulti(key, m2);
+      }).catch(() => {});
+    }
+  }
+  async function runMulti() {
+    if (!S.D || !TR() || typeof PL.buildYears !== "function" || (S.multi && S.multi.state === "loading")) return;
+    if (!navigator.onLine) { toast(t("err.offline"), true); return; }
+    const key = S.loadingKey, D = S.D, last = D.source.year, { lat, lon } = D.village;
+    const years = Array.from({ length: last - MULTI_FIRST + 1 }, (_, i) => MULTI_FIRST + i);
+    // это лето уже посчитано (S.D), прошлое — тоже, если готово: их не качаем заново
+    const have = { [last]: { year: last, status: (D.meta && D.meta.data_status) || "measured", dates: D.source.dates || [], window: D.source.window || null,
+      plots: D.plots.map(p => ({ id: p.id, ndvi: p.ndvi, valid_fraction: p.valid_fraction ?? 1 })) } };
+    if (S.prev && S.prev.state === "ready" && S.prev.season) have[S.prev.year] = S.prev.season;
+    S.multi = { state: "loading", last };
+    if (S.tab === "data") renderPane("data");
+    const prog = i => { const el = $("#multiProg"); if (el && S.loadingKey === key) el.textContent = t("mt.loading", { a: i + 1, n: years.length }); };
+    try {
+      const [seasons, precip] = await Promise.all([
+        PL.buildYears({ lat, lon, years, have, onProgress: ({ i }) => prog(i) }),
+        PL.fetchPrecip({ lat, lon, years }).catch(() => null)]);
+      const m = { first: MULTI_FIRST, last, calculated_at: new Date().toISOString(), precip,
+        seasons: seasons.map(s => ({ year: s.year, status: s.status, dates: s.dates, window: s.window || null, valid_fraction: s.valid_fraction,
+          plots: s.plots.map(p => ({ id: p.id, ndvi: p.ndvi, valid_fraction: p.valid_fraction })) })) };
+      if (S.loadingKey !== key) return;
+      C.ls.set(multiKey(key, last), m);
+      setMulti(key, m);
+    } catch (e) {
+      if (S.loadingKey === key) { S.multi = { state: "error", last, msg: e.message }; if (S.tab === "data") renderPane("data"); }
+    }
+  }
+  const pTxt = p => (p < 0.01 ? "< 0.01" : p.toFixed(2));
+  const slopeTxt = s => `${s.slope_per_year >= 0 ? "+" : "−"}${Math.abs(s.slope_per_year).toFixed(4)}`;
+  // наклон и p — того ряда, по которому сделан вывод (NDVI или NDVI с учётом осадков); у участков p с поправкой на 16 проверок
+  const basisOf = s => (s.basis === "resid" && s.resid ? { sl: s.resid, p: s.resid.p_adj ?? s.resid.p } : { sl: s, p: s.p_adj ?? s.p });
+  function verdictText(s) {
+    if (!s || s.verdict === "few_years") return t("mt.v.few_years", { n: s ? s.n : 0, min: TR().MIN_YEARS });
+    const b = basisOf(s), resid = s.verdict === "decline_unexplained" && s.basis === "resid";
+    return t(resid ? "mt.v.decline_resid" : "mt.v." + s.verdict, { n: s.n, s: slopeTxt(b.sl), p: pTxt(b.p) });
+  }
+  /** График: медиана NDVI участков по годам (годы вне ряда — пустые точки), осадки — столбики, пунктир — тренд Тейла — Сена. */
+  function multiChart(a) {
+    const ys = a.years, n = ys.length, W = 320, H = 150, L = 34, R = 8, T = 10, B = 24;
+    const vals = ys.map(y => y.ndvi_median).filter(v => v != null);
+    if (n < 2 || !vals.length) return "";
+    const lo = Math.min(...vals) - 0.02, hi = Math.max(...vals) + 0.02, pmax = Math.max(1, ...ys.map(y => y.precip_mm || 0));
+    const X = i => L + i * (W - L - R) / (n - 1), Y = v => T + (hi - v) / (hi - lo) * (H - T - B);
+    const bars = ys.map((y, i) => y.precip_mm == null ? "" : (h => `<rect x="${(X(i) - 7).toFixed(1)}" y="${(H - B - h).toFixed(1)}" width="14" height="${h.toFixed(1)}" rx="2" fill="var(--water-soft)"><title>${y.year}: ${y.precip_mm} ${t("wx.mm")}</title></rect>`)((y.precip_mm / pmax) * (H - T - B) * 0.6)).join("");
+    const ok = ys.map((y, i) => [y, i]).filter(([y]) => y.ok && y.ndvi_median != null);
+    const line = ok.length > 1 ? `<polyline points="${ok.map(([y, i]) => `${X(i).toFixed(1)},${Y(y.ndvi_median).toFixed(1)}`).join(" ")}" fill="none" stroke="var(--primary-2)" stroke-width="2"/>` : "";
+    const v = a.village, trend = v.verdict !== "few_years" && v.slope_per_year != null
+      ? `<line x1="${X(0)}" y1="${Y(v.intercept + v.slope_per_year * ys[0].year).toFixed(1)}" x2="${X(n - 1)}" y2="${Y(v.intercept + v.slope_per_year * ys[n - 1].year).toFixed(1)}" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5 4"/>` : "";
+    const dots = ys.map((y, i) => y.ndvi_median == null ? "" : `<circle cx="${X(i).toFixed(1)}" cy="${Y(y.ndvi_median).toFixed(1)}" r="4" fill="${y.ok ? "var(--primary-2)" : "var(--surface)"}" stroke="var(--primary-2)" stroke-width="1.6"><title>${y.year}: NDVI ${y.ndvi_median}${y.mid_date ? ", " + y.mid_date.split("-").reverse().join(".") : ""}</title></circle>`).join("");
+    const xl = ys.map((y, i) => `<text x="${X(i).toFixed(1)}" y="${H - 8}" font-size="10" text-anchor="middle" fill="var(--muted)">'${String(y.year).slice(2)}</text>`).join("");
+    const yl = `<text x="${L - 4}" y="${T + 8}" font-size="10" text-anchor="end" fill="var(--muted)">${hi.toFixed(2)}</text><text x="${L - 4}" y="${H - B}" font-size="10" text-anchor="end" fill="var(--muted)">${lo.toFixed(2)}</text>`;
+    return `<svg class="mt-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(t("mt.title"))}">${bars}${trend}${line}${dots}${xl}${yl}</svg>
+      <p class="mt-legend"><span><span class="sw sw-line"></span>${t("mt.ndvi")}</span><span><span class="sw sw-bar"></span>${t("mt.pr")}</span><span><span class="sw sw-dash"></span>${t("mt.trend")}</span></p>`;
+  }
+  function multiHtml() {
+    const M = S.multi;
+    if (!M || !S.D) return "";
+    const head = `<h3>${ic("chart")} ${t("mt.title")}</h3>`;
+    const n = M.last - MULTI_FIRST + 1;
+    if (M.state === "idle") return `<div class="mt">${head}<p class="fine">${t("mt.idle", { a: MULTI_FIRST, b: M.last })}</p>
+      <button type="button" class="btn btn-soft btn-sm" id="multiRun">${ic("sat")} ${t("mt.run", { n })}</button></div>`;
+    if (M.state === "loading") return `<div class="mt">${head}<p class="fine" id="multiProg" role="status">${t("mt.loading", { a: 1, n })}</p></div>`;
+    if (M.state === "error") return `<div class="mt">${head}<p class="note warn">${t("mt.error", { m: esc(M.msg || "") })}</p>
+      <button type="button" class="btn btn-soft btn-sm" id="multiRun">${t("mt.retry")}</button></div>`;
+    const a = M.a;
+    if (!a) return "";
+    const v = a.village, out = a.years.filter(y => !y.ok);
+    const rain = v.rain ? t("mt.rain", { r2: v.rain.r2.toFixed(2), use: v.rain.valid ? t("mt.rainUsed") : t("mt.rainWeak") }) : t("mt.noRain");
+    const groups = {};
+    for (const [id, s] of Object.entries(a.plots)) (groups[s.verdict] = groups[s.verdict] || []).push(id);
+    const order = ["decline_unexplained", "decline_rain", "increase", "no_change", "few_years"];
+    const rows = a.years.map(y => `<tr><td>${y.year}</td><td class="num">${y.ndvi_median ?? "—"}</td><td class="num">${y.precip_mm ?? "—"}</td>
+      <td>${y.dates}${y.mid_date ? ` · ${y.mid_date.split("-").reverse().join(".")}` : ""}</td><td>${y.ok ? t("how.yes") : t("mt.r." + y.reason)}</td></tr>`).join("");
+    return `<div class="mt">${head}
+      <p class="mt-verdict ${v.verdict === "decline_unexplained" ? "warn" : ""}">${verdictText(v)} ${src("sat")}</p>
+      ${multiChart(a)}
+      <p class="fine">${rain}${out.length ? " " + t("mt.excluded", { list: out.map(y => `${y.year} — ${t("mt.r." + y.reason)}`).join(", ") }) : ""}</p>
+      <p class="mt-plots">${order.filter(k => groups[k]).map(k => `<span class="mt-g mt-${k}"><b>${t("mt.s." + k)}</b>: ${groups[k].length > 8 ? groups[k].length : plotIds(groups[k])}</span>`).join(" ")}</p>
+      <details class="more"><summary>${t("mt.table")}</summary><div class="tablewrap"><table class="mt-t"><thead><tr><th>${t("mt.th.year")}</th><th class="num">NDVI</th><th class="num">${t("mt.th.pr")}</th><th>${t("mt.th.dates")}</th><th>${t("mt.th.used")}</th></tr></thead>
+        <tbody>${rows}</tbody></table></div></details>
+      <p class="fine">${t("mt.lim")}</p></div>`;
+  }
+  function multiRow(p) {
+    const M = S.multi, s = M && M.state === "ready" && M.a && M.a.plots[p.id];
+    if (!s) return "";
+    const b = basisOf(s), pp = pTxt(b.p);
+    const val = s.verdict === "few_years" ? t("mt.s.few_years") : `${t("mt.s." + s.verdict)} (${slopeTxt(b.sl)} ${t("mt.perYear")}${s.basis === "resid" ? " " + t("mt.withRain") : ""}, p ${pp.startsWith("<") ? pp : "= " + pp})`;
+    return `<tr><td>${t("mt.row", { a: MULTI_FIRST, b: M.last })}</td><td style="white-space:normal">${val} ${src("sat")}</td></tr>`;
+  }
+
   function trendLine() {
     if (!S.D.source.base_year) return "";
     const avg = ring => { const xs = S.D.plots.filter(p => p.ring === ring && p.ndvi != null && p.ndvi_base != null); return xs.reduce((a, p) => a + p.ndvi - p.ndvi_base, 0) / xs.length; };
@@ -1006,6 +1126,7 @@
         <p class="fine">${t("fc.note")}</p>
         ${trendLine() ? `<p class="note">${trendLine()}</p>` : ""}
         ${prevLine()}
+        ${multiHtml()}
         ${S.fromCache ? `<p class="note warn">${t("meta.cached", { d: meta.calculated_at ? dateStr(meta.calculated_at, false) : t("meta.unknownDate") })}</p>` : ""}
         ${days != null && days > 30 ? `<p class="note warn">${t("meta.stale", { n: Math.round(days) })}</p>` : ""}
         <h3>${t("meta.title")}</h3>${metaHtml(meta)}</div>
@@ -1013,6 +1134,7 @@
       <div class="srcblock s-model"><h3>${src("model")} ${t("data.model.t")}</h3><p>${t("data.model.d")}</p></div>
       <div class="srcblock"><h3>${ic("wifioff")} ${t("off.title")}</h3><p>${t("off.d")}</p></div>
       <p><a href="#/data">${t("nav.data")}</a></p>`;
+    const mr = $("#multiRun", el); if (mr) mr.onclick = runMulti;
   }
 
   // ---------- «Что если?»: варианты рядом, на одном экране ----------
@@ -1671,6 +1793,14 @@
         участков_без_изменений: c.summary.same, устойчивая_вода_по_снимкам_га: c.summary.water_total_ha,
         участки: c.plots.map(x => ({ id: x.id, ndvi: x.ndvi, изменение_проц: x.ndvi_change_pct, вода_га: x.water_ha })),
       } : { статус: S.prev ? { loading: "считается", none: "нет безоблачных снимков", error: "не загрузилось" }[S.prev.state] || "нет" : "нет" })(prevCmp()),
+      многолетний_ряд: (M => M && M.state === "ready" && M.a ? (a => ({
+        годы: a.years.map(y => ({ год: y.year, ndvi_села: y.ndvi_median, осадки_апр_авг_мм: y.precip_mm, в_ряду: y.ok, причина: y.reason || undefined })),
+        вывод_по_селу: a.village.verdict, лет_в_ряду: a.village.n,
+        наклон_ndvi_в_год: a.village.slope_per_year != null ? +a.village.slope_per_year.toFixed(4) : null, p: a.village.p != null ? +a.village.p.toFixed(3) : null,
+        связь_с_осадками_r2: a.village.rain ? +a.village.rain.r2.toFixed(2) : null, поправка_на_осадки: a.village.rain ? a.village.rain.valid : false,
+        участки: Object.entries(a.plots).map(([id, s]) => { const b = basisOf(s); return `${id}: ${s.verdict}${b.sl.slope_per_year != null ? ` ${b.sl.slope_per_year.toFixed(4)}/год${s.basis === "resid" ? " с учётом осадков" : ""} p=${b.p.toFixed(2)}` : ""}`; }),
+        p_участков: "с поправкой на множественную проверку (Бенджамини — Хохберг)",
+      }))(M.a) : { статус: !M ? "нет" : { idle: "не посчитан (кнопка на вкладке «Данные»)", loading: "считается", error: "не посчитался" }[M.state] || "нет" })(S.multi),
       алгоритм: S.pl.algorithm === "fair-optimal-v1" ? "оптимизация: 1) у всех хозяйств одинаковая доля обеспеченности, насколько позволяют ограничения (max-min); 2) при этом максимум корма; 3) при этом минимум перегона; затем календарь"
         : "жадная эвристика (не оптимизатор)",
       доли_обеспеченности_проц: S.pl.shares ? Object.fromEntries(S.herds.filter(h => S.pl.shares[h.id] != null).map(h => [h.name, Math.round(S.pl.shares[h.id] * 100)])) : null,

@@ -34,3 +34,13 @@ for (const [name, lat, lon] of [["Кеген", 43.02, 79.22], ["Бесколь (
     assert.ok(c.plots.length === 16);
   });
 }
+
+test("многолетний ряд: два лета подряд и осадки ERA5 для двух сёл", { timeout: 300000 }, async () => {
+  for (const [lat, lon] of [[43.02, 79.22], [54.79, 69.12]]) {
+    const s = await PL.buildYears({ lat, lon, years: [2023, 2024] });
+    assert.equal(s.length, 2);
+    for (const x of s) { assert.equal(x.plots.length, 16); assert.ok(x.window === null || typeof x.window.widened === "boolean"); }
+    const pr = await PL.fetchPrecip({ lat, lon, years: [2023, 2024] });
+    for (const y of [2023, 2024]) assert.ok(pr[y] == null || (pr[y] >= 0 && pr[y] < 2000), `осадки ${y}: ${pr[y]}`);
+  }
+});
