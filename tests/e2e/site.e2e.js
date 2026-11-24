@@ -56,6 +56,14 @@ async function journey(page, label) {
   // цепочка «NDVI → овцы» на виду: Б-С Кегена 0.289 → 367 овец (пример из отзыва экспертов), без открытия карточки
   const chain = await page.textContent(".chain");
   for (const re of [/0\.289/, /756/, /367/, /1 усл\. гол\. = 1 корова/, /150 дней с 1 мая/]) assert.match(chain, re, label + ": цепочка расчёта ёмкости");
+  // трава по годам (P3): ряд Кегена посчитан заранее — вывод, график, правило «не деградация»
+  await page.evaluate(() => window.JaiylymApp.renderPane("data"));
+  const mt = await page.textContent(".mt");
+  assert.match(mt, /Трава по годам/);
+  assert.match(mt, /8 лет/, label + ": ряд 2019–2026");
+  assert.ok(await page.$(".mt svg.mt-chart"), label + ": график по годам");
+  assert.doesNotMatch(mt, /деградаци[яи](?! о)/i, label + ": без вывода о деградации");
+  await page.evaluate(() => window.JaiylymApp.renderPane("brief"));
   // убрать демо-стада → добавить своё хозяйство
   await page.click("#demoToggle");
   assert.equal((await S()).herds, 0);

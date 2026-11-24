@@ -29,7 +29,7 @@ test("все ключи, которые использует интерфейс,
   }
   for (const m of read("web/index.html").matchAll(/data-i18n(?:-ph|-label)?="([a-zA-Z0-9._]+)"/g)) used.add(m[1]);
   // ключи, собираемые из переменной: t("conf." + c) — их полноту проверяет следующий тест
-  const dynamic = /^(conf|role|herds|src|hist|ab|map\.mode|fc|how\.step|how\.f|unit|meta|rsn|set\.origin|veg|vt|why|wi\.a|wi\.st|wi\.v|wi\.v\.algo|algo|wr|ws|sg|rs)\.$/;
+  const dynamic = /^(conf|role|herds|src|hist|ab|map\.mode|fc|how\.step|how\.f|unit|meta|rsn|set\.origin|veg|vt|why|wi\.a|wi\.st|wi\.v|wi\.v\.algo|algo|wr|ws|sg|rs|mt\.v|mt\.r|mt\.s)\.$/;
   const missing = [...used].filter(k => !ru.includes(k) && !dynamic.test(k) && !/^ab\.(f|g\.)$/.test(k));
   assert.deepEqual(missing, []);
 });
