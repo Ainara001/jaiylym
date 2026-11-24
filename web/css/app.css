@@ -925,3 +925,15 @@ main .kans .btn { min-height: 54px; font-size: 16px; padding-inline: 10px; }
 .kchips + .fine { margin-top: 10px; }
 @media (max-width: 1180px) { .mainnav a span { display: none; } .mainnav a { padding: 9px; } }
 .nw { white-space: nowrap; }
+
+/* наблюдения людей */
+.src-people { background: #f7e3d6; color: #8a3d17; }
+.tag-check { background: #f6ecc9; color: #6b5206; }
+.obs3 { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 8px 0 10px; background: #fffdf7; }
+.obs3-check { background: #fdf6df; border-color: #ead9a0; }
+.obs3 h4 { margin: 0 0 6px; font-size: 14px; }
+.obs3 dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 8px; margin: 0; font-size: 13.5px; }
+.obs3 dt, .obs3 dd { margin: 0; }
+.obs3 .kef { margin: 0; padding-left: 16px; font-size: 13.5px; }
+.obs3 p { margin: 8px 0 0; font-size: 13.5px; }
+.obs-check { color: #6b5206; } .obs-match { color: #1d5532; }

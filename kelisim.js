@@ -133,7 +133,7 @@ function cleanDeadline(x, now) {
 }
 const expired = (k, now) => !!k.deadline && Date.parse(k.deadline + "T23:59:59+05:00") < now;
 
-function cleanProposal(b, k) {
+function cleanProposal(b, k, now) {
   if (!b || !K.TYPES.includes(b.type)) throw bad("неизвестное предложение");
   const p = { type: b.type };
   const ids = k.snapshot.plots.map(x => x.id);
@@ -149,6 +149,8 @@ function cleanProposal(b, k) {
   if (["avoid", "swap"].includes(b.type) && !p.reason) throw bad("укажите причину");
   if (b.observed_on != null && b.observed_on !== "") {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(b.observed_on) || Number.isNaN(Date.parse(b.observed_on))) throw bad("дата наблюдения: ГГГГ-ММ-ДД");
+    // UTC+14 — запас на часовой пояс; наблюдение из будущего — ошибка ввода
+    if (Date.parse(b.observed_on) > now + 14 * 3600e3) throw bad("дата наблюдения ещё не наступила", "future");
     p.observed_on = b.observed_on;
   }
   const t = text(b.text, MAX.text, "пояснение");
@@ -388,7 +390,7 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
       const k = await load(id), w = who(k, key);
       if (!k.version) throw err(409, "план ещё не рассчитан");
       const hid = w.role === "household" ? w.id : find(k, b.household).id;
-      return { version: k.version, effect: slimEffect(K.effect(k, hid, cleanProposal(b.proposal, k))) };
+      return { version: k.version, effect: slimEffect(K.effect(k, hid, cleanProposal(b.proposal, k, now()))) };
     },
     /** Ответ на план версии N: согласен или возражение с предложением. Новое возражение заменяет прежнее открытое. */
     answer: (id, key, b) => change(id, key, (k, w, t) => {
@@ -400,7 +402,7 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
       if (b.value !== "agree" && b.value !== "object") throw bad("ответ: agree или object");
       // «согласен» снимает своё нерассмотренное возражение; новое возражение заменяет прежнее
       const prev = openProposal(k, h.id);
-      const fresh = b.value === "object" ? cleanProposal(b.proposal, k) : null;
+      const fresh = b.value === "object" ? cleanProposal(b.proposal, k, t) : null;
       if (fresh && k.proposals.length >= MAX.proposals) throw err(429, "слишком много возражений в этом согласовании");
       if (prev) prev.status = "withdrawn";
       h.joined = h.joined || at;

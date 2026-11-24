@@ -797,6 +797,25 @@
     });
   }
 
+  // ---------- наблюдения людей (из согласований Келісім на этом устройстве): рядом со снимком и нормой, числа не меняют ----------
+  const NO_OBS = {};
+  function obsNow() {
+    if (!S.D || !Kel.observations) return NO_OBS;
+    const list = Kel.observations(S.D.village);
+    return list.length ? window.JaiylymKelisim.plotObs(list, S.plots, S.D.source, S.P) : NO_OBS;
+  }
+  const ndviWord = v => t("map.legend." + (v < 0.18 ? "none" : v < 0.25 ? "sparse" : v < 0.32 ? "mid" : "dense"));
+  function obsHtml(p, c) {
+    const g = obsNow()[p.id];
+    if (!g) return "";
+    const v = normVerdict(c);
+    return `<div class="obs3 obs3-${g.verdict}"><h4>${t("obs.three")}</h4><dl>
+      <dt>${src("sat")}</dt><dd>${p.ndvi == null ? t("st.no_data") : t("obs.sat", { w: ndviWord(p.ndvi), v: String(p.ndvi).replace(".", ","), y: S.D.source.year })}</dd>
+      <dt>${src("norm")}</dt><dd>${v ? normVerdictText(v) : t("nm.noRegion")}</dd>
+      <dt>${src("people")}</dt><dd>${Kel.obsItems(g)}</dd></dl>
+      <p><b>${t("obs.r." + g.verdict)}</b> ${t("obs.noChange")}</p></div>`;
+  }
+
   // ---------- карточка участка ----------
   function spark(series) {
     if (!series || series.length < 2) return "";
@@ -816,6 +835,7 @@
     const ndviRow = p.ndvi_base != null ? `${p.ndvi_base} → ${p.ndvi ?? "?"}` : (p.ndvi ?? t("st.no_data"));
     const ws = M.waterStatus(p), userWs = S.waterSet[p.id] || "";
     return `<div class="pop"><h3 style="margin:0 0 6px">${esc(p.id)} <small style="font-weight:500;color:#627064">${p.ring === "near" ? t("pop.near") : t("pop.far")}, ~${p.dist_km} ${t("common.km")}, ${p.dir}</small></h3>
+      ${obsHtml(p, c)}
       <table><tbody>
       ${p.nograze_ha > 0 && p.pasture_ha_gross != null
         ? `<tr><td>${t("pop.pastureNet")}</td><td>${fmt(p.pasture_ha)} ${t("common.ha")} = ${fmt(p.pasture_ha_gross)} ${src("sat")} − ${fmt1(p.nograze_ha)} ${src("osm")}</td></tr>`
@@ -1148,11 +1168,11 @@
   }
 
   function panePlots(el) {
-    const hasComp = S.plots.some(p => p.excluded_ha != null), hasNg = S.plots.some(p => p.nograze_ha != null);
+    const obs = obsNow(), hasComp = S.plots.some(p => p.excluded_ha != null), hasNg = S.plots.some(p => p.nograze_ha != null);
     el.innerHTML = `<div class="tablewrap"><table class="plots-t"><thead><tr><th>${t("plots.id")}</th><th class="num">${t("plots.ha")}</th>${hasNg ? `<th class="num">${t("plots.nograze")}</th>` : ""}${hasComp ? `<th class="num">${t("plots.comp")}</th>` : ""}<th class="num">${t("plots.ndvi")}</th>
       <th class="num">${t("plots.cap")}</th><th class="num">${t("plots.load")}</th><th>${t("plots.quality")}</th><th>${t("plots.forage")}</th><th>${t("plots.water")}</th></tr></thead><tbody>
       ${S.plots.map(p => { const ld = S.pl.load[p.id], c = capOf(p);
-        return `<tr data-plot="${p.id}" tabindex="0" style="cursor:pointer"><td class="pt-id"><b>${esc(p.id)}</b> ${p.water ? ic("drop") : ""}${p.forbidden ? ` <span class="tag tag-closed">${t("pop.closedTag")}</span>` : ""}</td><td class="num" data-l="${esc(t("plots.ha"))}">${fmt(p.pasture_ha)}</td>
+        return `<tr data-plot="${p.id}" tabindex="0" style="cursor:pointer"><td class="pt-id"><b>${esc(p.id)}</b> ${p.water ? ic("drop") : ""}${p.forbidden ? ` <span class="tag tag-closed">${t("pop.closedTag")}</span>` : ""}${obs[p.id] && obs[p.id].verdict === "check" ? ` <span class="tag tag-check">${t("obs.check")}</span>` : ""}</td><td class="num" data-l="${esc(t("plots.ha"))}">${fmt(p.pasture_ha)}</td>
         ${hasNg ? `<td class="num" data-l="${esc(t("plots.nograze"))}">${p.nograze_ha != null ? fmt1(p.nograze_ha) : "—"}</td>` : ""}
         ${hasComp ? `<td class="num" data-l="${esc(t("plots.comp"))}">${fmt(p.excluded_ha || 0)} / ${fmt(p.uncertain_ha || 0)}</td>` : ""}
         <td class="num" data-l="${esc(t("plots.ndvi"))}">${p.ndvi ?? "—"}</td><td class="num" data-l="${esc(t("plots.cap"))}">${sheepCap(c)}</td>
@@ -1917,6 +1937,8 @@
     if (b.well) lines.push(t("brief.well", { id: `<b>${esc(b.well.plot)}</b>`, n: fmt(b.well.sheep) }));
     if (b.trend != null && Math.abs(b.trend) >= 3) lines.push(t("brief.trend", { year: S.D.source.year, dir: b.trend < 0 ? t("brief.trendDown") : t("brief.trendUp"), p: Math.abs(Math.round(b.trend)) }));
     const todo = [];
+    const chk = Object.entries(obsNow()).filter(([, g]) => g.verdict === "check").map(([id]) => id);
+    if (chk.length) todo.push(t("obs.todo", { ids: esc(chk.join(", ")) }));
     if (S.cur.overloaded > 0) todo.push(t("brief.do.plan"));
     if (b.well && (b.deficitT >= 1 || b.ratio > 0.8)) todo.push(t("brief.do.well", { id: esc(b.well.plot) }));
     if (b.deficitT >= 1) todo.push(t("brief.do.reduce"));
@@ -2180,6 +2202,10 @@
         состояние: n.state === "degraded" ? "деградированные" : "восстановленные", норма_га_на_овцу: +(n.au_ha * S.P.au.sheep).toFixed(2),
         участков_ограничено_нормой: normTotals(S.plots).limited, по_снимкам_овец: Math.round(normTotals(S.plots).sat), по_норме_овец: Math.round(normTotals(S.plots).norm), в_расчёте_овец: Math.round(normTotals(S.plots).cap) }
         : "область не определена — предел по норме не применён"))(NM && NM.pick(S.normSel)),
+      // сверено с данными за то же время (web/kelisim.js); без имён дворов и без их текста
+      наблюдения_людей: Object.entries(obsNow()).flatMap(([id, g]) => g.items.map(i => ({ участок: id, что: { no_grass: "мало травы", weeds: "бурьян, непоедаемая трава", no_water: "нет воды", far: "далеко" }[i.reason],
+        когда_видели: i.dates.join(", ") || null, дворов: i.households.length, вывод: { check: "проверить на месте", match: "сходится с данными", other_time: "другое время, не сравнивать", no_date: "без даты, не сравнивать", info: "не сверяется" }[i.verdict],
+        снимок_ближайшей_даты: i.scene ? { дата: i.scene, ndvi: i.ndvi } : null }))),
       нельзя_пасти: S.D.nograze && S.D.nograze.status === "ok" ? { источник: "OpenStreetMap: жильё, населённые пункты, фермы, промзоны", буфер_м: S.ngBuf,
         вычтено_из_пастбищ_га: Math.round(S.plots.reduce((s, p) => s + (p.nograze_ha || 0), 0)), зон: S.D.nograze.counts } : "не посчитано",
       участки: S.plots.map(p => ({ id: p.id, кольцо: p.ring === "near" ? "ближний" : "дальний", км_от_села: p.dist_km, направление: p.dir,
