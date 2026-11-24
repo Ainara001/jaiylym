@@ -69,6 +69,13 @@ test("ИИ в боте: многолетний ряд в данных, поис�
     assert.match(seen.system, /Поиск в интернете/);
     assert.match(seen.input, /многолетний_ряд/);
     assert.match(seen.input, /вывод_по_селу/);
+    assert.match(seen.input, /^Сегодня: \d{1,2} [а-я]+ 20\d\d/);
+    // участки — с вычетом жилья и ферм, как в плане: Б-С 320 − 47,1 = 272,9 га (313 овец, а не 367)
+    const ctx = JSON.parse(seen.input.match(/Данные села \(JSON\): (\{.*\})\n\nВопрос/s)[1]);
+    const bs = ctx.участки.find(p => p.id === "Б-С");
+    assert.equal(bs.пастбищный_покров_га_спутник, 320);
+    assert.equal(Math.round(bs.кормовая_площадь_га * 10) / 10, 272.9);
+    assert.match(bs.как_рассчитано, /320/);
     assert.match(seen.input, /ПОИСК: вопрос о свежих внешних сведениях/, "вопрос о погоде — прямое указание искать");
     const t = last();
     assert.match(t, /Найдено в интернете:\n— Прогноз: https:\/\/meteo\.example\/kegen/);

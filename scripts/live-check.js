@@ -28,13 +28,14 @@ function context(D0 = loadPlots(), H = loadHerds().map(h => Object.assign({ demo
   const D = Object.assign({}, D0, { plots: NG.apply(D0.plots, D0.nograze) }), P = J.params();
   const pl = J.solve(D.plots, H, P), cur = J.current(D.plots, H, P);
   return {
-    село: D.village.name, лето_снимков: D.source.year, статус_плана: pl.status, версия_модели: M.MODEL_VERSION, демо_стада: true,
+    село: D.village.name, лето_снимков: D.source.year, статус_плана: pl.status, версия_модели: M.MODEL_VERSION, демо_стада: H.some(h => h.demo),
     модель_проверена_в_поле: false,
-    участки: D.plots.map(p => { const c = J.plotCapacity(p, P); return { id: p.id, пастбище_га_спутник: p.pasture_ha, ndvi_спутник: p.ndvi,
+    участки: D.plots.map(p => { const c = J.plotCapacity(p, P); return { id: p.id, пастбищный_покров_га_спутник: p.pasture_ha_gross ?? p.pasture_ha,
+      нельзя_пасти_га_osm: p.nograze_ha ?? undefined, кормовая_площадь_га: p.pasture_ha, ndvi_спутник: p.ndvi,
       ёмкость_овец_оценка: c.known ? Math.round(c.au_season / P.au.sheep) : null, вода: M.waterStatus(p),
       как_рассчитано: J.explainCapacity(p, P).steps.map(s => `${s.key}: ${s.formula}`).join("; "),
       нагрузка_если_все_у_села_проц: Math.round(cur.load[p.id].load * 100), нагрузка_по_плану_проц: Math.round(pl.load[p.id].load * 100) }; }),
-    стада: H.map(h => ({ имя: h.name, демо: true, овцы: h.sheep, крс: h.cattle, лошади: h.horses, усл_голов: J.herdAU(h, P) })),
+    стада: H.map(h => ({ имя: h.name, демо: !!h.demo, овцы: h.sheep, крс: h.cattle, лошади: h.horses, усл_голов: J.herdAU(h, P) })),
     итог: { перегружено_если_все_у_села: cur.overloaded, перегружено_по_плану: pl.overloaded, дефицит_сена_т_по_плану_оценка: Math.round(J.hayTonnes(pl.deficit_kg, P)) },
     почему_план: Object.values(J.explainPlan(D.plots, H, pl, P)),
   };
