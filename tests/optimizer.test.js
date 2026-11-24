@@ -1,4 +1,4 @@
-// Оптимизатор распределения (fair-optimal-v1): корректность, оптимальность по заявленным критериям, сравнение с жадным.
+// Оптимизатор распределения (fair-optimal-v2): корректность, оптимальность по заявленным критериям, сравнение с жадным.
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const J = require("../web/engine.js");
@@ -151,11 +151,62 @@ test("сводное сравнение на 150 случайных сёлах: 
 });
 
 test("solve(): по умолчанию оптимизатор, «greedy» — прежний алгоритм; сценарий сравнения алгоритмов есть", () => {
-  assert.equal(J.solve(D.plots, H).algorithm, "fair-optimal-v1");
+  assert.equal(J.solve(D.plots, H).algorithm, "fair-optimal-v2");
   assert.equal(J.solve(D.plots, H, P, { algorithm: "greedy" }).algorithm, "greedy-heuristic-v2");
   const v = J.defaultVariants(D.plots, scale(6), P);
   assert.ok(v.some(x => x.type === "algorithm" && x.name === "greedy"));
   const r = J.compareScenarios(D.plots, scale(6), P, v);
   const plan = r.find(x => x.id === "plan"), greedy = r.find(x => x.id === "greedy");
   assert.ok(plan.min_share > greedy.min_share + 0.3, `${plan.min_share} vs ${greedy.min_share}`);
+});
+
+// ---------- меньше перегонов, отдых участков, веса хозяйств ----------
+const mk = (id, ring, dir, ha, extra = {}) => Object.assign({ id, ring, dir, dist_km: ring === "near" ? 1.8 : 5.5, pasture_ha: ha, ndvi: 0.3, water: true,
+  water_source: ring === "near" ? "село" : "водоём на карте WorldCover", series: [1, 2, 3, 4].map(i => ({ d: "2026-07-0" + i, v: 0.3 })) }, extra);
+
+test("календарь: ближние участки целыми группами на весну и осень; короткий единственный ближний не режется пополам", () => {
+  const segs = [{ plot: "Б-С", ring: "near", days: 30 }, { plot: "Б-В", ring: "near", days: 20 }, { plot: "Д-С", ring: "far", days: 100 }];
+  const s = J._internal.schedule(segs, 150).segments.filter(x => x.plot);
+  assert.deepEqual(s.map(x => x.plot), ["Б-С", "Д-С", "Б-В"], "каждый участок — одна стоянка");
+  const one = J._internal.schedule([{ plot: "Б-С", ring: "near", days: 20 }, { plot: "Д-С", ring: "far", days: 130 }], 150).segments.filter(x => x.plot);
+  assert.deepEqual(one.map(x => x.plot), ["Б-С", "Д-С"], "20 дней не делятся на две стоянки по 10");
+  const big = J._internal.schedule([{ plot: "Б-С", ring: "near", days: 60 }, { plot: "Д-С", ring: "far", days: 90 }], 150).segments.filter(x => x.plot);
+  assert.deepEqual(big.map(x => x.plot), ["Б-С", "Д-С", "Б-С"], "60 дней — весна и осень по 30");
+});
+
+test("меньше перегонов при тех же долях: на 60 случайных сёлах доли и дефицит как без склейки, участков не больше", () => {
+  const r = B.rng(424242);
+  let movesOpt = 0, movesGreedy = 0, shortOpt = 0, shortGreedy = 0;
+  for (let k = 0; k < 60; k++) {
+    const c = B.randomVillage(r);
+    const o = J.optimize(c.plots, c.herds, P, c.opts), raw = J.optimize(c.plots, c.herds, P, Object.assign({ no_consolidate: true }, c.opts)), g = J.plan(c.plots, c.herds, P, c.opts);
+    invariants(o, c.plots, c.herds, c.opts);
+    for (const h of c.herds) if (o.shares[h.id] != null) assert.ok(Math.abs(o.shares[h.id] - raw.shares[h.id]) < 1e-6, "доля не меняется");
+    assert.ok(o.deficit_au_days <= raw.deficit_au_days + 1, `дефицит не хуже: ${o.deficit_au_days} > ${raw.deficit_au_days}`);
+    const mo = J.planMetrics(o, c.plots, c.herds, P), mg = J.planMetrics(g, c.plots, c.herds, P), mr = J.planMetrics(raw, c.plots, c.herds, P);
+    assert.ok(mo.moves <= mr.moves, `склейка не добавляет перегонов: ${mo.moves} > ${mr.moves}`);
+    movesOpt += mo.moves; movesGreedy += mg.moves; shortOpt += mo.short_stays; shortGreedy += mg.short_stays;
+  }
+  assert.ok(movesOpt <= movesGreedy * 1.1, `перегонов почти как у жадного: ${movesOpt} vs ${movesGreedy}`);
+  assert.ok(shortOpt <= shortGreedy, `коротких стоянок не больше, чем у жадного: ${shortOpt} vs ${shortGreedy}`);
+});
+
+test("отдых участка: окно выпаса соблюдается в календаре всех стад", () => {
+  const plots = [mk("Б-С", "near", "С", 300), mk("Д-С", "far", "С", 900, { window: { from: 31, to: 150 } }), mk("Д-Ю", "far", "Ю", 900)];
+  const herds = [{ id: "a", sheep: 800, home: "Б-С" }, { id: "b", sheep: 800, home: "Б-С" }];
+  const o = J.optimize(plots, herds, P);
+  invariants(o, plots, herds);
+  for (const h of herds) for (const s of o.herdPlans[h.id]) if (s.plot === "Д-С") assert.ok(s.from >= 31, `${h.id}: Д-С с ${s.from} дня, а отдыхает до 30`);
+});
+
+test("веса хозяйств: при нехватке доля с весом 2 растёт вдвое быстрее; вес 1 у всех — как без весов", () => {
+  const plots = [mk("Б-С", "near", "С", 200)];
+  const base = [{ id: "a", sheep: 1500, home: "Б-С" }, { id: "b", sheep: 1500, home: "Б-С" }];
+  const eq = J.optimize(plots, base, P), w1 = J.optimize(plots, base.map(h => Object.assign({ weight: 1 }, h)), P);
+  assert.ok(Math.abs(eq.shares.a - eq.shares.b) < 1e-6);
+  assert.ok(Math.abs(w1.shares.a - eq.shares.a) < 1e-9);
+  const w = J.optimize(plots, [Object.assign({ weight: 2 }, base[0]), base[1]], P);
+  assert.ok(w.shares.a < 1, "корма не хватает обоим");
+  assert.ok(Math.abs(w.shares.a / w.shares.b - 2) < 0.01, "доли 2 : 1 — " + (w.shares.a / w.shares.b).toFixed(3));
+  assert.ok(Math.abs((w.shares.a + w.shares.b) - (eq.shares.a + eq.shares.b)) < 1e-3, "весь корм по-прежнему роздан");
 });
