@@ -482,7 +482,30 @@
    * { village, bbox, source, plots: [{ id, ring, dir, dist_km, geometry, area_ha, pasture_ha, ndvi, series, water, water_source }] }
    * + grid (NDVI и маска пастбищ) для картинки слоя.
    */
-  async function buildVillage({ name, lat, lon, year, onProgress }) {
+  // где нельзя пасти (OpenStreetMap): модуль web/nograze.js; в браузере подключается раньше pipeline.js
+  const NGmod = () => (typeof module === "object" && module.exports ? require("./nograze.js") : self.JaiylymNoGraze);
+  /**
+   * Зоны «нельзя пасти» для села по готовой сетке WorldCover. Сбой OSM не ломает расчёт: status "error" и текст причины.
+   */
+  async function noGrazeFor({ lat, lon, bbox, land, osm, fetchImpl }) {
+    const NG = NGmod();
+    if (!NG) return { status: "error", error: "модуль зон не загружен" };
+    try {
+      const plots = makePlots(lat, lon);
+      const { idx, pxHa } = plotIndex(lat, lon, bbox);
+      return await NG.compute({ bbox, size: SIZE, idx, pxHa, lat, osm, fetchImpl, plotIds: plots.map(p => p.id),
+        isPasture: i => classifyLandcover(land[i]) === "pasture" });
+    } catch (e) { return { status: "error", error: String(e && e.message || e).slice(0, 160), fetched_at: new Date().toISOString() }; }
+  }
+  /** То же для уже посчитанного села (кэш браузера, Кеген): загружает карту покрытия земли и OSM. */
+  async function buildNoGraze({ lat, lon, onProgress }) {
+    const bbox = bboxFor(lat, lon);
+    if (onProgress) onProgress("Загружаю карту покрытия земли и OpenStreetMap…");
+    const land = await loadLand(bbox);
+    return noGrazeFor({ lat, lon, bbox, land });
+  }
+
+  async function buildVillage({ name, lat, lon, year, onProgress, nograze = true }) {
     const say = m => onProgress && onProgress(m);
     year = year || summerYear();
     const bbox = bboxFor(lat, lon);
@@ -548,10 +571,15 @@
     const noData = plots.filter(p => p.ndvi == null).map(p => p.id);
     if (noData.length) warnings.push("Нет NDVI для участков: " + noData.join(", ") + ".");
     const valid = vN ? vSum / vN : 0;
+    // где нельзя пасти: населённые пункты, фермы, промзоны из OpenStreetMap на той же сетке
+    let ng = null;
+    if (nograze) { say("Ищу сёла, фермы и промзоны (OpenStreetMap)…"); ng = await noGrazeFor({ lat, lon, bbox, land }); }
+    if (ng && ng.status === "error") warnings.push("Зоны, где нельзя пасти (OpenStreetMap), не загрузились: " + ng.error);
 
     return {
       village: { name, lat, lon },
       bbox,
+      nograze: ng,
       source: {
         ndvi: "Sentinel-2 L2A (ESA Copernicus), медиана безоблачных снимков лета",
         landcover: "ESA WorldCover 10 м",
@@ -747,7 +775,7 @@
     return m ? (m[1] === "N" ? "Б" : "Д") + "-" + DIRS[+m[2]] : null;
   }
 
-  return { geocode, reverseGeocode, buildVillage, buildSeason, buildYears, fetchPrecip, precipByYear, seasonFromArrays, compareSeasons, plotWater, sclFromBands, NDVI_SAME_PCT, latestScene, polygonStats, latestPolygonScene, polygonAreaHa, closeRing, checkRing, ringSelfIntersects,
+  return { geocode, reverseGeocode, buildVillage, buildNoGraze, noGrazeFor, loadLand, plotIndex, buildSeason, buildYears, fetchPrecip, precipByYear, seasonFromArrays, compareSeasons, plotWater, sclFromBands, NDVI_SAME_PCT, latestScene, polygonStats, latestPolygonScene, polygonAreaHa, closeRing, checkRing, ringSelfIntersects,
     plotCode, plotFromCode, bboxFor, makePlots, setUserAgent, summerYear, SIZE,
     LANDCOVER, LANDCOVER_YEAR, SCL_OK, SCL_NAMES, classifyLandcover, landcoverComposition, sanitizeScenes, pickScenes, boaOffset, ndviFromBands,
     mergeSameDate, medianComposite, fetchRetry, plotMeans, maskedMean, insideMask, ringBbox, polygonFromArrays, plotIndex, metaFor };
