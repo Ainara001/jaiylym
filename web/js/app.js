@@ -109,6 +109,8 @@
         const last = C.ls.get("jaiylym:last", null), extra = { draw: q.get("draw") === "1" };
         if (last) openVillage(last.name, last.lat, last.lon, extra); else openVillage(DEFAULT.village.name, DEFAULT.village.lat, DEFAULT.village.lon, extra);
       } else if (q.get("draw") === "1") setTimeout(startDraw, 100);
+      // село уже загружено без карты (например, для ИИ-чата) — дорисовать участки
+      if (S.D && (S.noLeaflet ? !$("#schemeMap").children.length : S.map && !Object.keys(S.layers).length)) { drawVillage(); render(); }
       setTimeout(() => S.map && S.map.invalidateSize(), 50);
     }
     if (route === "home") renderHome();
@@ -162,7 +164,7 @@
 
   function drawVillage() {
     S.layers = {};
-    if (S.noLeaflet) return;            // запасная схема рисуется в paintMap(), когда нагрузка уже посчитана
+    if (S.noLeaflet || !S.map) return;   // карта ещё не создана (село открыто для ИИ-чата) — нарисуем при переходе на карту            // запасная схема рисуется в paintMap(), когда нагрузка уже посчитана
     S.group.clearLayers();
     const [w, s, e, n] = S.D.bbox;
     S.ndviLayer = L.imageOverlay(S.png, [[s, w], [n, e]], { opacity: 0.85 });
@@ -387,7 +389,7 @@
     addOwnFarm();
     S.botSubs = {};
     C.ls.set("jaiylym:last", { name: data.village.name, lat: data.village.lat, lon: data.village.lon });
-    history.replaceState(null, "", `#/map?lat=${data.village.lat}&lon=${data.village.lon}&name=${encodeURIComponent(data.village.name)}`);
+    if (!opts.keepRoute) history.replaceState(null, "", `#/map?lat=${data.village.lat}&lon=${data.village.lon}&name=${encodeURIComponent(data.village.name)}`);
     $("#mapQ").value = data.village.name;
     $("#tgVillage").href = botLink();
     drawVillage();
@@ -1857,10 +1859,28 @@
   }
 
   // ---------- ИИ-помощник: отдельный чат ----------
+  /**
+   * ИИ-чат открыт без села: подгружаем последнее открытое село, если оно есть в кэше браузера (без сети и без ожидания),
+   * иначе пример Кегена. Пользователь видит, на чьих данных отвечает помощник.
+   */
+  async function ensureChatVillage() {
+    if (S.D || S.chatLoading) return false;
+    S.chatLoading = true;
+    try {
+      const last = C.ls.get("jaiylym:last", null);
+      const cached = last && !isKegen(last.lat, last.lon) && C.ls.get(cacheKey(last.lat, last.lon), null);
+      const v = cached ? last : DEFAULT.village;
+      await openVillage(v.name, v.lat, v.lon, { keepRoute: true });
+      S.chatAuto = !!S.D && isKegen(S.D.village.lat, S.D.village.lon) ? "demo" : "last";
+      return !!S.D;
+    } finally { S.chatLoading = false; }
+  }
   function renderAI() {
+    if (!S.D) { ensureChatVillage().then(ok => { if (ok && S.route === "ai") renderAI(); }); }
     const el = $("#aiPage");
     const hist = (() => { try { return JSON.parse(sessionStorage.getItem("jaiylym:chat") || "[]"); } catch (_) { return []; } })();
-    const ctxLine = S.D ? t("ai.ctx", { v: `${esc(S.D.village.name)} · ${S.plots.length} ${t("ai.plots")} · ${S.herds.length} ${t("sc.herds")}` }) : t("ai.noctx");
+    const ctxLine = S.D ? t("ai.ctx", { v: `${esc(S.D.village.name)} · ${S.plots.length} ${t("ai.plots")} · ${S.herds.length} ${t("sc.herds")}` }) +
+      (S.chatAuto ? ` <a href="#/map">${t(S.chatAuto === "demo" ? "ai.ctxDemo" : "ai.ctxLast")}</a>` : "") : t("ai.loadingCtx");
     el.innerHTML = `<div class="chat"><div class="chat-head"><h1>${ic("spark")} ${t("ai.title")}</h1><p class="fine" style="margin:0">${t("ai.lead")}</p>
         <span class="chat-ctx">${ic("pin")} ${ctxLine}</span></div>
       <div class="chat-log" id="chatLog" aria-live="polite">${hist.map(m => `<div class="msg ${m.role}">${m.role === "ai" ? aiText(m.text) + aiSources(m.sources) : esc(m.text)}</div>`).join("")}</div>

@@ -291,6 +291,20 @@ test("ИИ: ключ не нужен браузеру, проблемы данн
   } finally { G.ask = orig; }
 });
 
+test("ИИ: метка [интернет] без источников поиска заменяется на [общее], с источниками — остаётся", async () => {
+  const api = require("../api.js");
+  assert.equal(api.fixWebLabels("— пасти по очереди [интернет]\n— [ Интернет ] ещё"), "— пасти по очереди [общее]\n— [общее] ещё");
+  const orig = G.ask;
+  try {
+    G.ask = async () => ({ ok: true, text: "Вывод.\n— отдых участка 30 дней полезен [интернет]", model: "t" });
+    const r = await call("POST", "/api/ai", { ip: "10.7.8.1", body: { mode: "chat", lang: "ru", context: {}, messages: [{ role: "user", text: "как пасти?" }] } });
+    assert.match(r.data.text, /\[общее\]/); assert.doesNotMatch(r.data.text, /\[интернет\]/);
+    G.ask = async () => ({ ok: true, text: "Сено 45 000 тенге [интернет]", model: "t", searches: 1, sources: [{ url: "https://example.kz", title: "x" }], cited: ["Сено 45 000 тенге"] });
+    const r2 = await call("POST", "/api/ai", { ip: "10.7.8.2", body: { mode: "chat", lang: "ru", context: {}, messages: [{ role: "user", text: "цена сена?" }] } });
+    assert.match(r2.data.text, /\[интернет\]/);
+  } finally { G.ask = orig; }
+});
+
 test("ИИ: поиск Google только в чате; источники и подсказки в ответе; числа из цитат допустимы", async () => {
   const orig = G.ask;
   const calls = [];
