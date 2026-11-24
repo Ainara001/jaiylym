@@ -41,13 +41,16 @@ test("все ключи, которые использует интерфейс,
   for (const x of ["check", "match", "other_time", "no_date", "info"]) used.add("obs.r." + x);
   for (const x of ["other_time", "no_date", "info"]) used.add("obs.v." + x);
   for (const x of ["sat_green", "sat_sparse", "sat_blind", "water_listed", "water_unknown"]) used.add("obs.w." + x);
+  for (const x of ["no_herds", "no_deficit", "no_help"]) used.add("water.st." + x);
+  for (const x of ["none", "ok", "no"]) used.add("wc.right." + x);
+  for (const x of ["none", "well", "borehole", "river", "pipe"]) used.add("wc.source." + x);
   for (const x of ["open", "accepted", "declined", "withdrawn"]) used.add("kel.pst." + x);
   for (const x of ["not_a_contract", "no_land_rights", "herds_declared", "model_estimate"]) used.add("kel.lim." + x);
   for (const x of ["none", "entered", "declared", "confirmed"]) used.add("kel.hs." + x);
   for (const m of read("kelisim.js").matchAll(/why: "(\w+)"/g)) used.add("kel.err." + m[1]);
   for (const m of read("web/index.html").matchAll(/data-i18n(?:-ph|-label)?="([a-zA-Z0-9._]+)"/g)) used.add(m[1]);
   // ключи, собираемые из переменной: t("conf." + c) — их полноту проверяет следующий тест
-  const dynamic = /^(conf|role|herds|src|hist|ab|map\.mode|fc|how\.step|how\.f|unit|meta|rsn|set\.origin|veg|vt|why|wi\.a|wi\.st|wi\.v|wi\.v\.algo|algo|wr|ws|sg|rs|obs\.r|obs\.w|obs\.v|map\.legend|mt\.v|mt\.r|mt\.s)\.$/;
+  const dynamic = /^(conf|role|herds|src|hist|ab|map\.mode|fc|how\.step|how\.f|unit|meta|rsn|set\.origin|veg|vt|why|wi\.a|wi\.st|wi\.v|wi\.v\.algo|algo|wr|ws|sg|rs|obs\.r|obs\.w|obs\.v|map\.legend|water\.st|wc\.right|wc\.source|mt\.v|mt\.r|mt\.s)\.$/;
   const missing = [...used].filter(k => !ru.includes(k) && !dynamic.test(k) && !/^ab\.(f|g\.)$/.test(k));
   assert.deepEqual(missing, []);
 });

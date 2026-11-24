@@ -1000,6 +1000,33 @@
     };
   }
 
+  const WELL_T = 0.5;                            // меньше полутонны сена за сезон — водопой ничего не меняет
+  /**
+   * Где проверять возможность водопоя: участки по тому, насколько уменьшится дефицит и скольким стадам станет лучше.
+   * status: no_herds | no_deficit (корма хватает, водопой не добавит) | no_help (дефицит есть, но ни один водопой его не уменьшит) | ok.
+   * base — готовый план, чтобы не считать второй раз. Это не рекомендация строить: право, источник и цену проверяют люди.
+   */
+  function wellRank(plots, herds, p, opts, base) {
+    p = params(p);
+    const list = wells(plots, p, opts).map(w => Object.assign({ gain_t: 0, better: [], worse: [] }, w));
+    const before = base || solve(plots, herds, p, opts), d0 = hayTonnes(before.deficit_kg, p);
+    if (!herds.some(h => herdAU(h, p) > 0)) return { status: "no_herds", deficit_t: 0, list };
+    if (d0 < WELL_T) return { status: "no_deficit", deficit_t: d0, list };
+    const share = (r, h) => 1 - ((r.unmet && r.unmet[h.id]) || 0) / (herdAU(h, p) * p.season_days);
+    for (const w of list) {
+      const r = solve(plots.map(pl => (pl.id === w.plot ? Object.assign({}, pl, { water: true, water_status: "modeled" }) : pl)), herds, p, opts);
+      const gain = d0 - hayTonnes(r.deficit_kg, p);
+      w.gain_t = gain >= WELL_T ? gain : 0;
+      for (const h of herds.filter(x => herdAU(x, p) > 0)) {
+        const d = share(r, h) - share(before, h);
+        if (w.gain_t && d > 0.01) w.better.push(h.id);
+        if (w.gain_t && d < -0.01) w.worse.push(h.id);
+      }
+    }
+    list.sort((a, b) => b.gain_t - a.gain_t || b.better.length - a.better.length || b.au - a.au);
+    return { status: list.some(w => w.gain_t) ? "ok" : "no_help", deficit_t: d0, list };
+  }
+
   // ---------- «Что если?»: сравнение сценариев на одном экране ----------
   function metrics(res, herds, p) {
     const H = herds.filter(h => herdAU(h, p) > 0);
@@ -1045,9 +1072,8 @@
     const v = [{ id: "current", type: "current" }, { id: "plan", type: "plan" }];
     // второй алгоритм — для сравнения на одном экране
     v.push({ id: (opts && opts.algorithm === "greedy") ? "optimized" : "greedy", type: "algorithm", name: (opts && opts.algorithm === "greedy") ? "optimized" : "greedy" });
-    const w = wells(plots, p, opts)[0];
+    const pl = solve(plots, herds, p, opts), w = wellRank(plots, herds, p, opts, pl).list[0];
     if (w) v.push({ id: "well", type: "add_water", plot: w.plot });
-    const pl = solve(plots, herds, p, opts);
     const busiest = Object.entries(pl.load).filter(([, l]) => l.used > EPS).sort((a, b) => b[1].used - a[1].used)[0];
     if (busiest) v.push({ id: "exclude", type: "exclude_plot", plot: busiest[0] });
     v.push({ id: "forage", type: "forage", factor: 0.8 }, { id: "herds", type: "herds", factor: 1.2 },
@@ -1142,6 +1168,6 @@
 
   const _internal = { flowModel, feasibleFlow, fairShares, minDistanceAlloc, consolidate, exchange, prune, schedule, herdWeight, prepare, herdReasons, dist };
   return { DIRS, DEFAULTS, ALGORITHM, MODEL: M, NEAR_PENALTY, MIN_STAY, _internal, params, herdAU, plotCapacity, explainCapacity, explainPlan, current, plan, optimize, solve, bottlenecks, planMetrics,
-    schedule, exactBound, wells, wellEffect,
+    schedule, exactBound, wells, wellEffect, wellRank,
     compareScenarios, defaultVariants, sensitivity, totalCapacity, hayTonnes, plotOnDay, seasonDay, dist };
 });

@@ -35,7 +35,10 @@ test("карта села и план: демо-стада помечены, с�
   assert.match(last(), /\nПо введённым условиям возможен вариант распределения/);
   assert.match(last(), /оценка модели/);
   await bot.handle({ message: { chat: { id: 901 }, from: { id: 901 }, text: "Водопой" } }, send);
-  assert.match(last(), /не рекомендация строить скважину/);
+  assert.match(last(), /новый водопой сейчас корма не добавит/);
+  await bot.handle({ message: { chat: { id: 901 }, from: { id: 901, first_name: "Тест" }, text: "19000 овец" } }, send);
+  await bot.handle({ message: { chat: { id: 901 }, from: { id: 901 }, text: "Водопой" } }, send);
+  assert.match(last(), /Где проверять возможность[\s\S]*дефицит меньше на ≈[\s\S]*не рекомендация строить скважину/);
 });
 
 test("неизвестная команда — подсказка, а не молчание", async () => {

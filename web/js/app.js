@@ -1140,13 +1140,44 @@
     }).join("") + `<p class="note">${t("routes.note", { d: Sd })} ${src("model")}</p>`;
   }
 
+  /** Рейтинг «где проверять воду» считается один раз на план. */
+  const wrCache = new WeakMap();
+  function wellRank() {
+    if (!wrCache.has(S.pl)) wrCache.set(S.pl, J.wellRank(S.plots, S.herds, S.P, { algorithm: S.algo }, S.pl));
+    return wrCache.get(S.pl);
+  }
+  /** Предложения плана: водопой — только если он правда уменьшает дефицит, лучший первым. */
+  function planSuggestions() {
+    const all = S.pl.suggestions || [], w = all.filter(s => s.type === "add_water");
+    if (!w.length) return all;
+    const gain = Object.fromEntries(wellRank().list.map(x => [x.plot, x.gain_t]));
+    return w.filter(s => gain[s.plot]).sort((a, b) => gain[b.plot] - gain[a.plot]).concat(all.filter(s => s.type !== "add_water"));
+  }
+  // что проверил человек: право, источник воды, цена. Пусто — «не проверено»; на рейтинг не влияет
+  const WRIGHT = ["ok", "no"], WSRC = ["well", "borehole", "river", "pipe"];
+  const wcKey = () => cacheKey(S.D.village.lat, S.D.village.lon) + ":wcheck";
+  const wcheck = id => Object.assign({ right: "", source: "", cost: 0 }, (C.ls.get(wcKey(), {}) || {})[id]);
+  const wcText = id => { const c = wcheck(id); return [`${t("wc.right")}: ${t("wc.right." + (c.right || "none"))}`, `${t("wc.source")}: ${t("wc.source." + (c.source || "none"))}`, `${t("wc.cost")}: ${c.cost ? fmt(c.cost) + " " + t("rep.tenge") : t("wc.none")}`].join("; "); };
+  const noWaterObs = () => Object.entries(obsNow()).map(([id, g]) => [id, new Set(g.items.filter(i => i.reason === "no_water").flatMap(i => i.households)).size]).filter(x => x[1]);
+
   function paneWater(el) {
-    const ws = J.wells(S.plots, S.P);
+    const wr = wellRank(), ws = wr.list.filter(w => w.gain_t > 0), rest = wr.list.filter(w => !w.gain_t), nm = ids => ids.map(id => esc((S.herds.find(h => h.id === id) || {}).name || id)).join(", ");
+    const nobs = noWaterObs(), nob = Object.fromEntries(nobs);
+    const addBtn = w => (S.added.has(w.plot) ? "" : `<button class="btn btn-soft btn-sm" data-add="${w.plot}">${ic("plus")} ${t("water.add")}</button>`);
+    const wrow = (w, i) => { const c = wcheck(w.plot), done = (c.right ? 1 : 0) + (c.source ? 1 : 0) + (c.cost ? 1 : 0);
+      return `<li class="wcand"><div class="row"><div class="grow"><b>${i + 1}. ${esc(w.plot)}</b><small>${t("water.gain", { t: fmt(w.gain_t), d: fmt(wr.deficit_t) })} ${src("model")}</small>
+        <small>${t("water.better", { n: w.better.length })}${w.better.length ? ": " + nm(w.better) : ""}${w.worse.length ? ` · ${t("water.worse")}: ${nm(w.worse)}` : ""}</small>
+        ${w.other_limits.length ? `<small>${t("water.remain", { r: w.other_limits.map(r => t("rsn." + r)).join(", ") })}</small>` : ""}</div><div class="btns">${addBtn(w)}</div></div>
+        <details ${c.right === "no" ? "open" : ""}><summary>${t("wc.title")}: ${done ? t("wc.done", { n: done }) : t("wc.none")} ${src("input")}</summary><div class="wcform">
+          <label class="field">${t("wc.right")}<select data-wc="${esc(w.plot)}" data-f="right"><option value="">${t("wc.none")}</option>${WRIGHT.map(x => `<option value="${x}" ${c.right === x ? "selected" : ""}>${t("wc.right." + x)}</option>`).join("")}</select></label>
+          <label class="field">${t("wc.source")}<select data-wc="${esc(w.plot)}" data-f="source"><option value="">${t("wc.none")}</option>${WSRC.map(x => `<option value="${x}" ${c.source === x ? "selected" : ""}>${t("wc.source." + x)}</option>`).join("")}</select></label>
+          <label class="field">${t("wc.cost")}, ${t("rep.tenge")}<input type="number" inputmode="numeric" min="0" step="10000" data-wc="${esc(w.plot)}" data-f="cost" value="${c.cost || ""}" placeholder="${t("wc.none")}"></label></div>
+          ${c.right === "no" ? `<p class="note warn">${t("wc.noRight")}</p>` : ""}</details></li>`; };
     const added = [...S.added];
     const baseOnly = S.plots.map(p => (S.added.has(p.id) ? Object.assign({}, p, { water: false, water_status: "unknown" }) : p));
     const before = solve(baseOnly, S.herds);
     const statusList = `<h3>${ic("drop")} ${t("water.status")}</h3><div class="tablewrap"><table><tbody>${S.plots.map(p => `<tr><td><b>${esc(p.id)}</b></td>
-      <td style="white-space:normal">${esc(wsLabel(p))} ${src(["confirmed", "absent"].includes(p.water_status) || S.added.has(p.id) ? "input" : p.water_status === "satellite" ? "sat" : "model")}</td></tr>`).join("")}</tbody></table></div>`;
+      <td style="white-space:normal">${esc(wsLabel(p))} ${src(["confirmed", "absent"].includes(p.water_status) || S.added.has(p.id) ? "input" : p.water_status === "satellite" ? "sat" : "model")}${nob[p.id] ? ` <span class="tag tag-check">${t("water.saidNo", { n: nob[p.id] })}</span>` : ""}</td></tr>`).join("")}</tbody></table></div>`;
     let sim = "";
     if (added.length) {
       const newly = added.filter(id => (S.pl.load[id] || {}).used > 0.5);
@@ -1156,15 +1187,28 @@
         ${prepLimits.length ? `<p>${t("water.remain", { r: esc(prepLimits.join("; ")) })}</p>` : ""}
         <p class="note warn">${t("water.check")}</p></div>`;
     }
-    el.innerHTML = `<h3>${ic("drop")} ${t("water.title")} ${src("model")}</h3>
-      ${ws.length ? `<ul class="list">${ws.map((w, i) => `<li class="row"><div class="grow"><b>${i + 1}. ${esc(w.plot)}</b><small>${t("water.opens", { n: fmt(w.sheep) })}</small></div>
-        <div class="btns"><button class="btn btn-soft btn-sm" data-add="${w.plot}">${ic("plus")} ${t("water.add")}</button></div></li>`).join("")}</ul>` : `<p class="empty">${t("water.none")}</p>`}
+    const verdict = !wr.list.length ? t("water.none") + (wr.status === "no_help" ? " " + t("water.st.no_help", { t: fmt(wr.deficit_t) }) : "") : wr.status === "ok" ? "" : t("water.st." + wr.status, { t: fmt(wr.deficit_t) });
+    el.innerHTML = `<h3>${ic("drop")} ${t("water.title")}</h3>
+      ${verdict ? `<p class="note ${wr.status === "no_help" ? "warn" : ""}" id="waterVerdict">${verdict}</p>` : ""}
+      ${ws.length ? `<ul class="list">${ws.map(wrow).join("")}</ul>` : ""}
+      ${rest.length ? `<details class="wrest"><summary>${t(wr.status === "ok" ? "water.zero" : "water.dry")}: ${rest.length}</summary><ul class="list">${rest.map(w => `<li class="row"><div class="grow"><b>${esc(w.plot)}</b><small>${t("water.opens", { n: fmt(w.sheep) })} ${src("model")}</small></div><div class="btns">${addBtn(w)}</div></li>`).join("")}</ul></details>` : ""}
+      ${nobs.length ? `<p class="note warn">${t("water.people", { l: nobs.map(([id, n]) => `${esc(id)} (${n})`).join(", ") })} ${src("people")}</p>` : ""}
       ${added.length ? `<h3>${t("water.added")} ${src("input")}</h3><ul class="list">${added.map(id => `<li class="row"><div class="grow"><b>${esc(id)}</b></div>
         <div class="btns"><button class="btn btn-ghost btn-sm" data-rm="${id}">${ic("x")} ${t("water.remove")}</button></div></li>`).join("")}</ul>
         <p class="note">${t("water.effect", { a: fmt(J.hayTonnes(before.deficit_kg, S.P)), b: fmt(J.hayTonnes(S.pl.deficit_kg, S.P)), c: before.overloaded, d: S.pl.overloaded })}</p>${sim}` : ""}
       <p class="note">${t("water.note")}</p>${statusList}`;
     el.querySelectorAll("[data-add]").forEach(b => b.onclick = () => toggleWater(b.dataset.add, true));
     el.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => toggleWater(b.dataset.rm, false));
+    el.querySelectorAll("[data-wc]").forEach(x => x.onchange = () => {
+      const all = C.ls.get(wcKey(), {}) || {}, c = wcheck(x.dataset.wc), fld = x.dataset.f;
+      c[fld] = fld === "cost" ? Math.max(0, Math.min(1e10, Math.round(+x.value || 0))) : x.value;
+      if (c.right || c.source || c.cost) all[x.dataset.wc] = c; else delete all[x.dataset.wc];
+      C.ls.set(wcKey(), all);
+      const key = `[data-wc="${x.dataset.wc}"][data-f="${fld}"]`, y = el.scrollTop, y2 = scrollY, pp = el.parentElement.scrollTop;
+      paneWater(el);
+      const n = $(key, el); if (n) { n.closest("details").open = true; n.focus({ preventScroll: true }); }
+      el.scrollTop = y; el.parentElement.scrollTop = pp; scrollTo(0, y2);
+    });
   }
 
   function panePlots(el) {
@@ -1908,7 +1952,7 @@
     const shortHerds = S.herds.filter(h => S.pl.coverage && S.pl.coverage[h.id] < Sd - 0.5);
     const deficitT = J.hayTonnes(S.pl.deficit_kg, S.P);
     const excessAU = Object.values(S.pl.unmet || {}).reduce((s, x) => s + x, 0) / Sd;
-    const well = J.wells(S.plots, S.P)[0];
+    const wr = wellRank(), well = wr.status === "ok" ? wr.list[0] : null;
     const near = S.plots.filter(p => p.ring === "near" && (p.series || []).length >= 2);
     const trend = near.length ? near.reduce((s, p) => s + (p.series[p.series.length - 1].v - p.series[0].v) / p.series[0].v, 0) / near.length * 100 : null;
     return { Sd, water, capAU, au, ratio, worst, shortHerds, deficitT, excessAU, well, trend };
@@ -1934,13 +1978,13 @@
       for (const h of b.shortHerds.slice(0, 3)) lines.push(t("brief.herdShort", { name: esc(h.name), d: `<b>${Math.round(S.pl.coverage[h.id])}</b>`, season: b.Sd }));
       lines.push(t("brief.needLess", { au: fmt(b.excessAU), sheep: fmt(sheepOf(b.excessAU)), t: fmt(b.deficitT) }));
     }
-    if (b.well) lines.push(t("brief.well", { id: `<b>${esc(b.well.plot)}</b>`, n: fmt(b.well.sheep) }));
+    if (b.well) lines.push(t("brief.well", { id: `<b>${esc(b.well.plot)}</b>`, t: fmt(b.well.gain_t), n: b.well.better.length }));
     if (b.trend != null && Math.abs(b.trend) >= 3) lines.push(t("brief.trend", { year: S.D.source.year, dir: b.trend < 0 ? t("brief.trendDown") : t("brief.trendUp"), p: Math.abs(Math.round(b.trend)) }));
     const todo = [];
     const chk = Object.entries(obsNow()).filter(([, g]) => g.verdict === "check").map(([id]) => id);
     if (chk.length) todo.push(t("obs.todo", { ids: esc(chk.join(", ")) }));
     if (S.cur.overloaded > 0) todo.push(t("brief.do.plan"));
-    if (b.well && (b.deficitT >= 1 || b.ratio > 0.8)) todo.push(t("brief.do.well", { id: esc(b.well.plot) }));
+    if (b.well) todo.push(t("brief.do.well", { id: esc(b.well.plot) }));
     if (b.deficitT >= 1) todo.push(t("brief.do.reduce"));
     todo.push(t("brief.do.bot"));
     todo.push(t("brief.do.calib"));
@@ -2034,7 +2078,7 @@
     const short = S.herds.filter(h => pl.unmet[h.id]);
     const q = { high: 0, medium: 0, low: 0, none: 0 }; S.plots.forEach(p => q[confidence(p)]++);
     const why = short.map(h => `<li>${whyHerd(h, pl.diagnostics[h.id])}</li>`).join("");
-    const sg = (pl.suggestions || []).map(sgText).filter(Boolean).map(x => `<li>${x}</li>`).join("");
+    const sg = planSuggestions().map(sgText).filter(Boolean).map(x => `<li>${x}</li>`).join("");
     const wr = (pl.warnings || []).map(wrText).filter(Boolean).map(x => `<li>${x}</li>`).join("");
     const worst = Object.keys(pl.load).filter(id => pl.load[id].used > 0).sort((a, b) => pl.load[b].used - pl.load[a].used)[0] || S.plots[0].id;
     return `<div class="result ${ok ? "res-ok" : "res-short"}" role="status">
@@ -2196,7 +2240,7 @@
       метаданные: M.metaOf(S.D),
       причины_дефицита: S.herds.filter(h => S.pl.unmet[h.id]).map(h => ({ стадо: h.name, причина: S.pl.diagnostics[h.id].reason,
         исключённые_участки: S.pl.diagnostics[h.id].excluded, не_хватает_дней: Math.round(S.P.season_days - S.pl.coverage[h.id]) })),
-      что_можно_изменить: (S.pl.suggestions || []).map(sgText).map(x => x.replace(/<[^>]+>/g, "")),
+      что_можно_изменить: planSuggestions().map(sgText).map(x => x.replace(/<[^>]+>/g, "")),
       предупреждения: (S.pl.warnings || []).map(wrText).map(x => x.replace(/<[^>]+>/g, "")),
       норма_нагрузки_МСХ: (n => (n ? { источник: NM.SOURCE.title, область: regName(n.region), тип_пастбища: n.soft ? "не выбран — взята самая мягкая норма области" : n.type,
         состояние: n.state === "degraded" ? "деградированные" : "восстановленные", норма_га_на_овцу: +(n.au_ha * S.P.au.sheep).toFixed(2),
@@ -2226,7 +2270,8 @@
       итог: { перегружено_если_все_у_села: S.cur.overloaded, перегружено_по_плану: S.pl.overloaded,
         сено_сверх_нормы_т_если_все_у_села_оценка: Math.round(J.hayTonnes(S.cur.deficit_kg, S.P)), дефицит_сена_т_по_плану_оценка: Math.round(b.deficitT),
         чтобы_корма_хватило_сократить_на_усл_голов: Math.round(b.excessAU), чтобы_корма_хватило_сократить_на_овец: Math.round(sheepOf(b.excessAU)) },
-      лучшие_места_для_водопоя: J.wells(S.plots, S.P).slice(0, 3).map(w => ({ участок: w.plot, откроет_корм_овец_оценка: Math.round(w.sheep) })),
+      где_проверять_воду: (r => ({ вывод: { no_herds: "стада не внесены", no_deficit: "корма хватает: новый водопой сейчас корма не добавит", no_help: "корма не хватает, но ни один новый водопой дефицит не уменьшит", ok: "участки по снижению дефицита" }[r.status],
+        участки: r.status !== "ok" ? [] : r.list.filter(w => w.gain_t).slice(0, 3).map(w => ({ участок: w.plot, дефицит_сена_меньше_на_т_оценка: Math.round(w.gain_t), стад_станет_лучше: w.better.length, стад_станет_хуже: w.worse.length || undefined, проверено_людьми: wcText(w.plot) })) }))(wellRank()),
       // почему план такой: проверяемые факты движка по каждому стаду (engine.explainPlan)
       почему_план: Object.values(J.explainPlan(S.plots, S.herds, S.pl, S.P)),
       погода: S.wx && !S.wx.fail ? { осадки_30_дней_мм: Math.round(S.wx.rain30), прогноз_7_дней: S.wx.next.map(x => `${x.d}: ${Math.round(x.tmin)}..${Math.round(x.tmax)}°C, ${x.p} мм`) } : null,
@@ -2460,7 +2505,7 @@
     return { t, fmt, fmt1, pct, esc, src, J, M, S, scheme, loadColor, confidence, summary: summary(), trend: trendLine(), lang: I.lang,
       norm: (n => { if (!n) return ""; const tt = normTotals(S.plots), kv = fmt2(n.au_ha * S.P.au.sheep);
         return `${t("nm.source")}. ${n.soft ? t("nm.noteSoft", { r: esc(regName(n.region)), n: kv }) : t("nm.noteRow", { ty: esc(n.type), n: kv, s: t(n.state === "degraded" ? "nm.degraded" : "nm.restored") })} ${t("nm.sum", { sat: fmt(tt.sat), norm: fmt(tt.norm), cap: fmt(tt.cap) })} ${t("nm.sumK", { k: tt.limited, n: tt.n })}`; })(NM && NM.pick(S.normSel)),
-      meta: M.metaOf(S.D), scenarios: scen, variantName, sgText, wrText, whyHerd, dateStr, algoLine, bottleneckHtml };
+      wells: wellRank(), wcText, planSuggestions, meta: M.metaOf(S.D), scenarios: scen, variantName, sgText, wrText, whyHerd, dateStr, algoLine, bottleneckHtml };
   }
 
   // Келісім — согласование плана между дворами (js/kelisim-ui.js)

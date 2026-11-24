@@ -47,7 +47,7 @@
     const demandAUd = S.herds.reduce((s, h) => s + J.herdAU(h, P) * P.season_days, 0);
     const unmetAUd = Object.values(S.pl.unmet || {}).reduce((s, x) => s + x, 0);
     const statusText = S.pl.status === "feasible" ? t("res.feasible") : S.pl.status === "no_demand" ? t("ov.noherds") : S.pl.status === "infeasible" ? t("res.infeasible") : t("res.partial");
-    const wells = J.wells(S.plots, P);
+    const wr = c.wells || J.wellRank(S.plots, S.herds, P), wells = wr.list.filter(w => w.gain_t > 0);
     const scen = c.scenarios || [];
 
     return `<div style="font:11.5px/1.45 Inter,Arial,sans-serif;color:#111;width:720px">
@@ -125,10 +125,10 @@
       ${h2(t("rep.unmet"))}
       ${unmetAUd > 0.5 ? `<p>${t("res.whereLine", { t: fmt(hp), names: S.herds.filter(h => S.pl.unmet[h.id]).map(h => esc(h.name)).join(", ") })}</p>
         <ul style="margin:0;padding-left:18px">${S.herds.filter(h => S.pl.unmet[h.id]).map(h => `<li>${c.whyHerd ? c.whyHerd(h, S.pl.diagnostics[h.id]) : esc(h.name)} — ${fmt(S.pl.unmet[h.id])} ${t("unit.au_days")}</li>`).join("")}</ul>
-        <p><b>${t("res.change")}:</b> ${(S.pl.suggestions || []).map(s => c.sgText ? c.sgText(s) : s.type).join(" ")}</p>` : `<p>${t("rep.none")}</p>`}
+        <p><b>${t("res.change")}:</b> ${(c.planSuggestions ? c.planSuggestions() : S.pl.suggestions || []).map(s => c.sgText ? c.sgText(s) : s.type).join(" ")}</p>` : `<p>${t("rep.none")}</p>`}
 
       ${h2(t("water.title"))}
-      <p>${wells.length ? wells.map(w => `${esc(w.plot)}: ${t("water.opens", { n: fmt(w.sheep) })}`).join("; ") : t("water.none")} ${tag("model")}</p>
+      ${wells.length ? `<ul style="margin:0;padding-left:18px">${wells.map(w => `<li>${esc(w.plot)}: ${t("water.gain", { t: fmt(w.gain_t), d: fmt(wr.deficit_t) })}, ${t("water.better", { n: w.better.length })}. ${c.wcText ? esc(c.wcText(w.plot)) : ""}</li>`).join("")}</ul>` : `<p>${!wr.list.length && wr.status !== "no_help" ? t("water.none") : t("water.st." + wr.status, { t: fmt(wr.deficit_t) })}</p>`}${tag("model")} ${tag("input")}
       ${S.added.size ? `<p><b>${t("water.added")}:</b> ${[...S.added].map(esc).join(", ")} ${tag("input")}</p>` : ""}
       <p style="font-size:10px;color:#555">${t("water.check")}</p>
 
