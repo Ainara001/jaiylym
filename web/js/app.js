@@ -1539,7 +1539,9 @@
   const herdName = id => { const h = S.herds.find(x => x.id === id); return h ? esc(h.name) : esc(id); };
   /** Доказательство узкого места (минимальный разрез): кому, где и сколько не хватает — можно проверить сложением. */
   function bottleneckHtml(g) {
-    const exc = Object.entries(g.excluded || {}).filter(([, ids]) => ids.length).map(([r, ids]) => `${t("rsn." + r)}: ${plotIds(ids)}`).join("; ");
+    // если причина касается не всех стад группы (например, только дойных) — называем, каких именно
+    const whoFor = r => { const ids = (g.excluded_for || {})[r] || []; return ids.length && ids.length < g.herds.length ? ` (${t("bn.for")} ${ids.map(herdName).join(", ")})` : ""; };
+    const exc = Object.entries(g.excluded || {}).filter(([, ids]) => ids.length).map(([r, ids]) => `${t("rsn." + r)}${whoFor(r)}: ${plotIds(ids)}`).join("; ");
     return `<h4>${t("res.bottleneck")}</h4><p>${t("bn.line", { herds: g.herds.map(herdName).join(", "), plots: plotIds(g.plots) || "—",
       need: fmt(g.demand_au_days), cap: fmt(g.capacity_au_days), short: fmt(g.shortfall_au_days), t: fmt(J.hayTonnes(g.shortfall_au_days * S.P.intake, S.P)) })}
       ${g.window_limited_au_days > 0.5 ? t("bn.window", { w: fmt(g.window_limited_au_days) }) : ""} ${exc ? t("bn.excluded", { r: exc }) : ""} ${src("model")}</p>`;
@@ -1674,7 +1676,9 @@
       доли_обеспеченности_проц: S.pl.shares ? Object.fromEntries(S.herds.filter(h => S.pl.shares[h.id] != null).map(h => [h.name, Math.round(S.pl.shares[h.id] * 100)])) : null,
       узкое_место: S.pl.bottleneck && S.pl.bottleneck.groups.length ? (g => ({ стада: g.herds.map(id => (S.herds.find(h => h.id === id) || {}).name || id),
         доступные_им_участки: g.plots, потребность_усл_гол_сут: Math.round(g.demand_au_days), ёмкость_этих_участков_усл_гол_сут: Math.round(g.capacity_au_days),
-        не_хватает_усл_гол_сут: Math.round(g.shortfall_au_days), почему_другие_участки_недоступны: g.excluded }))(S.pl.bottleneck.groups[0]) : null,
+        не_хватает_усл_гол_сут: Math.round(g.shortfall_au_days),
+        почему_другие_участки_недоступны: Object.fromEntries(Object.entries(g.excluded || {}).map(([r, ids]) => [r, { участки: ids,
+          для_стад: ((g.excluded_for || {})[r] || []).map(id => (S.herds.find(h => h.id === id) || {}).name || id) }])) }))(S.pl.bottleneck.groups[0]) : null,
       модель_проверена_в_поле: M.fieldValidated(S.P), демо_стада: S.herds.some(h => h.demo),
       метаданные: M.metaOf(S.D),
       причины_дефицита: S.herds.filter(h => S.pl.unmet[h.id]).map(h => ({ стадо: h.name, причина: S.pl.diagnostics[h.id].reason,
@@ -1875,7 +1879,8 @@
     onRoute();
     if (C.loggedIn) { try { await C.me(); } catch (_) {} renderAccount(); if (S.D) { addOwnFarm(); render(); } if (["profile", "coord", "scenarios"].includes(S.route)) onRoute(); }
     else renderAccount();
-    if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+    // офлайн-кэш: на https и на локальном сервере (безопасный контекст — так офлайн-режим проверяется автотестом)
+    if ("serviceWorker" in navigator && (location.protocol === "https:" || /^(localhost|127\.0\.0\.1)$/.test(location.hostname))) navigator.serviceWorker.register("sw.js").catch(() => {});
   }
 
   // данные для PDF-отчёта
