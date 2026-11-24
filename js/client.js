@@ -3,7 +3,8 @@
  * Гость: сценарии и история хранятся в этом браузере и так и подписаны в интерфейсе. */
 (function () {
   "use strict";
-  const API = "https://jaiylym-bot.onrender.com";
+  // адрес сервера; JAIYLYM_API_URL — только для автотестов (запросы на тот же адрес, без CORS)
+  const API = (typeof window !== "undefined" && window.JAIYLYM_API_URL) || "https://jaiylym-bot.onrender.com";
   const TOKEN_KEY = "jaiylym:session";
   const ls = {
     get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } },
