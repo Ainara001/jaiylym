@@ -50,6 +50,16 @@
     el.classList.toggle("err", err);
     el.innerHTML = msg ? (busy ? '<span class="spin" aria-hidden="true"></span>' : "") + `<span>${esc(msg)}</span>` : "";
   }
+  // плашка: белый или тёмный текст — что контрастнее; если ни то, ни другое не даёт 4,5:1 — фон темнее на 15 %
+  const lumOf = hex => { const v = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(c => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)); return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; };
+  const ratio = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  function pillStyle(bg) {
+    const L = lumOf(bg), wh = ratio(L, 1), dk = ratio(L, lumOf("#1b2a21"));
+    if (wh >= 4.5) return `background:${bg};color:#fff`;
+    if (dk >= 4.5) return `background:${bg};color:#1b2a21`;
+    const d = "#" + [1, 3, 5].map(i => Math.round(parseInt(bg.slice(i, i + 2), 16) * 0.85).toString(16).padStart(2, "0")).join("");
+    return `background:${d};color:#fff`;
+  }
   const loadColor = x => (x == null ? "#d9d2bf" : !x ? "#9aa29a" : x <= 0.7 ? "#3e8e5a" : x <= 1 ? "#c9970f" : "#bf4a2a");
   const ndviColor = v => (v == null ? "#9aa29a" : v < 0.18 ? "#8c510a" : v < 0.25 ? "#d8b56a" : v < 0.32 ? "#9fd068" : "#2f9a4b");
   // Качество спутникового измерения (единое правило web/model.js) — НЕ достоверность числа овец
@@ -983,7 +993,7 @@
         ${hasNg ? `<td class="num" data-l="${esc(t("plots.nograze"))}">${p.nograze_ha != null ? fmt1(p.nograze_ha) : "—"}</td>` : ""}
         ${hasComp ? `<td class="num" data-l="${esc(t("plots.comp"))}">${fmt(p.excluded_ha || 0)} / ${fmt(p.uncertain_ha || 0)}</td>` : ""}
         <td class="num" data-l="${esc(t("plots.ndvi"))}">${p.ndvi ?? "—"}</td><td class="num" data-l="${esc(t("plots.cap"))}">${sheepCap(c)}</td>
-        <td class="num pt-load" data-l="${esc(t("plots.load"))}"><span class="loadpill" style="background:${ld.known ? loadColor(ld.load) : loadColor(null)}">${!ld.known ? "?" : ld.used ? pct(ld.load) : "—"}</span></td><td data-l="${esc(t("plots.quality"))}">${confTag(p)}</td><td data-l="${esc(t("plots.forage"))}">${fcTag(p)}</td>
+        <td class="num pt-load" data-l="${esc(t("plots.load"))}"><span class="loadpill" style="${pillStyle(ld.known ? loadColor(ld.load) : loadColor(null))}">${!ld.known ? "?" : ld.used ? pct(ld.load) : "—"}</span></td><td data-l="${esc(t("plots.quality"))}">${confTag(p)}</td><td data-l="${esc(t("plots.forage"))}">${fcTag(p)}</td>
         <td class="pt-water" data-l="${esc(t("plots.water"))}" style="white-space:normal;min-width:110px"><small>${esc(wsLabel(p))}</small></td></tr>`; }).join("")}
       </tbody></table></div><p class="srcrow" style="margin-top:10px">${t("plots.ha")}, NDVI: ${src("sat")} &nbsp; ${t("plots.cap")}, ${t("plots.load")}: ${src("model")} &nbsp; ${t("plots.water")}: ${src("sat")} ${src("input")} ${src("model")}</p>
       <p class="fine">${t("plots.qualityNote")}</p>${hasNg ? `<p class="fine">${t("plots.nograzeNote", { b: S.ngBuf })} ${src("osm")}</p>` : ""}${hasComp ? `<p class="fine">${t("plots.compNote")}</p>` : ""}`;
@@ -2033,7 +2043,8 @@
   // ---------- главная ----------
   let heroMap = null;
   function renderHome() {
-    const plots = DEFAULT.plots.map(p => Object.assign({}, p));
+    // те же данные, что на карте: пастбище без жилья, ферм и промзон (OSM)
+    const plots = (NG && DEFAULT.nograze && DEFAULT.nograze.status === "ok" ? NG.apply(DEFAULT.plots, DEFAULT.nograze, S.ngBuf) : DEFAULT.plots).map(p => Object.assign({}, p));
     const pl = J.solve(plots, DEMO_HERDS);
     if (window.L && !heroMap) {
       heroMap = L.map("heroMap", { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, touchZoom: false, tap: false });
