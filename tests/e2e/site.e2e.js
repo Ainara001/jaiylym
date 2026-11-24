@@ -201,6 +201,66 @@ async function offline(browser, label) {
   await ctx.close();
 }
 
+/** Вход по выбору: логин и пароль (регистрация) или Telegram. Сервер подменён: регистрация, занятый логин, профиль. */
+async function accountFlow(page, label) {
+  const errors = [];
+  page.on("pageerror", e => errors.push(e.message));
+  await stubNetwork(page);
+  const user = { uid: "aTest", name: "Айгерим", login: "+77011234567", via: "password", role: "farmer", created: "2026-11-24T10:00:00Z", farm: null, pastures: [], villages: [] };
+  let regBody = null;
+  const reqs = [], logs = [];
+  page.on("request", r => { if (/__api|onrender/.test(r.url())) reqs.push(r.method() + " " + r.url().replace(/^https?:\/\/[^/]+/, "")); });
+  page.on("console", m => logs.push(m.type() + ": " + m.text().slice(0, 150)));
+  // сервер — на том же адресе, что и сайт (/__api): WebKit в Playwright не перехватывает предварительный CORS-запрос к другому домену
+  await page.addInitScript(() => { window.JAIYLYM_API_URL = location.origin + "/__api"; });
+  const reply = (r, status, data) => r.fulfill({ status, contentType: "application/json", body: JSON.stringify(data) });
+  await page.route(/\/__api\//, r => reply(r, 404, {}));   // остальное — 404 (маршруты ниже приоритетнее: Playwright берёт последний)
+  await page.route(/\/__api\/auth\/register/, r => {
+    regBody = JSON.parse(r.request().postData());
+    return regBody.login === "taken_login" ? reply(r, 409, { error: "занят", field: "login" }) : reply(r, 200, { status: "ok", token: "t".repeat(40), user }); });
+  await page.route(/\/__api\/(api\/me|auth\/logout)$/, r => reply(r, 200, r.request().url().endsWith("/api/me") ? user : { ok: true }));
+  await page.route(/\/__api\/auth\/start/, r => reply(r, 200, { nonce: "n".repeat(30), code: "4821", link: "https://t.me/JAIYLYM_bot?start=login_x" }));
+  await page.goto(base + "#/home");
+  await page.waitForSelector("#accountBtn");
+  await page.click("#accountBtn");
+  await page.waitForSelector("#loginDlg[open] #pwForm");
+  assert.match(await page.textContent("#loginDlg"), /Войти через Telegram/, label + ": Telegram — второй способ");
+  assert.match(await page.textContent("#loginDlg"), /Telegram не обязателен/);
+  // регистрация: проверка до сервера, затем занятый логин, затем успех
+  await page.click('.acct-tabs [data-mode="register"]');
+  await page.fill('#pwForm [name="name"]', "Айгерим");
+  await page.fill('#pwForm [name="login"]', "taken_login");
+  await page.fill('#pwForm [name="password"]', "123");
+  await page.click("#pwGo");
+  assert.match(await page.textContent("#pwErr"), /не короче 8/, label + ": короткий пароль — сразу, без сервера");
+  await page.fill('#pwForm [name="password"]', "pastbishe-2026");
+  await page.click("#pwGo");
+  await page.waitForFunction(() => /уже зарегистрирован/.test(document.querySelector("#pwErr").textContent), null, { timeout: 15000 }).catch(async e => {
+    const st = await page.evaluate(() => ({ err: document.querySelector("#pwErr").textContent, hidden: document.querySelector("#pwErr").hidden, go: document.querySelector("#pwGo").textContent, api: window.JAIYLYM_API_URL }));
+    throw new Error(label + ": нет ошибки «занят»: " + JSON.stringify(st) + " запросы: " + reqs.join(" ") + " консоль: " + logs.join(" | "));
+  });
+  await page.click("#pwShow");
+  assert.equal(await page.getAttribute('#pwForm [name="password"]', "type"), "text", label + ": «Показать» пароль");
+  await page.fill('#pwForm [name="login"]', "8 701 123 45 67");
+  await page.click("#pwGo");
+  await page.waitForFunction(() => !document.querySelector("#loginDlg").open);
+  assert.equal(regBody.name, "Айгерим");
+  assert.match(await page.textContent("#accountLabel"), /Айгерим/, label + ": после регистрации — имя в шапке");
+  // профиль: логин вместо Telegram ID
+  await page.goto(base + "#/profile");
+  await page.waitForFunction(() => /\+77011234567/.test(document.querySelector("#prPage").textContent));
+  // выход → окно входа → Telegram и назад
+  await page.click("#prLogout");
+  await page.waitForFunction(() => /Вход|Войти/.test(document.querySelector("#accountLabel").textContent));
+  await page.click("#accountBtn");
+  await page.waitForSelector("#loginDlg[open] #tgGo");
+  await page.click("#tgGo");
+  await page.waitForSelector("#lgBack");
+  await page.click("#lgBack");
+  await page.waitForSelector("#loginDlg[open] #pwForm");
+  assert.deepEqual(errors, [], label + ": ошибки JavaScript");
+}
+
 for (const name of BROWSERS) {
   const skip = !pw && "playwright не установлен";
   // WebKit в Playwright при эмуляции офлайна не грузит страницу из service worker («internal error» на reload/goto,
@@ -209,6 +269,12 @@ for (const name of BROWSERS) {
   test(`${name}: офлайн — оболочка и Кеген из кэша, новое село — «нет сети»`, { skip: offSkip, timeout: 120000 }, async () => {
     const b = await pw[name].launch();
     try { await offline(b, name + " офлайн"); } finally { await b.close(); }
+  });
+  test(`${name}: вход по выбору — логин и пароль или Telegram`, { skip, timeout: 60000 }, async () => {
+    const b = await pw[name].launch();
+    try { const dev = Object.assign({}, pw.devices["iPhone 13"]); if (name !== "webkit") delete dev.defaultBrowserType;
+      // service worker сайта сам делает запросы — их Playwright не перехватывает (в WebKit заглушка сервера не срабатывала)
+      await accountFlow(await (await b.newContext(Object.assign(dev, { serviceWorkers: "block" }))).newPage(), name); } finally { await b.close(); }
   });
   test(`${name}: ИИ-чат по прямой ссылке видит село`, { skip, timeout: 60000 }, async () => {
     const b = await pw[name].launch();

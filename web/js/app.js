@@ -175,6 +175,7 @@
   }
 
   function drawVillage() {
+    { const tr = $("#toResult"); if (tr) tr.hidden = !S.D; }
     S.layers = {};
     if (S.noLeaflet || !S.map) return;   // нет карты: запасная схема рисуется в paintMap(); село для ИИ-чата — дорисуем при переходе
     S.group.clearLayers();
@@ -337,7 +338,7 @@
       <p style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:14px">
         <button class="btn btn-ghost" id="pCancel">${t("common.cancel")}</button>
         ${C.loggedIn ? `<button class="btn btn-primary" id="pSave">${ic("save")} ${t("past.save")}</button>`
-          : `<button class="btn btn-tg" id="pSave">${ic("send")} ${t("past.loginSave")}</button>`}</p>`;
+          : `<button class="btn btn-primary" id="pSave">${ic("user")} ${t("past.loginSave")}</button>`}</p>`;
     document.body.appendChild(d);
     const close = () => { d.close(); };
     d.addEventListener("close", () => { preview.remove(); d.remove(); });
@@ -1383,21 +1384,82 @@
   }
 
   // ---------- вход ----------
+  // Два равноправных способа: логин и пароль (регистрация на сайте) или Telegram (без пароля, с уведомлениями в боте).
   let pollTimer = null;
-  async function openLogin() {
+  const spin = `<span class="spin" style="width:16px;height:16px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite"></span>`;
+  function acctErr(e) {
+    if (e && (e.message === "offline" || e.message === "network")) return e.message === "offline" ? t("err.offline") : t("login.fail");
+    if (e && e.status === 409) return t("acct.e.taken");
+    if (e && e.status === 401) return t("acct.e.bad");
+    if (e && e.status === 429) return t("acct.e.many");
+    if (e && e.status === 400) return t({ password: "acct.e.password", name: "acct.e.name" }[e.field] || "acct.e.login");
+    return errText(e);
+  }
+  function openLogin(mode) {
     const dlg = $("#loginDlg"), body = $("#loginBody");
     clearTimeout(pollTimer);
-    body.innerHTML = `<p>${t("pr.login.d")}</p><div class="waiting"><span class="spin" style="width:16px;height:16px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite"></span><span id="lgWait">${t("login.wait")}</span></div>`;
+    const reg = mode === "register";
+    $("#loginTitle").textContent = t("acct.title");
+    body.innerHTML = `<div class="seg acct-tabs" role="tablist" aria-label="${t("acct.title")}">
+        <button type="button" role="tab" aria-selected="${!reg}" data-mode="login">${t("acct.tabLogin")}</button>
+        <button type="button" role="tab" aria-selected="${reg}" data-mode="register">${t("acct.tabRegister")}</button></div>
+      <form id="pwForm" class="pwform" novalidate>
+        ${reg ? `<label class="field">${t("acct.name")}<input name="name" autocomplete="name" maxlength="80" required></label>` : ""}
+        <label class="field">${t("acct.login")}<input name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required placeholder="${t("acct.loginPh")}"></label>
+        <label class="field">${t("acct.password")}<span class="pw-wrap"><input name="password" type="password" autocomplete="${reg ? "new-password" : "current-password"}" required>
+          <button type="button" class="btn btn-ghost btn-sm" id="pwShow" aria-pressed="false">${t("acct.show")}</button></span></label>
+        ${reg ? `<p class="fine">${t("acct.pwHint")}</p>` : ""}
+        <p class="note warn" id="pwErr" role="alert" hidden></p>
+        <button class="btn btn-primary wide" id="pwGo">${t(reg ? "acct.doRegister" : "acct.doLogin")}</button>
+      </form>
+      <div class="or" aria-hidden="true"><span>${t("acct.or")}</span></div>
+      <button type="button" class="btn btn-tg wide" id="tgGo">${ic("send")} ${t("acct.viaTg")}</button>
+      <p class="fine" style="margin-top:12px">${t("acct.note")}</p>`;
+    if (!dlg.open) dlg.showModal();
+    $$(".acct-tabs [data-mode]", body).forEach(b => b.onclick = () => openLogin(b.dataset.mode));
+    $("#tgGo").onclick = openTelegramLogin;
+    const pw = $('#pwForm [name="password"]');
+    $("#pwShow").onclick = e => { const on = pw.type === "password"; pw.type = on ? "text" : "password"; e.currentTarget.setAttribute("aria-pressed", on); e.currentTarget.textContent = t(on ? "acct.hide" : "acct.show"); };
+    const first = $('#pwForm input'); if (first) setTimeout(() => first.focus(), 30);
+    $("#pwForm").onsubmit = async e => {
+      e.preventDefault();
+      const f = e.target, err = $("#pwErr"), go = $("#pwGo");
+      const v = k => (f.elements[k] ? f.elements[k].value.trim() : "");
+      const fail = msg => { err.textContent = msg; err.hidden = false; };
+      err.hidden = true;
+      // проверки до сервера — те же правила, что на сервере
+      if (reg && !v("name")) return fail(t("acct.e.name"));
+      if (!v("login")) return fail(t("acct.e.login"));
+      if (reg && f.elements.password.value.length < 8) return fail(t("acct.e.password"));
+      if (!f.elements.password.value) return fail(t("acct.e.bad"));
+      go.disabled = true; const label = go.innerHTML; go.innerHTML = `${spin} ${t("login.wait2")}`;
+      const wake = setTimeout(() => { go.innerHTML = `${spin} ${t("login.wake")}`; }, 4000);
+      try {
+        if (reg) await C.register(v("name"), v("login"), f.elements.password.value);
+        else await C.loginPw(v("login"), f.elements.password.value);
+        clearTimeout(wake); dlg.close(); toast(t(reg ? "acct.welcome" : "login.ok")); await afterAuthChange();
+      } catch (ex) { clearTimeout(wake); go.disabled = false; go.innerHTML = label; fail(acctErr(ex)); }
+    };
+  }
+  async function openTelegramLogin() {
+    const dlg = $("#loginDlg"), body = $("#loginBody");
+    clearTimeout(pollTimer);
+    $("#loginTitle").textContent = t("login.title");
+    const back = `<button type="button" class="linkbtn" id="lgBack">← ${t("acct.back")}</button>`;
+    const bindBack = () => { const b = $("#lgBack"); if (b) b.onclick = () => openLogin(); };
+    body.innerHTML = `${back}<p>${t("pr.login.d")}</p><div class="waiting">${spin}<span id="lgWait">${t("login.wait")}</span></div>`;
+    bindBack();
     if (!dlg.open) dlg.showModal();
     const wake = setTimeout(() => { const w = $("#lgWait"); if (w) w.textContent = t("login.wake"); }, 4000);
     let st;
     try { st = await C.startLogin(); }
-    catch (e) { clearTimeout(wake); body.innerHTML = `<p class="note warn">${t("login.fail")}</p><button class="btn btn-ghost" id="lgAgain">${t("login.again")}</button>`; $("#lgAgain").onclick = openLogin; return; }
+    catch (e) { clearTimeout(wake); body.innerHTML = `${back}<p class="note warn">${t("login.fail")}</p><button class="btn btn-ghost" id="lgAgain">${t("login.again")}</button>`; bindBack(); $("#lgAgain").onclick = openTelegramLogin; return; }
     clearTimeout(wake);
-    body.innerHTML = `<ol class="steps-ol"><li>${t("login.step1")}</li><li>${t("login.step2")}</li></ol>
+    body.innerHTML = `${back}<ol class="steps-ol"><li>${t("login.step1")}</li><li>${t("login.step2")}</li></ol>
       <div class="code" aria-label="${t("login.code")}">${esc(st.code)}</div>
       <a class="btn btn-tg wide" href="${esc(st.link)}" target="_blank" rel="noopener">${ic("send")} ${t("login.open")}</a>
-      <div class="waiting" id="lgState"><span class="spin" style="width:16px;height:16px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite"></span>${t("login.wait")}</div>`;
+      <div class="waiting" id="lgState">${spin}${t("login.wait")}</div>`;
+    bindBack();
     const started = Date.now();
     const poll = async () => {
       if (!dlg.open) return;
@@ -1406,7 +1468,7 @@
         if (r.status === "ok") { dlg.close(); toast(t("login.ok")); await afterAuthChange(); return; }
         if (r.status === "denied" || r.status === "expired") {
           $("#lgState").innerHTML = `<span>${t(r.status === "denied" ? "login.denied" : "login.expired")}</span> <button class="btn btn-ghost btn-sm" id="lgAgain">${t("login.again")}</button>`;
-          $("#lgAgain").onclick = openLogin; return;
+          $("#lgAgain").onclick = openTelegramLogin; return;
         }
       } catch (_) { /* временная ошибка сети — пробуем дальше */ }
       if (Date.now() - started < 600000) pollTimer = setTimeout(poll, 2500);
@@ -1434,8 +1496,13 @@
     const el = $("#prPage"), u = C.user;
     if (!u) {
       el.innerHTML = `<div class="card"><h2>${ic("user")} ${t("pr.guest.t")}</h2><p>${t("pr.guest.d")}</p></div>
-        <div class="card"><h2>${ic("send")} ${t("pr.login.t")}</h2><p>${t("pr.login.d")}</p><button class="btn btn-tg" id="prLogin">${ic("send")} ${t("auth.login")}</button></div>`;
-      $("#prLogin").onclick = openLogin;
+        <div class="card"><h2>${ic("user")} ${t("acct.title")}</h2><p>${t("acct.guestD")}</p>
+          <p style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" id="prReg">${t("acct.tabRegister")}</button>
+          <button class="btn btn-ghost" id="prLogin">${t("acct.tabLogin")}</button>
+          <button class="btn btn-tg" id="prTg">${ic("send")} ${t("acct.viaTg")}</button></p></div>`;
+      $("#prReg").onclick = () => openLogin("register");
+      $("#prLogin").onclick = () => openLogin("login");
+      $("#prTg").onclick = openTelegramLogin;
       return;
     }
     const f = u.farm || { name: "", village: null, sheep: 0, goats: 0, cattle: 0, horses: 0, daily_return: false, home: "Б-С", plots: [] };
@@ -1443,7 +1510,7 @@
     const initials = (u.name || "?").split(/\s+/).map(s => s[0]).join("").slice(0, 2).toUpperCase();
     el.innerHTML = `<div class="card"><div class="who"><div class="avatar">${esc(initials)}</div><div><h2 style="margin:0">${esc(u.name)}</h2>
         <span class="tag ${u.role === "coordinator" ? "tag-mine" : ""}">${t("role." + u.role)}</span></div></div>
-        <dl class="kv"><dt>${t("pr.id")}</dt><dd>${esc(u.uid)}${u.username ? " · @" + esc(u.username) : ""}</dd><dt>${t("pr.since")}</dt><dd>${when(u.created)}</dd></dl>
+        <dl class="kv">${u.via === "password" ? `<dt>${t("acct.login")}</dt><dd>${esc(u.login)}</dd>` : `<dt>${t("pr.id")}</dt><dd>${esc(u.uid)}${u.username ? " · @" + esc(u.username) : ""}</dd>`}<dt>${t("pr.since")}</dt><dd>${when(u.created)}</dd></dl>
         ${u.role !== "coordinator" ? `<p class="note">${t("pr.coordHint")}</p>` : ""}
         <p style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px"><button class="btn btn-ghost" id="prLogout">${ic("logout")} ${t("auth.logout")}</button>
         <button class="btn btn-danger" id="prDelete">${ic("trash")} ${t("pr.delete")}</button></p></div>
@@ -2118,6 +2185,8 @@
       if (el.matches && el.matches('input[type="number"]') && /^0\d/.test(el.value)) el.value = String(Math.round(+el.value));
     });
     $("#drawBtn").onclick = () => (S.draw ? endDraw() : startDraw());
+    // телефон: итог и план — под картой; кнопка на карте прокручивает к ним
+    $("#toResult").onclick = () => { const pnl = $(".panel"); if (pnl) pnl.scrollIntoView({ behavior: "smooth", block: "start" }); };
     $("#drawUndo").onclick = undoDraw;
     $("#drawCancel").onclick = endDraw;
     $("#drawDone").onclick = finishDraw;
@@ -2137,7 +2206,7 @@
       try { await window.Report.export(reportCtx()); C.addHistory({ kind: "pdf", village: S.D.village, summary: summary() }); metric("pdf"); }
       catch (e) { toast(t("rep.printFallback"), true); }
     };
-    $("#accountBtn").onclick = () => (C.loggedIn ? go("profile") : openLogin());
+    $("#accountBtn").onclick = () => (C.loggedIn ? go("profile") : openLogin("login"));
     const more = $("#moreDlg");
     $("#moreBtn").onclick = () => more.showModal();
     more.addEventListener("click", e => { if (e.target === more || e.target.closest("a")) more.close(); });
