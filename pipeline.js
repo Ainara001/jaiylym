@@ -56,7 +56,7 @@
   // ---------- поиск места ----------
   async function geocode(query) {
     const tryOnce = async extra => {
-      const u = `${NOMINATIM}?format=json&limit=5&accept-language=ru&q=${encodeURIComponent(query)}${extra}`;
+      const u = `${NOMINATIM}?format=json&limit=5&addressdetails=1&accept-language=ru&q=${encodeURIComponent(query)}${extra}`;
       const r = await fetch(u, { headers: headers() });
       if (!r.ok) throw new Error("Поиск места недоступен (" + r.status + ")");
       return r.json();
@@ -68,7 +68,16 @@
       full: x.display_name,
       lat: +(+x.lat).toFixed(5),
       lon: +(+x.lon).toFixed(5),
+      region: regionText(x.address),
     }));
+  }
+  // область: код ISO 3166-2 (KZ-59), если OSM его знает, иначе название — по нему web/norms.js выбирает норму нагрузки
+  const regionText = a => (a && (a["ISO3166-2-lvl4"] || a.state || a.region || a.city)) || "";
+  /** Область по точке (для сёл, открытых по координатам или ссылке). */
+  async function regionAt(lat, lon) {
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&zoom=8&accept-language=ru&lat=${lat}&lon=${lon}`, { headers: headers(), signal: AbortSignal.timeout(10000) });
+    if (!r.ok) throw new Error("Область не определена (" + r.status + ")");
+    return regionText((await r.json()).address);
   }
 
   /** Название места по точке (для выбора села нажатием на карту). */
@@ -775,7 +784,7 @@
     return m ? (m[1] === "N" ? "Б" : "Д") + "-" + DIRS[+m[2]] : null;
   }
 
-  return { geocode, reverseGeocode, buildVillage, buildNoGraze, noGrazeFor, loadLand, plotIndex, buildSeason, buildYears, fetchPrecip, precipByYear, seasonFromArrays, compareSeasons, plotWater, sclFromBands, NDVI_SAME_PCT, latestScene, polygonStats, latestPolygonScene, polygonAreaHa, closeRing, checkRing, ringSelfIntersects,
+  return { geocode, reverseGeocode, regionAt, buildVillage, buildNoGraze, noGrazeFor, loadLand, plotIndex, buildSeason, buildYears, fetchPrecip, precipByYear, seasonFromArrays, compareSeasons, plotWater, sclFromBands, NDVI_SAME_PCT, latestScene, polygonStats, latestPolygonScene, polygonAreaHa, closeRing, checkRing, ringSelfIntersects,
     plotCode, plotFromCode, bboxFor, makePlots, setUserAgent, summerYear, SIZE,
     LANDCOVER, LANDCOVER_YEAR, SCL_OK, SCL_NAMES, classifyLandcover, landcoverComposition, sanitizeScenes, pickScenes, boaOffset, ndviFromBands,
     mergeSameDate, medianComposite, fetchRetry, plotMeans, maskedMean, insideMask, ringBbox, polygonFromArrays, plotIndex, metaFor };
