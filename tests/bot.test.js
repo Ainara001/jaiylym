@@ -25,6 +25,10 @@ test("карта села и план: демо-стада помечены, с�
   const c = bot.getState().chats["901"];
   c.village = "43.020,79.220";
   await bot.handle({ message: { chat: { id: 901 }, from: { id: 901 }, text: "Карта села" } }, send);
+  assert.match(last(), /Стад в расчёте пока нет/, "демо-стада не входят в расчёт, пока человек сам их не выбрал");
+  assert.doesNotMatch(last(), /демо/);
+  await bot.handle({ callback_query: { id: "q", data: "herd:asan", message: { chat: { id: 901 } } } }, send);
+  await bot.handle({ message: { chat: { id: 901 }, from: { id: 901 }, text: "Карта села" } }, send);
   assert.match(last(), /демо: 5/);
   assert.match(last(), /условных демо-стад/);
   await bot.handle({ message: { chat: { id: 901 }, from: { id: 901, first_name: "Тест" }, text: "500 овец 20 коров" } }, send);
@@ -37,6 +41,21 @@ test("карта села и план: демо-стада помечены, с�
 test("неизвестная команда — подсказка, а не молчание", async () => {
   await bot.handle({ message: { chat: { id: 901 }, from: { id: 901 }, text: "/foo" } }, send);
   assert.match(last(), /Не понял/);
+});
+
+test("готовые примеры: Бесколь первый, все сёла полные (16 участков, прошлое лето, ряд, зоны)", () => {
+  const { loadExamples } = require("../data");
+  const ex = loadExamples();
+  assert.deepEqual(ex.map(d => d.village.name), ["Бесколь", "Кеген"]);
+  for (const d of ex) {
+    assert.equal(d.plots.length, 16, d.village.name);
+    assert.ok(d.plots.every(p => p.ndvi > -1 && p.ndvi < 1 && p.pasture_ha > 0), d.village.name + ": трава и площадь по каждому участку");
+    assert.equal(d.prev_season.year, d.source.year - 1);
+    assert.equal(d.multiyear.seasons.length, 8);
+    assert.equal(d.nograze.status, "ok");
+    const v = bot.getState().villages[`${d.village.lat.toFixed(3)},${d.village.lon.toFixed(3)}`];
+    assert.ok(v && v.example, "бот открывает пример без расчёта");
+  }
 });
 
 test("ИИ не ответил — бот присылает шаблон из расчёта с маршрутом и причиной выбора участка", async () => {
