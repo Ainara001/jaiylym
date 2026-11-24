@@ -131,6 +131,25 @@ async function ask(body, label) {
 
 
 
+  // Келісім: создать → двор открыл по своей ссылке → план → последствия возражения → удалить за собой
+  try {
+    const D = loadPlots(), req = (m, p, key, b) => get(API + "/api/kelisim" + p, { method: m, headers: Object.assign({ "content-type": "application/json" }, key ? { authorization: "Kelisim " + key } : {}), body: b ? JSON.stringify(b) : undefined });
+    const c = await (await req("POST", "", null, { title: "Проверка", snapshot: { village: D.village, plots: NG.apply(D.plots, D.nograze), params: {}, norm: { region: "ALM" }, source: { year: D.source.year, dates: D.source.dates, nograze: "ok" } },
+      households: [{ name: "Двор 1", herd: { sheep: 500 }, home: "Б-С" }, { name: "Двор 2", herd: { cattle: 30 }, home: "Б-Ю", daily_return: true }] })).json();
+    ok(!!c.id, "Келісім создаётся" + (c.error ? ": " + c.error : ""));
+    if (c.id) {
+      const s = (await (await req("POST", "/" + c.id + "/start", c.organizer_key, { rev: 1 })).json()).state;
+      const v = await (await req("GET", "/" + c.id, c.links[0].key)).json();
+      ok(v.me === "h1" && v.version === 1 && (v.why || []).length > 0, "Келісім: двор по личной ссылке видит свой план и причину");
+      ok(s && s.snapshot.check.status === "matched", "Келісім: снимок сверен с данными сервера (" + (s && s.snapshot.check.status) + ")");
+      const plot = v.plan.routes.h1.find(x => x.plot).plot, t0 = Date.now();
+      const e = await (await req("POST", "/" + c.id + "/preview", c.links[0].key, { proposal: { type: "avoid", plot, reason: "far" } })).json();
+      ok(e.effect && e.effect.verdict, `Келісім: последствия возражения — ${e.effect && e.effect.verdict} (${Date.now() - t0} мс)`);
+      ok((await req("GET", "/" + c.id, "x".repeat(24))).status === 403, "Келісім: чужая ссылка закрыта (403)");
+      ok((await req("DELETE", "/" + c.id, c.organizer_key)).ok, "Келісім: проверочная запись удалена");
+    }
+  } catch (e) { ok(false, "Келісім: " + e.message); }
+
   // 4. бот в Telegram
   try {
     const r = await get("https://t.me/JAIYLYM_bot");

@@ -15,6 +15,8 @@ services:
         sync: false          # Render попросит вставить токен от @BotFather
       - key: DEEPSEEK_API_KEY
         sync: false          # ключ платного API DeepSeek (platform.deepseek.com); ИИ сайта и бота
+      - key: KELISIM_SECRET
+        generateValue: true  # подпись выгрузки согласований; без него подпись зависит от TELEGRAM_TOKEN
       - key: GEMINI_API_KEY
         sync: false          # необязательно; можно оставить пустым
       - key: REDIS_URL
