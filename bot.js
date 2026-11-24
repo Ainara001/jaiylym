@@ -766,19 +766,35 @@ function villageApi(lat, lon) {
 // На своём компьютере — long polling: бот сам спрашивает Telegram о новых сообщениях.
 const PUBLIC_URL = process.env.WEBHOOK_URL || process.env.RENDER_EXTERNAL_URL || "";
 
+/** Повтор вызова при сетевой ошибке: паузы 2, 4, 8… с (до 60 с). Возвращает результат или null, если все попытки не удались. */
+async function retry(name, fn, tries = 5) {
+  for (let i = 0; i < tries; i++) {
+    try { return await fn(); }
+    catch (e) {
+      const wait = Math.min(60000, 2000 * 2 ** i);
+      console.error(`${name}: сеть (${(e.cause && e.cause.code) || e.message}), попытка ${i + 1} из ${tries}` + (i + 1 < tries ? `, повтор через ${wait / 1000} с` : ""));
+      if (i + 1 < tries) await new Promise(r => setTimeout(r, wait));
+    }
+  }
+  return null;
+}
+
 async function run(token) {
   const api = (m, body) => fetch(`https://api.telegram.org/bot${token}/${m}`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}),
     signal: AbortSignal.timeout(m === "getUpdates" ? 40000 : 20000),
   }).then(r => r.json());
-  const me = await api("getMe");
-  if (!me.ok) { console.error("Токен не подошёл:", me.description); process.exit(1); }
+  // Сеть Render ↔ Telegram иногда пропадает на минуты (ETIMEDOUT). Раньше это роняло весь сервер вместе с сайтом и API.
+  // Теперь вызовы Telegram при старте повторяются, а без ответа сервер всё равно поднимается.
+  let me = await retry("getMe", () => api("getMe"), 4);
+  if (me && !me.ok) { console.error("Токен не подошёл:", me.description); process.exit(1); }   // неверный токен — это не сбой сети
+  if (!me) { console.error("Telegram недоступен при старте — поднимаю сервер без проверки токена"); me = { ok: true, result: { username: BOT_USERNAME } }; }
   await loadState();
-  await api("setMyCommands", { commands: [
+  retry("setMyCommands", () => api("setMyCommands", { commands: [
     { command: "start", description: "Выбрать село" }, { command: "today", description: "Где пасти сегодня" },
     { command: "plan", description: "Маршрут на сезон" }, { command: "map", description: "Карта села" },
     { command: "water", description: "Где нужен водопой" },
-  ] });
+  ] }), 5);                                          // не ждём: меню команд не нужно для работы
   const send = (chat_id, text, reply_markup) => api("sendMessage", { chat_id, text, reply_markup, disable_web_page_preview: true });
   const onUpdate = u => {
     if (u.callback_query) api("answerCallbackQuery", { callback_query_id: u.callback_query.id }).catch(() => {});
@@ -829,8 +845,9 @@ function serve(token, api, onUpdate, info, send) {
     console.log(info + ` Режим: webhook, порт ${port}.`);
     if (process.env.SKIP_SET_WEBHOOK) return;
     const url = PUBLIC_URL.replace(/\/$/, "") + "/tg";
-    const r = await api("setWebhook", { url, secret_token: secret, allowed_updates: ["message", "callback_query"] });
-    console.log("setWebhook", url, r.ok ? "OK" : r.description);
+    // вебхук остаётся настроенным с прошлого запуска, поэтому неудача здесь не роняет сервер — повторяем в фоне
+    const r = await retry("setWebhook", () => api("setWebhook", { url, secret_token: secret, allowed_updates: ["message", "callback_query"] }), 6);
+    console.log("setWebhook", url, r ? (r.ok ? "OK" : r.description) : "Telegram недоступен — работает прежний вебхук");
   });
   return server;
 }
@@ -878,6 +895,10 @@ async function test() {
 }
 
 if (require.main === module) {
+  // Telegram с Render доступен только по IPv4 (IPv6 — ENETUNREACH): пробуем IPv4 первым
+  require("dns").setDefaultResultOrder("ipv4first");
+  // страховка: необработанная ошибка в фоне (сеть, внешний сервис) пишется в лог, а не останавливает сайт и бота
+  process.on("unhandledRejection", e => console.error("Необработанная ошибка (сервер продолжает работу):", (e && e.message) || e));
   if (process.argv.includes("--test")) test().catch(e => { console.error(e); process.exit(1); });
   else if (process.env.TELEGRAM_TOKEN) run(process.env.TELEGRAM_TOKEN);
   else { console.log("Нужен TELEGRAM_TOKEN в .env (или проверка: node bot.js --test)"); process.exit(1); }
