@@ -35,6 +35,18 @@ async function stubNetwork(page) {
   await page.route(/unpkg\.com|cdnjs\.cloudflare\.com|arcgisonline|open-meteo|fonts\.g/, r => r.abort());
 }
 
+/** ИИ-чат, открытый сразу по ссылке: помощник видит данные села (пример Кегена), а не «село не открыто». */
+async function chatWithoutMap(page, label) {
+  await stubNetwork(page);
+  await page.goto(base + "#/ai");
+  await page.waitForFunction(() => window.JaiylymApp && window.JaiylymApp.S.D, null, { timeout: 15000 });
+  assert.equal(await page.evaluate(() => window.JaiylymApp.aiContext()["село"]), "Кеген", label + ": контекст чата — Кеген");
+  assert.match(await page.textContent(".chat-ctx"), /Кеген/);
+  assert.match(page.url(), /#\/ai$/, label + ": адрес остался на чате");
+  await page.goto(base + "#/map");
+  await page.waitForFunction(() => document.querySelectorAll("#schemeMap [data-plot], .leaflet-interactive").length > 0, null, { timeout: 15000 });
+}
+
 async function journey(page, label) {
   const errors = [];
   page.on("pageerror", e => errors.push(e.message));
@@ -197,6 +209,10 @@ for (const name of BROWSERS) {
   test(`${name}: офлайн — оболочка и Кеген из кэша, новое село — «нет сети»`, { skip: offSkip, timeout: 120000 }, async () => {
     const b = await pw[name].launch();
     try { await offline(b, name + " офлайн"); } finally { await b.close(); }
+  });
+  test(`${name}: ИИ-чат по прямой ссылке видит село`, { skip, timeout: 60000 }, async () => {
+    const b = await pw[name].launch();
+    try { await chatWithoutMap(await (await b.newContext()).newPage(), name); } finally { await b.close(); }
   });
   test(`${name}: путь пользователя на компьютере`, { skip, timeout: 180000 }, async () => {
     const b = await pw[name].launch();
