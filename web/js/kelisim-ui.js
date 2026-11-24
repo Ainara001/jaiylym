@@ -260,6 +260,40 @@
     }
     const ruleHtml = (v, name, dis) => `<fieldset class="krule"><legend>${tt("ruleQ")}</legend>${K.RULES.map(r => `<label class="kopt"><input type="radio" name="${name}" value="${r}" ${r === v ? "checked" : ""} ${dis ? "disabled" : ""}><span><b>${tt("rule." + r)}</b><small>${tt("rule." + r + "D")}</small></span></label>`).join("")}</fieldset>`;
 
+    // ---------- наблюдения людей ----------
+    const OV = { check: "sat_blind", match: "sat_sparse" };
+    /** Что говорит сверка: код → фраза. */
+    const obsWhy = i => (OV[i.verdict] ? t("obs.w." + (i.why || OV[i.verdict]), { d: dOnly(i.scene), v: i.ndvi == null ? "" : String(i.ndvi).replace(".", ",") }) : t("obs.v." + i.verdict));
+    const obsItem = i => `<li><b>${tt("rs." + i.reason)}</b>${i.households.length > 1 ? ` (${t("obs.yards", { n: i.households.length })})` : ""}${i.dates.length ? `, ${i.dates.map(dOnly).join(", ")}` : ""}. <span class="obs-${i.verdict}">${obsWhy(i)}</span></li>`;
+    const obsItems = (g, st) => `<ul class="kef"${st ? ` style="${st}"` : ""}>${g.items.map(obsItem).join("")}</ul>`;
+    const obsTag = v => (v === "check" ? `<span class="tag tag-check">${t("obs.check")}</span>` : "");
+    function obsCard() {
+      const e = Object.entries(K.obsOf(V));
+      if (!e.length) return "";
+      const n = e.filter(([, g]) => g.verdict === "check").length;
+      return `<details data-d="obs" class="card kdet"><summary><span>${t("obs.title")}${n ? ` · ${t("obs.check").toLowerCase()}: ${n}` : ""}</span></summary><p class="fine">${t("obs.note")}</p>
+        ${e.sort((a, b) => (b[1].verdict === "check") - (a[1].verdict === "check")).map(([id, g]) => `<div class="kvar"><b>${plotFull(id)}</b> ${obsTag(g.verdict)}${obsItems(g)}</div>`).join("")}</details>`;
+    }
+    /** Наблюдения по селу из согласований, открытых на этом устройстве (имена дворов и пояснения на карту не идут). */
+    function observations(v) {
+      const seen = new Set(), out = [];
+      if (!K || !K.observations) return out;
+      for (const x of saved()) {
+        if (seen.has(x.id)) continue;
+        const c = ["org", "hh"].map(r => C.ls.get(VIEW + x.id + ":" + r, null)).filter(y => y && y.v && y.v.village).sort((a, b) => (a.at < b.at ? 1 : -1))[0];
+        if (!c || Math.abs(c.v.village.lat - v.lat) > 0.0015 || Math.abs(c.v.village.lon - v.lon) > 0.0015) continue;
+        seen.add(x.id);
+        try { for (const o of K.observations(c.v)) out.push(Object.assign({}, o, { household: x.id + ":" + o.household })); } catch (_) {}
+      }
+      return out;
+    }
+    const obsHint = () => {
+      if (!f || f.mode !== "avoid" || !K.OBS.includes(f.reason) || !f.plot || f.reason === "far") return "";
+      const p = V.snapshot.plots.find(x => x.id === f.plot), c = K.compareObs({ reason: f.reason, on: f.observed_on, plot: f.plot }, p, V.snapshot.source, V.snapshot.params);
+      return `${c.verdict === "check" ? `<b>${t("obs.check")}.</b> ` : ""}${obsWhy(c)} ${t("obs.noChange")}`;
+    };
+    const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+
     // ---------- общее для обоих экранов ----------
     const head = extra => `<div class="notebar" id="kelBar" role="status" hidden></div><div class="khead"><h1>${esc(V.title)}</h1><p class="fine">${esc(V.village.name)}${V.deadline ? ` · ${tt("until", { d: dOnly(V.deadline) })}` : ""}${extra || ""}</p></div>`;
     const limits = () => `<p class="fine klim">${ic("shield")}<span>${tt("noRights")} ${tt("estimate")}</span></p>`;
@@ -320,7 +354,7 @@
     function hhPage() {
       const h = me(); if (!h) { fail = 403; return failPage(); }
       const body = V.status === "collect" ? hhCollect(h) : hhPlan(h);
-      put(head(` · ${esc(h.name)}`) + (V.restored && !V.restored.verified ? `<p class="note warn">${tt("restUn")}</p>` : "") + body + everyone() + limits() + `<p class="fine"><a href="#/about">${tt("about")}</a></p>`);
+      put(head(` · ${esc(h.name)}`) + (V.restored && !V.restored.verified ? `<p class="note warn">${tt("restUn")}</p>` : "") + body + (V.status === "collect" ? "" : obsCard()) + everyone() + limits() + `<p class="fine"><a href="#/about">${tt("about")}</a></p>`);
       V.status === "collect" ? bindCollect(h) : bindPlan(h);
     }
     function hhCollect(h) {
@@ -371,7 +405,7 @@
       const modes = MODES.filter(m => (m !== "avoid" || mine.length) && (m !== "prefer" || cand.length));
       const part = {
         avoid: () => `${mine.length > 1 ? `<h3>${tt("q.which")}</h3>${radio("kPlot", mine, f.plot)}` : ""}<h3>${tt("q.why")}</h3><div class="kchips">${K.REASONS.map(r => `<label class="chip"><input type="radio" name="kReason" value="${r}" ${f.reason === r ? "checked" : ""}>${tt("rs." + r)}</label>`).join("")}</div>
-          ${["no_grass", "weeds", "no_water"].includes(f.reason) ? `<label class="field kf">${tt("q.seen")}<input type="date" name="kSeen" value="${esc(f.observed_on || "")}"></label>` : ""}
+          ${["no_grass", "weeds", "no_water"].includes(f.reason) ? `<label class="field kf">${tt("q.seen")}<input type="date" name="kSeen" max="${today()}" value="${esc(f.observed_on || "")}"></label><p class="note" id="kObsH" aria-live="polite">${obsHint()}</p>` : ""}
           ${cand.length ? `<label class="field kf">${tt("q.to")}<select name="kTo"><option value="">${tt("q.auto")}</option>${cand.map(id => `<option value="${esc(id)}" ${f.to === id ? "selected" : ""}>${plotName(id)} (${esc(id)})</option>`).join("")}</select></label>` : ""}${txt(false)}`,
         prefer: () => `<h3>${tt("q.want")}</h3>${radio("kPlot", cand, f.plot)}${mapOf(mine, f.plot ? [f.plot] : [])}${txt(false)}`,
         herd: () => `<p class="fine">${tt("q.herd")}</p><div id="kHerd">${herdForm({ herd: f.herd || h.herd, home: f.home || h.home, daily_return: f.daily != null ? f.daily : h.daily_return })}</div>${txt(false)}`,
@@ -396,6 +430,7 @@
     function objCheck(h) {
       if (f.mode === "avoid" && !f.plot) return tt("e.plot");
       if (f.mode === "avoid" && !f.reason) return tt("e.reason");
+      if (f.mode === "avoid" && f.observed_on && f.observed_on > today()) return tt("err.future");
       if (f.mode === "prefer" && !f.plot) return tt("e.plot");
       if (f.mode === "other" && !(f.text || "").trim()) return tt("e.text");
       if (f.mode === "herd" && SP.every(s => f.herd[s] === (h.herd[s] || 0)) && f.home === h.home && f.daily === h.daily_return) return tt("e.same");
@@ -421,6 +456,7 @@
       form.onchange = e => {
         const re = read(), hadEff = !!f.effect;
         if (e.target.name !== "kText" && e.target.name !== "kSeen") f.effect = null;
+        if (e.target.name === "kSeen" && $("#kObsH")) $("#kObsH").innerHTML = obsHint();
         if (re || (hadEff && !f.effect)) { const n = e.target.name, v = e.target.value, y = scrollY; draw(); scrollTo(0, y); const x = $(`#kelObjF [name="${n}"][value="${CSS.escape(v)}"]`) || $(`#kelObjF [name="${n}"]`); if (x) x.focus({ preventScroll: true }); }
       };
       form.addEventListener("input", e => { if (e.target.name === "kText") f.text = e.target.value; });
@@ -456,7 +492,7 @@
         + `<div class="card"><h2>${tt("yards")} <span class="tag">${n}</span></h2>${V.households.map(yardRow).join("") || `<p class="empty">${tt("o.noYards")}</p>`}
             ${st === "closed" ? "" : `<form class="kaddf" id="kAddF"><label class="field">${tt("o.newYard")}<input maxlength="60" placeholder="${esc(tt("yardPh"))}"></label><button class="btn btn-soft">${ic("plus")} ${tt("addYard")}</button></form>`}
             ${V.herds.over.map(o => `<p class="note warn">${tt("over", { s: low(t("herds." + o.species)), a: fmt(o.declared), b: fmt(o.official) })}</p>`).join("")}</div>`
-        + (V.plan ? planCard() : "") + settingsCard() + historyCard() + limits());
+        + obsCard() + (V.plan ? planCard() : "") + settingsCard() + historyCard() + limits());
       bindOrg();
     }
     const keyOf = hid => { const o = rec(V.id, "org"); return o && o.links && o.links[hid]; };
@@ -466,6 +502,10 @@
       ${V.plan ? `<div class="kshare">${shareBar(V.plan.share[h.id])}<small>${tt("feedShort", { p: pct(V.plan.share[h.id]), d: V.plan.days[h.id], s: V.plan.season_days })} · ${K.plotsOf(V.plan.routes[h.id]).map(nw).join(", ") || "—"}</small></div>` : ""}
       <div class="kyard-b"><button type="button" class="btn btn-sm btn-soft" data-link>${ic("send")} ${tt("o.link")}</button>${V.status === "closed" ? "" : `<button type="button" class="btn btn-sm btn-ghost" data-edit>${ic("pen")} ${tt("o.edit")}</button>`}
       ${V.status !== "closed" && h.herd_status === "declared" ? `<button type="button" class="btn btn-sm btn-ghost" data-conf>${ic("check")} ${tt("o.confirm")}</button>` : ""}</div></div>`;
+    const propObs = p => {
+      const o = ["avoid", "swap"].includes(p.type) && p.reason !== "far" && K.OBS.includes(p.reason) ? K.compareObs({ reason: p.reason, on: p.observed_on }, V.snapshot.plots.find(x => x.id === p.plot), V.snapshot.source, V.snapshot.params) : null;
+      return o ? `<p class="note">${obsTag(o.verdict)} ${obsWhy(o)}</p>` : "";
+    };
     const effCache = {};
     /** Последствия по текущему плану: у свежего возражения — посчитанные сервером, у старого — считаем заново здесь. */
     function effectNow(p) {
@@ -476,7 +516,7 @@
     }
     function propCard(p) {
       const e = effectNow(p), vs = VORD.filter(n => e.variants && e.variants[n]), can = !["impossible", "error", "not_calculated", "none"].includes(e.verdict);
-      return `<div class="card kprop" data-pid="${esc(p.id)}"><h3>${esc(nameOf(p.household))}</h3><p>${propText(p)}</p>${p.version !== V.version ? `<p class="note warn">${tt("o.recalc")}</p>` : ""}${effectHtml(e, p.household, false)}
+      return `<div class="card kprop" data-pid="${esc(p.id)}"><h3>${esc(nameOf(p.household))}</h3><p>${propText(p)}</p>${propObs(p)}${p.version !== V.version ? `<p class="note warn">${tt("o.recalc")}</p>` : ""}${effectHtml(e, p.household, false)}
         ${e.verdict === "not_calculated" ? `<p class="note">${tt("o.verbal")}</p>` : ""}
         <div class="kdec">${can ? vs.map((n, i) => `<button type="button" class="btn ${i ? "btn-soft" : "btn-green"}" data-acc="${n}">${vs.length > 1 ? `${tt("o.accept")}: ${tt("var." + n).toLowerCase()}` : tt("o.accept")}</button>`).join("") : ""}</div>
         <label class="field kf">${tt("o.note")}<input data-note maxlength="300"></label><button type="button" class="btn btn-ghost" data-dec>${tt("o.decline")}</button></div>`;
@@ -630,6 +670,7 @@
         ${p.households.map(h => `<tr style="page-break-inside:avoid"><td ${td}><b>${esc(h.name)}</b>${h.weight !== 1 ? `<br>${t("herds.weight")}: ${h.weight}` : ""}</td><td ${td}>${esc(herdLine(h.herd))}<br><span style="color:#666">${tt("hs." + h.herd_status)}</span></td><td ${td}>${rt(h.route)}</td><td ${td}>${pct(h.share)}<br>${tt("days", { n: h.days == null ? "—" : h.days })}</td>
           <td ${td}>${tt("st." + h.answer)}${h.carried ? " " + tt("st.carried") : ""}${h.answered_at ? `<br><span style="color:#666">${dateStr(h.answered_at)}</span>` : ""}</td><td ${td} width="80">&nbsp;</td></tr>`).join("")}</tbody></table>
         ${p.decisions.length ? h2(tt("o.decisions")) + `<table ${tbl}><tbody>${p.decisions.map(x => `<tr style="page-break-inside:avoid"><td ${td}><b>${esc(nameOf(x.household))}</b></td><td ${td}>${propText(x)}</td><td ${td}>${tt("pst." + x.status)}. ${choice(x)}${x.status === "accepted" && x.losers.length ? `<br>${tt("ef.lose")}: ${x.losers.map(l => `${esc(nameOf(l.id))} ${ppt(l.delta)} ${tt("pp")}`).join("; ")}` : ""}</td></tr>`).join("")}</tbody></table>` : ""}
+        ${Object.keys(p.observations || {}).length ? h2(t("obs.title")) + `<p>${t("obs.note")}</p><table ${tbl}><tbody>${Object.entries(p.observations).map(([id, g]) => `<tr style="page-break-inside:avoid"><td ${td} width="190"><b>${plotFull(id)}</b>${g.verdict === "check" ? `<br>${t("obs.check")}` : ""}</td><td ${td}>${obsItems(g, "font-size:11px;margin:0")}</td></tr>`).join("")}</tbody></table>` : ""}
         ${h2(tt("pr.data"))}<p>${tt("pr.src", { y: p.snapshot.source.year, d: p.snapshot.source.dates.map(x => dOnly(x)).join(", ") || "—", m: esc(p.snapshot.model_version) })} ${p.snapshot.deficit_t > 0.5 ? tt("o.deficit", { t: fmt(p.snapshot.deficit_t) }) : ""} ${tt("o.check." + (p.snapshot.check.status || "unknown"), { p: (p.snapshot.check.plots || []).map(esc).join(", ") })}</p>
         ${p.herds.over.map(o => `<p>${tt("over", { s: low(t("herds." + o.species)), a: fmt(o.declared), b: fmt(o.official) })}</p>`).join("")}${p.restored && !p.restored.verified ? `<p>${tt("restUn")}</p>` : ""}
         ${p.snapshot.norm ? `<p>${t("nm.source")}: ${esc(regName(p.snapshot.norm.region))}.</p>` : ""}${h2(t("rep.limits"))}<ul style="margin:0;padding-left:18px">${p.limits.map(l => `<li>${tt("lim." + l)}</li>`).join("")}</ul>
@@ -646,6 +687,6 @@
 
     document.addEventListener("visibilitychange", () => { if (!document.hidden && on && cur && !busy) load(true); });
     window.addEventListener("online", () => { if (on && cur) load(offline && !f && !dirty ? false : true); });
-    return { route, get state() { return { cur, V, f, offline, fail }; }, protocolHtml };
+    return { route, observations, obsItems, obsWhy, get state() { return { cur, V, f, offline, fail }; }, protocolHtml };
   };
 })();

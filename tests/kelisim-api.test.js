@@ -278,7 +278,7 @@ test("приватность: телефон и ИИН не принимаютс
 
 test("возражение: причина обязательна, дата и участок проверяются; нельзя начать дважды и без скота", async () => {
   const k = await started(), plot = (await k.st(k.keys.h1)).plan.routes.h1.find(x => x.plot).plot;
-  for (const p of [{ type: "avoid", plot }, { type: "avoid", plot: "Д-Х", reason: "far" }, { type: "avoid", plot, reason: "zzz" }, { type: "avoid", plot, reason: "far", observed_on: "вчера" }, { type: "other" }, { type: "hack" }, { type: "herd", herd: { sheep: 1.5 } }, { type: "herd", herd: { sheep: 5 }, home: "Д-С" }])
+  for (const p of [{ type: "avoid", plot, reason: "weeds", observed_on: "2999-01-01" }, { type: "avoid", plot }, { type: "avoid", plot: "Д-Х", reason: "far" }, { type: "avoid", plot, reason: "zzz" }, { type: "avoid", plot, reason: "far", observed_on: "вчера" }, { type: "other" }, { type: "hack" }, { type: "herd", herd: { sheep: 1.5 } }, { type: "herd", herd: { sheep: 5 }, home: "Д-С" }])
     assert.equal((await object(k, "h1", p)).status, 400, JSON.stringify(p));
   assert.equal((await call("POST", `/${k.id}/answer`, k.keys.h1, { value: "maybe", version: 1 })).status, 400);
   assert.equal((await call("POST", `/${k.id}/start`, k.org, { rev: (await k.st()).rev })).status, 409);

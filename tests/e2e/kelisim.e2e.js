@@ -130,6 +130,13 @@ async function flow(b, name) {
   if (await d2.$("[name=kPlot]")) { await d2.click(".kobj .chip:has([name=kPlot])"); }
   await d2.click(".kobj .chip:has([value=no_grass])");
   await d2.waitForSelector("[name=kSeen]");
+  // наблюдение сверяется со снимком только за то же время
+  assert.match(await d2.innerText("#kObsH"), /Дата не указана/);
+  const seen = async d => { await d2.fill("[name=kSeen]", d); await d2.locator("[name=kSeen]").blur(); };
+  await seen("2026-11-20");
+  await d2.waitForFunction(() => /другое время/.test(document.querySelector("#kObsH").innerText));
+  await seen("2026-07-20");
+  await d2.waitForFunction(() => /Проверить на месте[\s\S]*снимке за 25\.07\.2026[\s\S]*Расчёт от этого не меняется/.test(document.querySelector("#kObsH").innerText));
   await d2.route(/\/api\//, r => r.abort());
   await d2.click("#kPrev");
   await d2.waitForSelector(".kverd");
@@ -210,6 +217,7 @@ async function flow(b, name) {
   assert.match(await d2.innerText("#kelBar"), /Нет связи/);
   assert.ok(await d2.isVisible(".kroute"));
   await d2.unroute(/\/api\//);
+  const orgUrl = org.url();
   // 12. все согласны → закрыть → протокол PDF
   assert.match(await org.innerText(".kcount"), /Согласны 3 из 3/);
   await org.click("#kClose"); await org.click("#kClose");
@@ -224,9 +232,22 @@ async function flow(b, name) {
   await d1.reload();
   await d1.waitForSelector("#kelPdf");
   await check(d1, "двор закрыто");
+  // наблюдение на карте: три мнения об участке, число не изменилось; ИИ получает его без имён
+  const pid = /\(([БД]-[СВЮЗ]+)\)/.exec(await org.textContent("details[data-d=obs] .kvar b"))[1];
+  await org.setViewportSize({ width: 360, height: 740 });
+  await org.goto(base + "/#/map?lat=54.77515&lon=69.09779&name=Бесколь&demo=1&plot=" + encodeURIComponent(pid));
+  await org.waitForSelector("dialog[open] .obs3-check");
+  assert.match(await org.innerText(".obs3"), /Три мнения[\s\S]*трава[\s\S]*мало травы[\s\S]*проверьте на месте/);
+  const ai = await org.evaluate(() => window.JaiylymApp.aiContext()["наблюдения_людей"]);
+  assert.deepEqual([ai.length, ai[0]["участок"], ai[0]["вывод"]], [1, pid, "проверить на месте"]);
+  assert.equal(/Сары-Арка/.test(JSON.stringify(ai)), false, "имя двора в ИИ не уходит");
+  const caps = await org.evaluate(id => [window.Jaiylym.plotCapacity(window.JaiylymApp.S.plots.find(p => p.id === id), window.JaiylymApp.S.P).au_season, window.JaiylymApp.S.plots.find(p => p.id === id).ndvi], pid);
+  assert.equal(caps[1], require("../../data").loadExamples()[0].plots.find(p => p.id === pid).ndvi, "наблюдение не меняет измерение");
+  assert.ok(await org.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  if (SHOTS) await org.screenshot({ path: path.join(SHOTS, "карта-три-мнения.png") });
   // 13. телефон организатора и список; RU/KZ на нём
   const o2 = await open(b, errors, phone, "орг телефон");
-  await o2.goto(org.url());
+  await o2.goto(orgUrl);
   await o2.waitForSelector(".kyard");
   await check(o2, "орг телефон");
   await o2.click('.langsw [data-lang="kk"]');
