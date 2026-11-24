@@ -6,9 +6,9 @@
  * 2. Пишет, сколько у него скота: «500 овец 30 коров 10 лошадей».
  * 3. Получает: «Сегодня» — где пасти, «План» — маршрут на сезон, «Карта села»,
  *    «Водопой» — куда акимату ставить воду, «Где я?» — на каком он участке.
- * 4. Любой другой вопрос — отвечает Gemini по данным его села (если задан GEMINI_API_KEY).
+ * 4. Любой другой вопрос — отвечает ИИ по данным его села (DeepSeek при DEEPSEEK_API_KEY или Gemini при GEMINI_API_KEY, см. ai.js).
  *
- * Запуск: заполнить .env (TELEGRAM_TOKEN=..., GEMINI_API_KEY=...) и  node bot.js
+ * Запуск: заполнить .env (TELEGRAM_TOKEN=..., DEEPSEEK_API_KEY=...) и  node bot.js
  * Проверка без Telegram:  node bot.js --test
  */
 const fs = require("fs");
@@ -21,8 +21,8 @@ const PL = require("./web/pipeline.js");
 const { loadPlots, loadHerds } = require("./data");
 
 const SITE = process.env.SITE_URL || "https://ainara001.github.io/jaiylym/";
-const GEMINI_KEY = process.env.GEMINI_API_KEY || "";
-const G = require("./gemini");
+const G = require("./ai");
+const AI_ON = () => G.configured();   // ключ DeepSeek или Gemini задан на сервере
 const UA = "Jaiylym-hackathon-bot/1.0 (+https://github.com/Ainara001/jaiylym)";
 PL.setUserAgent(UA);
 
@@ -246,9 +246,9 @@ function textWells(v) {
     `Водоём на спутниковой карте не означает пригодный водопой — проверьте на месте.`;
 }
 
-// ---------- Gemini: свободные вопросы ----------
+// ---------- ИИ: свободные вопросы ----------
 async function askGemini(question, v, herd) {
-  if (!GEMINI_KEY) return null;
+  if (!AI_ON()) return null;
   const ctx = { село: v.data.village.name, лето: v.data.source.year };
   ensurePrev(vkey(v.data.village.lat, v.data.village.lon));   // если прошлого лета ещё нет — к следующему вопросу будет
   try {
@@ -272,7 +272,8 @@ async function askGemini(question, v, herd) {
     "«прошлый_год» — то же окно июнь–август прошлого лета: изменения уже посчитаны; изменение NDVI меньше порога — «без изменений»; NDVI — зелёность, а не урожай; при сравнение_надёжно = false скажи об этом. " +
     "Пиши обычным текстом без markdown (без звёздочек и решёток) — это сообщение Telegram. " + G.SCOPE;
   const r = await G.ask({ system, input: `Данные села (JSON): ${JSON.stringify(ctx)}\n\nВопрос пастуха: ${String(question).slice(0, 1200)}`, maxTokens: kk ? 700 : 500 });
-  return r.ok ? r.text : null;
+  // Telegram получает обычный текст: убираем остатки markdown (**, __, `, # в начале строки), которые модели иногда добавляют
+  return r.ok ? r.text.replace(/\*\*|__|`+/g, "").replace(/^#+\s*/gm, "").trim() : null;
 }
 
 // ---------- подписки на участки ----------
@@ -708,12 +709,12 @@ async function handle(update, send, today = new Date()) {
   if (dm) return send(chatId, textToday(v, herd, dm[1] ? +dm[1] : J.seasonDay(today)), MENU);
   if (low === "план" || low === "/plan") return send(chatId, textPlan(v, herd), MENU);
 
-  // всё остальное — вопрос к Gemini
+  // всё остальное — вопрос к ИИ
   const isQuestion = text.includes("?") || text.split(/\s+/).length >= 4;
-  if (isQuestion && GEMINI_KEY) await send(chatId, "Думаю над ответом…");
+  if (isQuestion && AI_ON()) await send(chatId, "Думаю над ответом…");
   const answer = await askGemini(text, v, herd);
   if (answer) return send(chatId, answer, MENU);
-  return send(chatId, (isQuestion && GEMINI_KEY ? "ИИ-помощник сейчас перегружен, спросите чуть позже. " : "Не понял. ") +
+  return send(chatId, (isQuestion && AI_ON() ? "ИИ-помощник сейчас перегружен, спросите чуть позже. " : "Не понял. ") +
     "Кнопки внизу: «Сегодня», «План», «Карта села», «Водопой». " +
     "Чтобы записать стадо, напишите, например: «500 овец 30 коров 10 лошадей».", MENU);
 }
@@ -786,7 +787,7 @@ async function run(token) {
     api("sendChatAction", { chat_id: chat, action: "typing" }).catch(() => {});
     handle(u, send).catch(e => { console.error("Ошибка:", e); send(chat, "Что-то пошло не так, попробуйте ещё раз.").catch(() => {}); });
   };
-  const info = `Бот @${me.result.username}. Хранилище: ${store.kind}. Gemini: ${GEMINI_KEY ? G.MODELS.join(", ") : "выключен"} (Interactions API).`;
+  const info = `Бот @${me.result.username}. Хранилище: ${store.kind}. ИИ: ${AI_ON() ? G.name() + " " + G.MODELS.join(", ") : "выключен"}.`;
 
   if (PUBLIC_URL) return serve(token, api, onUpdate, info, send);
 
