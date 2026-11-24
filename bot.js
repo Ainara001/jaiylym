@@ -20,7 +20,7 @@ const M = require("./web/model.js");
 const PL = require("./web/pipeline.js");
 const NG = require("./web/nograze.js");
 const TR = require("./web/trend.js");
-const { loadPlots, loadHerds } = require("./data");
+const { loadExamples, loadHerds } = require("./data");
 
 const SITE = process.env.SITE_URL || "https://ainara001.github.io/jaiylym/";
 const G = require("./ai");
@@ -39,19 +39,22 @@ const save = () => {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => store.save(persistable()).catch(e => console.error("Не сохранилось:", e.message)), 300);
 };
-// Данные и демо-стада Кегена не храним — они всегда берутся из web/data
+// Данные и демо-стада готовых примеров не храним — они всегда берутся из web/data
 function persistable() {
   const villages = {};
-  for (const [k, v] of Object.entries(state.villages)) villages[k] = v.demo ? { herds: v.herds || [] } : v;
+  for (const [k, v] of Object.entries(state.villages)) villages[k] = v.example ? { herds: v.herds || [] } : v;
   return { chats: state.chats, villages, users: state.users || {}, villagePlans: state.villagePlans || {} };
 }
 
-const KEGEN = loadPlots();
+const EXAMPLES = loadExamples();
 const vkey = (lat, lon) => `${(+lat).toFixed(3)},${(+lon).toFixed(3)}`;
-const KEGEN_KEY = vkey(KEGEN.village.lat, KEGEN.village.lon);
-function attachKegen() {
-  // демо-стада Кегена — условные, всегда с признаком demo: true (в текстах бота они так и называются)
-  state.villages[KEGEN_KEY] = Object.assign({ herds: [] }, state.villages[KEGEN_KEY] || {}, { data: KEGEN, demo: loadHerds().map(h => Object.assign({}, h, { demo: true })) });
+function attachExamples() {
+  // демо-стада примеров — условные, с признаком demo: true (в текстах бота они так и называются). В расчёт они входят,
+  // только если человек сам выбрал демо-стадо: план настоящего хозяйства не делит корм с выдуманными.
+  for (const D of EXAMPLES) {
+    const k = vkey(D.village.lat, D.village.lon);
+    state.villages[k] = Object.assign({ herds: [] }, state.villages[k] || {}, { example: true, data: D, demo: loadHerds().map(h => Object.assign({}, h, { demo: true })) });
+  }
 }
 // ---------- API сайта (вход, профили, сценарии) — см. api.js ----------
 const BOT_USERNAME = process.env.BOT_USERNAME || "JAIYLYM_bot";
@@ -81,13 +84,14 @@ function syncFarmHerd(uid, farm, oldVk) {
 async function loadState() {
   try { const s = await store.load(); if (s) state = Object.assign({ chats: {}, villages: {} }, s); }
   catch (e) { console.error("Хранилище недоступно, работаю без него:", e.message); }
-  attachKegen();
+  attachExamples();
 }
-attachKegen();
+attachExamples();
 
 const chatOf = id => (state.chats[id] = state.chats[id] || {});
 const villageOf = c => c.village && state.villages[c.village];
-const herdsOf = v => (v.demo || []).concat(v.herds || []);
+const herdsOf = v => (v.demo || []).concat(v.herds || []);                              // выбрать своё (или демо) стадо
+const herdsInPlan = (v, herd) => (herd && herd.demo ? herdsOf(v) : v.herds || []);        // кто делит корм в расчёте
 const fmt = n => Math.round(n).toLocaleString("ru-RU");
 const pct = x => (x == null ? "нет данных" : isFinite(x) ? Math.round(x * 100) + "%" : "∞");
 const sheepCap = c => (c && c.known ? `≈ ${fmt(c.au_season / 0.2)} овец за сезон (оценка модели, не проверена в поле)` : "ёмкость неизвестна (нет NDVI)");
@@ -134,9 +138,9 @@ function pointInPoly([x, y], ring) {
 }
 
 // ---------- расчёты ----------
-function compute(v) {
+function compute(v, herd) {
   // кормовая площадь без жилья, ферм и промзон (OpenStreetMap), буфер по умолчанию
-  const herds = herdsOf(v), plots = NG.apply(v.data.plots, v.data.nograze);
+  const herds = herdsInPlan(v, herd), plots = NG.apply(v.data.plots, v.data.nograze);
   return { herds, plots, byId: Object.fromEntries(plots.map(p => [p.id, p])), cur: J.current(plots, herds), pl: J.solve(plots, herds) };
 }
 
@@ -221,18 +225,18 @@ async function reverseName(lat, lon) {
 }
 
 // ---------- тексты ----------
-function villageSummary(v) {
+function villageSummary(v, herd) {
   const d = v.data, past = d.plots.reduce((s, p) => s + p.pasture_ha, 0);
   const best = d.plots.filter(p => p.ndvi != null).sort((a, b) => b.ndvi - a.ndvi)[0];
   const noData = d.plots.filter(p => p.ndvi == null).length;
   return `${d.village.name}: ${fmt(past)} га пастбищ в радиусе 8 км (снимки лета ${d.source.year}, ${d.source.dates.length} безоблачных дней).\n` +
     (best ? `Лучшая трава — участок ${where(best)}, NDVI ${best.ndvi}.` : "") +
     (noData ? `\nНет спутниковых данных по ${noData} ${plural(noData, "участку", "участкам", "участкам")} — они не входят в план.` : "") +
-    (v.demo && v.demo.length ? `\nВ расчёте ${v.demo.length} условных демо-стад (пример, не реальные хозяйства).` : "");
+    (herd && herd.demo && v.demo && v.demo.length ? `\nВ расчёте ${v.demo.length} условных демо-стад (пример, не реальные хозяйства).` : "");
 }
 
 function textToday(v, herd, day) {
-  const { pl, byId } = compute(v);
+  const { pl, byId } = compute(v, herd);
   const P = J.params();
   let note = "";
   if (day < 1 || day > P.season_days) {
@@ -251,7 +255,7 @@ function textToday(v, herd, day) {
 }
 
 function textPlan(v, herd) {
-  const { pl, byId } = compute(v);
+  const { pl, byId } = compute(v, herd);
   const lines = pl.herdPlans[herd.id].map(s => `• дни ${s.from}–${s.to}: ${s.plot ? where(byId[s.plot]) : "корма не хватает (внимание)"}`);
   const share = pl.shares && pl.shares[herd.id] != null ? Math.round(pl.shares[herd.id] * 100) : null;
   const head = pl.status === "feasible" ? "По введённым условиям возможен вариант распределения."
@@ -262,11 +266,12 @@ function textPlan(v, herd) {
     `Ёмкость — оценка модели (не проверена укосом), вода у села и водоёмы на карте не проверены на месте.`;
 }
 
-function textMap(v) {
-  const { cur, pl, plots, herds } = compute(v);
+function textMap(v, herd) {
+  const { cur, pl, plots, herds } = compute(v, herd);
+  if (!herds.length) return villageSummary(v) + `\n\nСтад в расчёте пока нет — напишите, сколько у вас скота, например: «500 овец 30 коров».\n\nКарта: ${siteLink(v)}`;
   const worst = plots.filter(p => cur.load[p.id].load > 1).sort((a, b) => cur.load[b.id].load - cur.load[a.id].load);
   const n = cur.overloaded;
-  return villageSummary(v) + `\n\nСтад в расчёте: ${herds.length}${v.demo && v.demo.length ? ` (из них демо: ${v.demo.length})` : ""}.\n` +
+  return villageSummary(v, herd) + `\n\nСтад в расчёте: ${herds.length}${herds.some(h => h.demo) ? ` (из них демо: ${herds.filter(h => h.demo).length})` : ""}.\n` +
     `Если все пасут у села: перегружено ${n} ${plural(n, "участок", "участка", "участков")}` +
     (worst.length ? ` — ${worst.slice(0, 4).map(p => `${p.id} ${pct(cur.load[p.id].load)}`).join(", ")}` : "") +
     `, сверх нормы ≈ ${fmt(J.hayTonnes(cur.deficit_kg))} т сена.\n` +
@@ -288,7 +293,7 @@ const F = require("./ai-facts.js");
 const A = require("./api");
 /** Контекст для шаблонного ответа без ИИ — те же поля, что у сайта (ai-facts.templateAnswer). */
 function templateCtx(v, herd) {
-  const { plots, herds, cur, pl } = compute(v), P = J.params();
+  const { plots, herds, cur, pl } = compute(v, herd), P = J.params();
   const capAU = plots.filter(p => M.waterUsable(p)).reduce((s, p) => { const c = J.plotCapacity(p, P); return s + (c.known ? c.au_season : 0); }, 0);
   const au = herds.reduce((s, h) => s + J.herdAU(h, P), 0);
   const defT = J.hayTonnes(pl.deficit_kg, P), excessAU = Object.values(pl.unmet || {}).reduce((s, x) => s + x, 0) / P.season_days;
@@ -312,17 +317,17 @@ async function askGemini(question, v, herd) {
   ensureMulti(vk);   // то же для многолетнего ряда
   try {
     // участки — те же, что в плане: пастбищный покров за вычетом жилья, сёл и ферм (OpenStreetMap)
-    const { pl, cur, plots: cp } = compute(v);
+    const { pl, cur, plots: cp, herds: inPlan } = compute(v, herd);
     ctx.участки = cp.map(p => ({ id: p.id, кольцо: p.ring === "near" ? "ближний" : "дальний", км: p.dist_km, направление: p.dir,
       пастбищный_покров_га_спутник: p.pasture_ha_gross ?? p.pasture_ha, нельзя_пасти_га_osm: p.nograze_ha ?? undefined,
       кормовая_площадь_га: p.pasture_ha, ndvi: p.ndvi, вода: waterWord(p), нагрузка_сейчас: pct(cur.load[p.id].load), нагрузка_план: pct(pl.load[p.id].load),
       как_рассчитано: J.explainCapacity(p).steps.map(s => `${s.key}: ${s.formula} ${s.unit}`).join("; ") }));
-    ctx.статус_плана = pl.status; ctx.демо_стад = (v.demo || []).length;
+    ctx.статус_плана = pl.status; ctx.стад_в_расчёте = inPlan.length; ctx.демо_стад = inPlan.filter(h => h.demo).length;
     const prev = prevContext(v);
     if (prev) ctx.прошлый_год = prev;
     if (herd) ctx.стадо = { имя: herd.name, демо: !!herd.demo, овцы: herd.sheep, козы: herd.goats, крс: herd.cattle, лошади: herd.horses, маршрут: pl.herdPlans[herd.id], не_хватает_усл_гол_дней: Math.round(pl.unmet[herd.id] || 0) };
     ctx.многолетний_ряд = multiContext(v, vk);
-    const { plots, herds } = compute(v);
+    const { plots, herds } = compute(v, herd);
     ctx.почему_план = Object.values(J.explainPlan(plots, herds, pl)).filter(x => !herd || x.стадо === herd.name);
   } catch (_) {}
   const kk = /[әғқңөұүһі]/i.test(question);
@@ -556,7 +561,7 @@ async function runCron(send, now = new Date()) {
   for (const [chat, c] of Object.entries(state.chats)) {
     const v = villageOf(c); if (!v || !c.herd) continue;
     const herd = herdsOf(v).find(h => h.id === c.herd); if (!herd) continue;
-    const plan = compute(v).pl.herdPlans[herd.id] || [];
+    const plan = compute(v, herd).pl.herdPlans[herd.id] || [];
     const i = plan.findIndex(s => s.from === day + 3);
     if (i <= 0 || c.reminded === report.date) continue;   // не чаще раза в день
     c.reminded = report.date;
@@ -642,7 +647,7 @@ async function handle(update, send, today = new Date()) {
     if (kind === "sp") {                                  // подписка на все участки маршрута стада
       const v = villageOf(c), herd = v && herdsOf(v).find(h => h.id === c.herd);
       if (!herd) return;
-      const ids = [...new Set((compute(v).pl.herdPlans[herd.id] || []).map(s => s.plot).filter(Boolean))];
+      const ids = [...new Set((compute(v, herd).pl.herdPlans[herd.id] || []).map(s => s.plot).filter(Boolean))];
       ids.forEach(id => toggleSub(c, c.village, id, true));
       return send(chatId, `Подписала вас на участки маршрута: ${ids.join(", ")}. В сезон пришлю уведомление о каждом новом снимке и напомню о перегоне за 3 дня.`, MENU);
     }
@@ -714,7 +719,7 @@ async function handle(update, send, today = new Date()) {
     c.village = null; c.herd = null; save();
     return send(chatId, `Сәлем! Это Jaiylym — помощник по пастбищам.\n\n` +
       `Я смотрю на траву со спутника и подсказываю, где пасти, чтобы не вытоптать пастбища у села.\n\n` +
-      `Напишите название вашего села или города (например: Кеген, Шелек, Жанаарка) или отправьте геолокацию.`, ASK_VILLAGE);
+      `Напишите название вашего села или города (например: Бесколь, Кеген, Жанаарка) или отправьте геолокацию.`, ASK_VILLAGE);
   }
 
   // Кнопки с геопозицией работают только в мобильном Telegram. На компьютере они присылают просто текст —
@@ -742,7 +747,7 @@ async function handle(update, send, today = new Date()) {
           `По карте это место: ${here}.`;
       return send(chatId, txt, km < 0.5 ? MENU : { inline_keyboard: [[{ text: `Открыть пастбища: ${here}`.slice(0, 60), callback_data: `here:${(+lat).toFixed(5)},${(+lon).toFixed(5)}` }]] });
     }
-    const { pl } = compute(v), herd = herdsOf(v).find(h => h.id === c.herd);
+    const herd = herdsOf(v).find(h => h.id === c.herd), { pl } = compute(v, herd);
     let s = `Вы на участке ${where(p)}.\nНагрузка по плану: ${pct(pl.load[p.id].load)}. Трава (NDVI): ${p.ndvi ?? "нет данных"}.`;
     if (herd) {
       const seg = J.plotOnDay(pl.herdPlans[herd.id], J.seasonDay(today));
@@ -783,7 +788,7 @@ async function handle(update, send, today = new Date()) {
     if (my.kb) await send(chatId, my.text, my.kb);
     return send(chatId, `${my.kb ? "Добавить участки" : "Подпишитесь на участки"} села ${v.data.village.name} — нажмите на участок (✓ — уже подписаны):`, plotsKeyboard(c, c.village, v));
   }
-  if (low === "карта села" || low === "/map") return send(chatId, textMap(v), MENU);
+  if (low === "карта села" || low === "/map") return send(chatId, textMap(v, herdsOf(v).find(h => h.id === c.herd)), MENU);
   if (low === "водопой" || low === "/water") return send(chatId, textWells(v), MENU);
 
   const herd = herdsOf(v).find(h => h.id === c.herd);
@@ -968,7 +973,7 @@ async function test() {
   // 6) напоминание о перегоне: найдём день, когда у стада 2 начинается новый отрезок
   await say("/start v_43020_79220", {}, 3);
   await tap("herd:village", 3);
-  const v = state.villages["43.020,79.220"], plan = compute(v).pl.herdPlans["village"];
+  const v = state.villages["43.020,79.220"], plan = compute(v, v.demo.find(h => h.id === "village")).pl.herdPlans["village"];
   console.log("\nплан сельского стада:", JSON.stringify(plan));
   const seg = plan.find((s, i) => i > 0);
   if (seg) {

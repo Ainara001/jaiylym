@@ -1,14 +1,14 @@
 /* Jaiylym — офлайн-кэш интерфейса.
- * Полностью офлайн: оболочка сайта, пример Кегена (данные и картинка NDVI), расчётная модель и движок, сценарии гостя.
+ * Полностью офлайн: оболочка сайта, готовые примеры (Бесколь и Кеген: данные и картинка NDVI), расчётная модель и движок, сценарии гостя.
  * Из сохранённого кэша браузера (localStorage, не этим файлом): ранее открытые сёла — с датой расчёта, помечены «из кэша».
  * Только с сетью: поиск мест, новые снимки Sentinel-2 и WorldCover, сервер (вход, профиль, бот, ИИ), погода, подложка карты.
  * PDF-библиотека и карта Leaflet — свои копии (vendor/), тоже в кэше.
  * Спутниковые запросы здесь НЕ кэшируются, чтобы старые значения не выдавались за свежие. */
-const VERSION = "jaiylym-v30";
+const VERSION = "jaiylym-v31";
 const SHELL = [
   "./", "index.html", "css/app.css", "model.js", "engine.js", "nograze.js", "pipeline.js", "trend.js",
   "js/i18n.js", "js/client.js", "js/report.js", "js/aitext.js", "js/app.js",
-  "data/plots.js", "data/herds.js", "data/ndvi.png", "vendor/html2pdf-0.10.1.bundle.min.js",
+  "data/beskol.js", "data/beskol.png", "data/plots.js", "data/herds.js", "data/ndvi.png", "vendor/html2pdf-0.10.1.bundle.min.js",
   "vendor/leaflet-1.9.4/leaflet.js", "vendor/leaflet-1.9.4/leaflet.css", "vendor/leaflet-1.9.4/images/layers.png", "vendor/leaflet-1.9.4/images/marker-icon.png",
   "fonts/inter-latin-wght-normal.woff2", "fonts/inter-latin-ext-wght-normal.woff2", "fonts/inter-cyrillic-wght-normal.woff2", "fonts/inter-cyrillic-ext-wght-normal.woff2",
 ];
