@@ -996,14 +996,25 @@
     if (S.loadingKey !== key) return;
     S.multi = { state: "ready", last: m.last, m, a: TR() ? TR().analyze(m.seasons, m.precip) : null };
     if (S.tab === "data") renderPane("data");
+    // архив осадков был недоступен при расчёте — тихо пробуем ещё раз (один раз за открытие), иначе поправка на осадки не появится никогда
+    if (!m.precip && navigator.onLine && !S.multi.precipTried && typeof PL.fetchPrecip === "function" && S.D) {
+      S.multi.precipTried = true;
+      const { lat, lon } = S.D.village, years = m.seasons.map(s => s.year);
+      PL.fetchPrecip({ lat, lon, years }).then(precip => {
+        if (S.loadingKey !== key || !precip) return;
+        const m2 = Object.assign({}, m, { precip });
+        if (!S.D.multiyear) C.ls.set(multiKey(key, m.last), m2);
+        setMulti(key, m2);
+      }).catch(() => {});
+    }
   }
   async function runMulti() {
-    if (!S.D || !TR() || typeof PL.buildYears !== "function") return;
+    if (!S.D || !TR() || typeof PL.buildYears !== "function" || (S.multi && S.multi.state === "loading")) return;
     if (!navigator.onLine) { toast(t("err.offline"), true); return; }
     const key = S.loadingKey, D = S.D, last = D.source.year, { lat, lon } = D.village;
     const years = Array.from({ length: last - MULTI_FIRST + 1 }, (_, i) => MULTI_FIRST + i);
     // это лето уже посчитано (S.D), прошлое — тоже, если готово: их не качаем заново
-    const have = { [last]: { year: last, status: (D.meta && D.meta.data_status) || "measured", dates: D.source.dates || [], window: null,
+    const have = { [last]: { year: last, status: (D.meta && D.meta.data_status) || "measured", dates: D.source.dates || [], window: D.source.window || null,
       plots: D.plots.map(p => ({ id: p.id, ndvi: p.ndvi, valid_fraction: p.valid_fraction ?? 1 })) } };
     if (S.prev && S.prev.state === "ready" && S.prev.season) have[S.prev.year] = S.prev.season;
     S.multi = { state: "loading", last };
@@ -1025,9 +1036,12 @@
   }
   const pTxt = p => (p < 0.01 ? "< 0.01" : p.toFixed(2));
   const slopeTxt = s => `${s.slope_per_year >= 0 ? "+" : "−"}${Math.abs(s.slope_per_year).toFixed(4)}`;
+  // наклон и p — того ряда, по которому сделан вывод (NDVI или NDVI с учётом осадков); у участков p с поправкой на 16 проверок
+  const basisOf = s => (s.basis === "resid" && s.resid ? { sl: s.resid, p: s.resid.p_adj ?? s.resid.p } : { sl: s, p: s.p_adj ?? s.p });
   function verdictText(s) {
     if (!s || s.verdict === "few_years") return t("mt.v.few_years", { n: s ? s.n : 0, min: TR().MIN_YEARS });
-    return t("mt.v." + s.verdict, { n: s.n, s: slopeTxt(s), p: pTxt(s.p) });
+    const b = basisOf(s), resid = s.verdict === "decline_unexplained" && s.basis === "resid";
+    return t(resid ? "mt.v.decline_resid" : "mt.v." + s.verdict, { n: s.n, s: slopeTxt(b.sl), p: pTxt(b.p) });
   }
   /** График: медиана NDVI участков по годам (годы вне ряда — пустые точки), осадки — столбики, пунктир — тренд Тейла — Сена. */
   function multiChart(a) {
@@ -1078,7 +1092,8 @@
   function multiRow(p) {
     const M = S.multi, s = M && M.state === "ready" && M.a && M.a.plots[p.id];
     if (!s) return "";
-    const val = s.verdict === "few_years" ? t("mt.s.few_years") : `${t("mt.s." + s.verdict)} (${slopeTxt(s)} ${t("mt.perYear")}, p ${pTxt(s.p).startsWith("<") ? pTxt(s.p) : "= " + pTxt(s.p)})`;
+    const b = basisOf(s), pp = pTxt(b.p);
+    const val = s.verdict === "few_years" ? t("mt.s.few_years") : `${t("mt.s." + s.verdict)} (${slopeTxt(b.sl)} ${t("mt.perYear")}${s.basis === "resid" ? " " + t("mt.withRain") : ""}, p ${pp.startsWith("<") ? pp : "= " + pp})`;
     return `<tr><td>${t("mt.row", { a: MULTI_FIRST, b: M.last })}</td><td style="white-space:normal">${val} ${src("sat")}</td></tr>`;
   }
 
@@ -1783,7 +1798,8 @@
         вывод_по_селу: a.village.verdict, лет_в_ряду: a.village.n,
         наклон_ndvi_в_год: a.village.slope_per_year != null ? +a.village.slope_per_year.toFixed(4) : null, p: a.village.p != null ? +a.village.p.toFixed(3) : null,
         связь_с_осадками_r2: a.village.rain ? +a.village.rain.r2.toFixed(2) : null, поправка_на_осадки: a.village.rain ? a.village.rain.valid : false,
-        участки: Object.entries(a.plots).map(([id, s]) => `${id}: ${s.verdict}${s.slope_per_year != null ? ` ${s.slope_per_year.toFixed(4)}/год p=${s.p.toFixed(2)}` : ""}`),
+        участки: Object.entries(a.plots).map(([id, s]) => { const b = basisOf(s); return `${id}: ${s.verdict}${b.sl.slope_per_year != null ? ` ${b.sl.slope_per_year.toFixed(4)}/год${s.basis === "resid" ? " с учётом осадков" : ""} p=${b.p.toFixed(2)}` : ""}`; }),
+        p_участков: "с поправкой на множественную проверку (Бенджамини — Хохберг)",
       }))(M.a) : { статус: !M ? "нет" : { idle: "не посчитан (кнопка на вкладке «Данные»)", loading: "считается", error: "не посчитался" }[M.state] || "нет" })(S.multi),
       алгоритм: S.pl.algorithm === "fair-optimal-v1" ? "оптимизация: 1) у всех хозяйств одинаковая доля обеспеченности, насколько позволяют ограничения (max-min); 2) при этом максимум корма; 3) при этом минимум перегона; затем календарь"
         : "жадная эвристика (не оптимизатор)",

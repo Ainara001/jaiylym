@@ -62,7 +62,7 @@ async function journey(page, label) {
   assert.match(mt, /Трава по годам/);
   assert.match(mt, /8 лет/, label + ": ряд 2019–2026");
   assert.ok(await page.$(".mt svg.mt-chart"), label + ": график по годам");
-  assert.doesNotMatch(mt, /деградаци[яи](?! о)/i, label + ": без вывода о деградации");
+  assert.doesNotMatch(mt, /(?<!вывод о )деградац/i, label + ": слово «деградация» только в оговорке «не вывод о деградации»");
   await page.evaluate(() => window.JaiylymApp.renderPane("brief"));
   // убрать демо-стада → добавить своё хозяйство
   await page.click("#demoToggle");
