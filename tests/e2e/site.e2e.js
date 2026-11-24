@@ -208,10 +208,15 @@ async function accountFlow(page, label) {
   await stubNetwork(page);
   const user = { uid: "aTest", name: "Айгерим", login: "+77011234567", via: "password", role: "farmer", created: "2026-11-24T10:00:00Z", farm: null, pastures: [], villages: [] };
   let regBody = null;
-  await page.route(/jaiylym-bot\.onrender\.com\/auth\/register/, r => { regBody = JSON.parse(r.request().postData());
-    return regBody.login === "taken_login" ? r.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "занят", field: "login" }) })
-      : r.fulfill({ contentType: "application/json", body: JSON.stringify({ status: "ok", token: "t".repeat(40), user }) }); });
-  await page.route(/jaiylym-bot\.onrender\.com\/api\/me$/, r => r.fulfill({ contentType: "application/json", body: JSON.stringify(user) }));
+  // сервер на другом адресе: ответы с заголовками CORS, предварительный запрос OPTIONS (WebKit шлёт его на POST с JSON)
+  const CORS = { "access-control-allow-origin": "*", "access-control-allow-headers": "content-type, authorization", "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS" };
+  const reply = (r, status, data) => r.fulfill({ status, headers: Object.assign({ "content-type": "application/json" }, CORS), body: JSON.stringify(data) });
+  await page.route(/jaiylym-bot\.onrender\.com\/auth\/register/, r => {
+    if (r.request().method() === "OPTIONS") return r.fulfill({ status: 204, headers: CORS });
+    regBody = JSON.parse(r.request().postData());
+    return regBody.login === "taken_login" ? reply(r, 409, { error: "занят", field: "login" }) : reply(r, 200, { status: "ok", token: "t".repeat(40), user }); });
+  await page.route(/jaiylym-bot\.onrender\.com\/(api\/me|auth\/logout)$/, r => r.request().method() === "OPTIONS" ? r.fulfill({ status: 204, headers: CORS })
+    : reply(r, 200, r.request().url().endsWith("/api/me") ? user : { ok: true }));
   await page.goto(base + "#/home");
   await page.waitForSelector("#accountBtn");
   await page.click("#accountBtn");
