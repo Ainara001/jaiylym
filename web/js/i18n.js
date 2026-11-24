@@ -1238,7 +1238,7 @@
     applyStatic();
   }
   function applyStatic(root) {
-    (root || document).querySelectorAll("[data-i18n]").forEach(el => { el.textContent = t(el.dataset.i18n); });
+    (root || document).querySelectorAll("[data-i18n]").forEach(el => { const v = t(el.dataset.i18n); if (el.textContent !== v) el.textContent = v; });   // тот же текст не перерисовываем
     (root || document).querySelectorAll("[data-i18n-ph]").forEach(el => { el.placeholder = t(el.dataset.i18nPh); });
     (root || document).querySelectorAll("[data-i18n-label]").forEach(el => { el.setAttribute("aria-label", t(el.dataset.i18nLabel)); });
   }
