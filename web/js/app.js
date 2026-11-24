@@ -2132,12 +2132,24 @@
   }
 
   // ---------- главная ----------
-  let heroMap = null;
+  let heroMap = null, heroWatch = null;
+  function heroMapVisible() {
+    const el = $("#heroMap"); if (!el || typeof IntersectionObserver === "undefined") return true;
+    const r = el.getBoundingClientRect(); return r.top < innerHeight + 200 && r.bottom > -200;
+  }
+  function lazyHeroMap() {
+    if (heroWatch) return;
+    heroWatch = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) { heroWatch.disconnect(); heroWatch = null; heroForce = true; if (S.route === "home") renderHome(); } }, { rootMargin: "200px" });
+    heroWatch.observe($("#heroMap"));
+  }
+  let heroForce = false;
   function renderHome() {
     // те же данные, что на карте: пастбище без жилья, ферм и промзон (OSM)
     const plots = (NG && DEFAULT.nograze && DEFAULT.nograze.status === "ok" ? NG.apply(DEFAULT.plots, DEFAULT.nograze, S.ngBuf) : DEFAULT.plots).map(p => Object.assign({}, p));
     const pl = J.solve(plots, DEMO_HERDS);
-    if (window.L && !heroMap) {
+    // спутниковая карта на главной — только когда видна (на телефоне она ниже первого экрана): тайлы не отнимают канал у страницы
+    if (window.L && !heroMap && !heroForce && !heroMapVisible()) { lazyHeroMap(); }
+    else if (window.L && !heroMap) {
       heroMap = L.map("heroMap", { zoomControl: false, attributionControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, touchZoom: false, tap: false });
       L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 17 }).addTo(heroMap);
       const smooth = PL.makePlots(DEFAULT.village.lat, DEFAULT.village.lon, 48);

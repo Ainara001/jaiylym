@@ -61,6 +61,8 @@ async function ask(body, label) {
     ok(mj.includes(`MODEL_VERSION = "${M.MODEL_VERSION}"`), `модель на сайте ${M.MODEL_VERSION}`);
     const v = await get(SITE + "vendor/html2pdf-0.10.1.bundle.min.js");
     ok(v.ok, "библиотека PDF лежит на сайте");
+    const lf = await get(SITE + "vendor/leaflet-1.9.4/leaflet.js");
+    ok(lf.ok, "карта Leaflet лежит на сайте (без unpkg.com)");
   } catch (e) { ok(false, "сайт: " + e.message); }
 
   // 2. сервер
