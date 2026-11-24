@@ -770,3 +770,20 @@ main .btn > span { min-width: 0; overflow-wrap: anywhere; }
   .to-result:not([hidden]) { display: inline-flex; position: absolute; right: 10px; bottom: 26px; z-index: 600; box-shadow: var(--shadow); }
 }
 .panel { scroll-margin-top: calc(var(--top-h, 56px) + 8px); }
+
+/* ---------- село не выбрано или ещё считается ---------- */
+.no-village .actions, .no-village .tabs, .no-village .modes, .no-village .legend { display: none; }
+.start { padding: 4px 0 12px; }
+.start h2 { margin: 0 0 8px; font-size: 22px; }
+.start h3 { margin: 22px 0 4px; font-size: 16px; }
+.start p { margin: 0 0 14px; max-width: 60ch; }
+.startbtns, .exbtns { display: flex; flex-wrap: wrap; gap: 10px; }
+.startload { display: flex; align-items: center; gap: 10px; color: var(--ink-2); }
+.startload .spin { flex: none; width: 18px; height: 18px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
+/* телефон: выбор села — над картой, чтобы кнопки были на первом экране */
+@media (max-width: 860px) {
+  .startbtns .btn { flex: 1 1 160px; justify-content: center; min-height: 44px; }
+  .no-village .workspace { display: flex; flex-direction: column; }
+  .no-village .workspace .panel { order: -1; }
+  .no-village .startbtns { margin-bottom: 4px; }
+}

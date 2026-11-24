@@ -3,7 +3,10 @@
 (function () {
   "use strict";
   const J = window.Jaiylym, M = window.JaiylymModel, PL = window.JaiylymPipeline, C = window.Client, I = window.I18N, t = I.t;
-  const DEFAULT = window.JAIYLYM_DATA, DEMO_HERDS = window.JAIYLYM_HERDS;
+  // готовые примеры (посчитаны заранее, открываются без сети); первый — село, с которого началась проблема проекта
+  const EXAMPLES = [{ id: "beskol", data: window.JAIYLYM_BESKOL, png: "data/beskol.png" }, { id: "kegen", data: window.JAIYLYM_DATA, png: "data/ndvi.png" }]
+    .filter(e => e.data && e.data.village);
+  const DEFAULT = EXAMPLES[0].data, DEMO_HERDS = window.JAIYLYM_HERDS;
   const NG = window.JaiylymNoGraze;          // где нельзя пасти: жильё, фермы, промзоны (OpenStreetMap)
   const BOT = "JAIYLYM_bot";
   const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -17,7 +20,10 @@
   const ic = id => `<svg class="ic"><use href="#i-${id}"/></svg>`;
   const src = k => `<span class="src src-${k}">${t("src." + k)}</span>`;
   const coord = x => (x < 0 ? "m" : "") + Math.round(Math.abs(x) * 1000);
-  const isKegen = (lat, lon) => Math.abs(lat - DEFAULT.village.lat) < 0.01 && Math.abs(lon - DEFAULT.village.lon) < 0.01;
+  const exampleAt = (lat, lon) => EXAMPLES.find(e => Math.abs(lat - e.data.village.lat) < 0.01 && Math.abs(lon - e.data.village.lon) < 0.01) || null;
+  const exName = e => t(e.id === "kegen" ? "ex.kegen" : "ex.beskol");
+  // демо-стада — только когда человек сам открыл пример (кнопкой или ссылкой с demo=1), а не когда нашёл это село поиском
+  const villageHash = (v, demo) => `#/map?lat=${v.lat}&lon=${v.lon}&name=${encodeURIComponent(v.name)}${demo ? "&demo=1" : ""}`;
 
   // ---------- параметры модели: стандартные → калибровка (если есть) → свои (настройки) ----------
   let paramErr = null;
@@ -110,16 +116,21 @@
         const same = S.D && Math.abs(S.D.village.lat - lat) < 1e-4 && Math.abs(S.D.village.lon - lon) < 1e-4;
         const pend = S.pending && S.pending.key === cacheKey(lat, lon) ? S.pending.opts : null;
         S.pending = null;
-        const extra = { plot: q.get("plot"), pasture: q.get("pasture"), draw: q.get("draw") === "1" };
-        if (!same || pend) openVillage(q.get("name") || "Село", lat, lon, Object.assign(extra, pend || {}));
+        const extra = { plot: q.get("plot"), pasture: q.get("pasture"), draw: q.get("draw") === "1", demo: q.get("demo") === "1" };
+        // это село уже считается (вернулись на карту, сменили язык) — не начинаем заново
+        if (S.building === cacheKey(lat, lon)) { if (extra.draw) S.drawNext = true; renderStart(); }
+        else if (!same || pend) openVillage(q.get("name") || "Село", lat, lon, Object.assign(extra, pend || {}));
         else {
+          if (extra.demo && exampleAt(lat, lon) && !S.herds.some(h => h.demo)) { S.herds = S.herds.concat(demoHerds()); render(); }
           if (extra.plot) focusPlot(extra.plot);
           if (extra.pasture) focusPasture(extra.pasture);
           if (extra.draw) startDraw();
         }
       } else if (!S.D) {
         const last = C.ls.get("jaiylym:last", null), extra = { draw: q.get("draw") === "1" };
-        if (last) openVillage(last.name, last.lat, last.lon, extra); else openVillage(DEFAULT.village.name, DEFAULT.village.lat, DEFAULT.village.lon, extra);
+        if (S.building) { if (extra.draw) S.drawNext = true; renderStart(); }
+        else if (last) openVillage(last.name, last.lat, last.lon, extra);
+        else { if (extra.draw) S.drawNext = true; showStart(); }              // село не выбрано — выбор, а не чужой пример
       } else if (q.get("draw") === "1") setTimeout(startDraw, 100);
       // село уже загружено без карты (например, для ИИ-чата) — дорисовать участки
       if (S.D && (S.noLeaflet ? !$("#schemeMap").children.length : S.map && !Object.keys(S.layers).length)) { drawVillage(); render(); }
@@ -141,7 +152,7 @@
   function ensureMap() {
     if (S.map || S.noLeaflet) return;
     if (!window.L) { S.noLeaflet = true; $("#map").hidden = true; $("#schemeMap").hidden = false; return; }
-    S.map = L.map("map", { zoomControl: true, attributionControl: true, maxZoom: 19, zoomSnap: 0.25 }).setView([DEFAULT.village.lat, DEFAULT.village.lon], 12);
+    S.map = L.map("map", { zoomControl: true, attributionControl: true, maxZoom: 19, zoomSnap: 0.25 }).setView(KZ, phone() ? 4 : 5);   // пока село не выбрано — вся страна
     // снимки Esri есть до 17 уровня; дальше карта увеличивает их, чтобы можно было точнее ставить точки
     const tiles = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
       maxNativeZoom: 17, maxZoom: 19, attribution: "Esri World Imagery · Sentinel-2 ESA Copernicus · © OpenStreetMap",
@@ -174,8 +185,79 @@
     status(on ? t("map.picking") : "");
   }
 
+  // ---------- село не выбрано или ещё считается ----------
+  const KZ = [48.0, 67.5];
+  const viewMap = () => $(".view-map");
+  /** Убрать с экрана прежнее село, чтобы пока считается новое, на карте и в панели не было чужих данных. */
+  function clearVillage() {
+    S.D = null; S.png = null; S.plots = []; S.herds = []; S.layers = {}; S.vBounds = null; S.cur = null; S.pl = null; S.aiBrief = null; S.chatAuto = null;
+    if (S.map) {
+      endDraw(); S.map.closePopup(); S.group.clearLayers(); S.pastGroup.clearLayers();
+      if (S.ngLayer) { S.ngLayer.remove(); S.ngLayer = null; }
+      if (S.ndviLayer) { S.ndviLayer.remove(); S.ndviLayer = null; }
+    }
+    const sch = $("#schemeMap"); if (sch) sch.innerHTML = "";
+    $("#vtitle").innerHTML = ""; $("#toResult").hidden = true;
+  }
+  function placeLabels(on) {
+    if (!S.map) return;
+    if (on && !S.labels) S.labels = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}", { maxNativeZoom: 17, maxZoom: 19, opacity: 0.9 });
+    if (on) S.labels.addTo(S.map); else if (S.labels) S.labels.remove();
+  }
+  /** Карта без села: вся страна, в панели — как выбрать. */
+  function showStart(err, retry) {
+    clearVillage();
+    S.start = { err: err || "", retry: retry || null };
+    placeLabels(true);
+    if (S.map && !retry) { S.fitting = true; S.map.setView(KZ, phone() ? 4 : 5, { animate: false }); S.fitting = false; }
+    renderStart();
+  }
+  /** Новое село считается: карта сразу едет к нему. */
+  function showBuilding(name, lat, lon) {
+    clearVillage();
+    S.start = { name };
+    placeLabels(true);
+    $("#vtitle").innerHTML = `<b>${esc(name)}</b>`; $("#mapQ").value = name;
+    if (S.map) {
+      S.fitting = true; S.map.invalidateSize(); S.map.setView([lat, lon], 12, { animate: false }); S.fitting = false;
+      L.circleMarker([lat, lon], { radius: 7, color: "#fff", weight: 2, fillColor: "#1b2a21", fillOpacity: 1 }).bindTooltip(esc(name), { permanent: true, direction: "top" }).addTo(S.group);
+    }
+    renderStart();
+  }
+  function renderStart() {
+    const st = S.start || {}, el = $('.pane[data-pane="brief"]');
+    viewMap().classList.add("no-village");
+    $$(".pane").forEach(p => { p.hidden = p !== el; });
+    if (S.building) {
+      el.innerHTML = `<div class="start"><h2>${t("start.building", { v: esc(st.name || "") })}</h2><p>${t("start.buildingD")}</p>
+        <p class="startload"><span class="spin" aria-hidden="true"></span><span>${t("start.wait")}</span></p></div>`;
+      return;
+    }
+    el.innerHTML = `<div class="start"><h2>${t(st.err ? "start.errT" : "start.title")}</h2>
+      ${st.err ? `<p class="note warn">${esc(st.err)}</p>` : `<p>${t("start.lead")}</p>`}
+      <div class="startbtns">
+        ${st.retry ? `<button type="button" class="btn btn-primary" id="stRetry">${t("start.retry", { v: esc(st.retry.name) })}</button>` : ""}
+        <button type="button" class="btn ${st.retry ? "btn-soft" : "btn-primary"}" id="stHere">${ic("pin")} ${t("start.here")}</button>
+        ${S.noLeaflet ? "" : `<button type="button" class="btn btn-soft" id="stPick">${ic("map")} ${t("start.pick")}</button>`}</div>
+      <h3>${t("start.examples")}</h3><p class="fine">${t("start.examplesD")}</p>
+      <div class="startbtns">${EXAMPLES.map(e => `<a class="btn btn-ghost" href="${villageHash(e.data.village, true)}">${esc(exName(e))}</a>`).join("")}</div></div>`;
+    const here = $("#stHere", el), pick = $("#stPick", el), re = $("#stRetry", el);
+    if (re) re.onclick = () => openVillage(st.retry.name, st.retry.lat, st.retry.lon, st.retry.opts);
+    if (pick) pick.onclick = () => { setPicking(true); toast(t("map.picking")); if (phone()) $("#map").scrollIntoView({ block: "center" }); };
+    here.onclick = () => {
+      if (!navigator.geolocation) { toast(t("pick.geoFail"), true); return; }
+      here.disabled = true;
+      navigator.geolocation.getCurrentPosition(async p => {
+        const lat = +p.coords.latitude.toFixed(5), lon = +p.coords.longitude.toFixed(5);
+        let name = ""; try { name = (await PL.reverseGeocode(lat, lon, I.lang === "kk" ? "kk" : "ru")).name; } catch (_) {}
+        openVillage(name || `${lat.toFixed(3)}, ${lon.toFixed(3)}`, lat, lon);
+      }, () => { here.disabled = false; toast(t("pick.geoFail"), true); }, { enableHighAccuracy: true, timeout: 15000 });
+    };
+  }
+
   function drawVillage() {
     { const tr = $("#toResult"); if (tr) tr.hidden = !S.D; }
+    placeLabels(false);
     S.layers = {};
     if (S.noLeaflet || !S.map) return;   // нет карты: запасная схема рисуется в paintMap(); село для ИИ-чата — дорисуем при переходе
     S.group.clearLayers();
@@ -209,7 +291,7 @@
       L.polygon(z.ring.map(([x, y]) => [y, x]), { color: "#7a1f0f", weight: 1, fillColor: "#bf4a2a", fillOpacity: 0.35, interactive: false, dashArray: z.point ? "3 3" : null })
         .addTo(S.ngLayer);
   }
-  /** Кеген и ранее открытые сёла без расчёта зон — досчитать (WorldCover + OSM), результат в кэш браузера. */
+  /** Ранее открытые сёла без расчёта зон — досчитать (WorldCover + OSM), результат в кэш браузера. */
   function loadNoGraze(key, data, force) {
     if (!NG || typeof PL.buildNoGraze !== "function") return;
     if (!force && data.nograze && data.nograze.status === "ok") return;
@@ -283,6 +365,7 @@
   function startDraw() {
     if (S.noLeaflet || !S.map) { toast(t("past.noMap"), true); return; }
     if (S.draw) return;
+    if (!S.D) { S.drawNext = true; toast(t("start.drawFirst"), true); return; }    // контур считается в привязке к селу
     setPicking(false);
     S.map.closePopup();
     S.draw = { pts: [], line: L.polyline([], { color: "#e3b25c", weight: 3, dashArray: "6 5" }).addTo(S.map), marks: L.layerGroup().addTo(S.map) };
@@ -395,14 +478,19 @@
     S.loadingKey = key;
     $$(".results").forEach(u => { u.hidden = true; });
     let data = null, png = null;
-    if (isKegen(lat, lon)) { data = JSON.parse(JSON.stringify(DEFAULT)); png = "data/ndvi.png"; }
+    const ex = exampleAt(lat, lon);
+    S.building = null;
+    if (ex) { data = JSON.parse(JSON.stringify(ex.data)); png = ex.png; }
     else {
       const hit = C.ls.get(key, null);
       if (hit && hit.plots) { data = hit; png = hit.png; delete data.png; data.village.name = name || data.village.name; }
     }
     if (!data) {
-      if (!navigator.onLine) { status(t("err.offline"), { err: true }); return; }
+      if (!navigator.onLine) { status(t("err.offline"), { err: true }); if (!S.D) showStart(t("err.offline")); return; }
       try {
+        S.building = key;
+        showBuilding(name, lat, lon);
+        if (!opts.keepRoute) history.replaceState(null, "", villageHash({ name, lat, lon }));
         const res = await PL.buildVillage({ name, lat, lon, onProgress: m => {
           const k = /снимк.*Sentinel/.test(m) ? "st.scenes" : /Загружаю/.test(m) ? "st.loading" : "st.computing";
           status(t(k), { busy: true });
@@ -412,12 +500,19 @@
         data = res; S.justBuilt = true;
         C.ls.set(key, Object.assign({}, res, { png }));
       } catch (e) {
-        if (S.loadingKey === key) status(t("err.build") + ": " + e.message, { err: true });
+        if (S.loadingKey === key) {
+          S.building = null;
+          const msg = t("err.build") + ": " + (/fetch|network|load failed|timeout|timed out/i.test(e.message) ? t("err.imagery") : e.message);
+          status("");
+          showStart(msg, { name, lat, lon, opts });
+        }
         return;
       }
     }
     status("");
-    S.D = data; S.png = png; S.fromCache = !isKegen(lat, lon) && !!C.ls.get(key, null) && !S.justBuilt; S.justBuilt = false;
+    S.building = null; S.start = null;
+    viewMap().classList.remove("no-village");
+    S.D = data; S.png = png; S.fromCache = !ex && !!C.ls.get(key, null) && !S.justBuilt; S.justBuilt = false;
     S.t0 = Date.now();
     S.baseWater = Object.fromEntries(data.plots.map(p => [p.id, M.waterUsable(p)]));
     S.added = new Set((opts.water || []).filter(id => S.baseWater[id] === false));
@@ -426,11 +521,11 @@
     S.waterSet = Object.assign({}, opts.water_status || {});
     if (opts.params) { S.userP = Object.assign({}, S.userP, opts.params); paramErr = null; S.P = resolveParams(S.userP, S.calib); if (paramErr) toast(paramErr, true); }
     rebuildPlots();
-    S.herds = opts.herds ? opts.herds.map(h => Object.assign({}, h)) : (isKegen(lat, lon) && C.ls.get("jaiylym:demo", true) ? demoHerds() : []);
+    S.herds = opts.herds ? opts.herds.map(h => Object.assign({}, h)) : (ex && opts.demo ? demoHerds() : []);
     addOwnFarm();
     S.botSubs = {};
     C.ls.set("jaiylym:last", { name: data.village.name, lat: data.village.lat, lon: data.village.lon });
-    if (!opts.keepRoute) history.replaceState(null, "", `#/map?lat=${data.village.lat}&lon=${data.village.lon}&name=${encodeURIComponent(data.village.name)}`);
+    if (!opts.keepRoute) syncHash();
     $("#mapQ").value = data.village.name;
     $("#tgVillage").href = botLink();
     drawVillage();
@@ -445,9 +540,10 @@
     const want = opts.plot;
     if (want) setTimeout(() => focusPlot(want), 350);
     if (opts.pasture) setTimeout(() => focusPasture(opts.pasture), 400);
-    if (opts.draw) setTimeout(startDraw, 450);
+    if (opts.draw || S.drawNext) { S.drawNext = false; setTimeout(startDraw, 450); }
   }
 
+  const syncHash = () => { if (S.D) history.replaceState(null, "", villageHash(S.D.village, S.herds.some(h => h.demo) && !!exampleAt(S.D.village.lat, S.D.village.lon))); };
   // ввод пользователя поверх спутниковых данных: смоделированный водопой, подтверждение/отсутствие воды, закрытый участок
   function rebuildPlots() {
     // кормовая площадь без жилья, ферм и промзон (OSM) с выбранным буфером; исходная — в pasture_ha_gross
@@ -591,6 +687,7 @@
   const ngLegend = () => (S.D && S.D.nograze && S.D.nograze.status === "ok" && (S.D.nograze.zones || []).length
     ? `<i style="background:#bf4a2a;opacity:.6"></i>${t("map.legend.nograze")}<br>` : "");
   function paintMap() {
+    if (!S.D) return;
     if (S.noLeaflet) { renderSchemeMap(); }
     else {
       for (const p of S.plots) {
@@ -795,6 +892,7 @@
 
   // ---------- вкладки панели ----------
   function renderPane(tab) {
+    if (!S.D) { if (S.route === "map") renderStart(); return; }
     S.tab = tab;
     $$(".tabs [data-tab]").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === tab));
     $$(".pane").forEach(p => { p.hidden = p.dataset.pane !== tab; });
@@ -1061,7 +1159,7 @@
   }
 
   // ---------- трава по годам (P3): лето каждого года с 2019, осадки ERA5, Тейл — Сен, Манн — Кендалл, RESTREND (web/trend.js) ----------
-  // Кеген посчитан заранее (scripts/add_multiyear.js); другое село — по кнопке (около 8 лет снимков, 1–2 минуты), результат в кэше браузера.
+  // примеры посчитаны заранее (scripts/build_example.js, add_multiyear.js); другое село — по кнопке (около 8 лет снимков, 1–2 минуты), результат в кэше браузера.
   const MULTI_FIRST = 2019;
   const TR = () => self.JaiylymTrend;
   const multiKey = (key, last) => key + ":multi:" + last;
@@ -1856,9 +1954,9 @@
   }
   function demoBanner() {
     const n = S.herds.filter(h => h.demo).length;
-    if (!n && !(S.D && isKegen(S.D.village.lat, S.D.village.lon))) return "";
-    return `<div class="note warn demo-banner">${n ? t("demo.banner", { n }) : t("demo.kegenNote")}
-      <button type="button" class="btn btn-ghost btn-sm" id="demoToggle">${n ? t("demo.hide") : t("demo.show")}</button></div>`;
+    if (!n) return "";
+    return `<div class="note warn demo-banner">${t("demo.banner", { n })}
+      <button type="button" class="btn btn-ghost btn-sm" id="demoToggle">${t("demo.hide")}</button></div>`;
   }
 
   function movesHtml() {
@@ -1913,9 +2011,8 @@
     if (cp) cp.onchange = () => { S.chainId = cp.value; const y = scrollY; renderPane("brief"); scrollTo(0, y); const n = $("#chainPlot"); if (n) n.focus(); };
     const dt = $("#demoToggle", el);
     if (dt) dt.onclick = () => {
-      const has = S.herds.some(h => h.demo);
-      S.herds = has ? S.herds.filter(h => !h.demo) : demoHerds().concat(S.herds);
-      C.ls.set("jaiylym:demo", !has);
+      S.herds = S.herds.filter(h => !h.demo);
+      syncHash();
       render();
     };
     const add = $("#addDemo", el); if (add) add.onclick = () => { S.herds = demoHerds(); render(); };
@@ -2019,18 +2116,19 @@
   // ---------- ИИ-помощник: отдельный чат ----------
   /**
    * ИИ-чат открыт без села: подгружаем последнее открытое село, если оно есть в кэше браузера (без сети и без ожидания),
-   * иначе пример Кегена. Пользователь видит, на чьих данных отвечает помощник.
+   * иначе пример (первый из списка, с демо-стадами). Пользователь видит, на чьих данных отвечает помощник.
    */
   async function ensureChatVillage() {
     if (S.D || S.chatLoading) return false;
     S.chatLoading = true;
     try {
       const last = C.ls.get("jaiylym:last", null);
-      // последнее открытое село пользователя (из кэша или заново по снимкам); не открылось — демо-село Кеген
-      const own = last && last.name && !isKegen(last.lat, last.lon) && (navigator.onLine || C.ls.get(cacheKey(last.lat, last.lon), null));
+      // последнее открытое село пользователя (из кэша или заново по снимкам); не открылось — пример
+      const own = last && last.name && (navigator.onLine || C.ls.get(cacheKey(last.lat, last.lon), null));
       if (own) { try { await openVillage(last.name, last.lat, last.lon, { keepRoute: true }); } catch (_) {} }
-      if (!S.D) await openVillage(DEFAULT.village.name, DEFAULT.village.lat, DEFAULT.village.lon, { keepRoute: true });
-      S.chatAuto = !!S.D && isKegen(S.D.village.lat, S.D.village.lon) ? "demo" : "last";
+      const how = S.D ? "last" : "demo";
+      if (!S.D) await openVillage(DEFAULT.village.name, DEFAULT.village.lat, DEFAULT.village.lon, { keepRoute: true, demo: true });
+      S.chatAuto = how;
       return !!S.D;
     } finally { S.chatLoading = false; }
   }
@@ -2039,7 +2137,7 @@
     const el = $("#aiPage");
     const hist = (() => { try { return JSON.parse(sessionStorage.getItem("jaiylym:chat") || "[]"); } catch (_) { return []; } })();
     const ctxLine = S.D ? t("ai.ctx", { v: `${esc(S.D.village.name)} · ${S.plots.length} ${t("ai.plots")} · ${S.herds.length} ${t("sc.herds")}` }) +
-      (S.chatAuto ? ` <a href="#/map">${t(S.chatAuto === "demo" ? "ai.ctxDemo" : "ai.ctxLast")}</a>` : "") : t("ai.loadingCtx");
+      (S.chatAuto ? ` <a href="#/map">${S.chatAuto === "demo" ? t("ai.ctxDemo", { v: esc(S.D.village.name) }) : t("ai.ctxLast")}</a>` : "") : t("ai.loadingCtx");
     el.innerHTML = `<div class="chat"><div class="chat-head"><h1>${ic("spark")} ${t("ai.title")}</h1><p class="fine" style="margin:0">${t("ai.lead")}</p>
         <span class="chat-ctx">${ic("pin")} ${ctxLine}</span></div>
       <div class="chat-log" id="chatLog" aria-live="polite">${hist.map(m => `<div class="msg ${m.role}">${m.role === "ai" ? aiText(m.text) + aiSources(m.sources) : esc(m.text)}</div>`).join("")}</div>
@@ -2083,8 +2181,7 @@
     $("#setPage").innerHTML = `<div class="card">
         <div class="setrow"><span>${t("set.lang")}</span><div class="seg"><button data-l="ru" class="${I.lang === "ru" ? "on" : ""}">Русский</button><button data-l="kk" class="${I.lang === "kk" ? "on" : ""}">Қазақша</button></div></div>
         <div class="setrow"><span>${t("set.mode")}</span><div class="seg">${["current", "plan", "ndvi"].map(m => `<button data-m="${m}" class="${S.mode === m ? "on" : ""}">${t("map.mode." + m)}</button>`).join("")}</div></div>
-        <div class="setrow"><span>${t("set.algo")}</span><div class="seg">${["optimized", "greedy"].map(a => `<button data-algo="${a}" class="${S.algo === a ? "on" : ""}">${t("algo." + a)}</button>`).join("")}</div></div>
-        <div class="setrow"><span>${t("set.demo")}</span><label class="switch"><input type="checkbox" id="setDemo" ${C.ls.get("jaiylym:demo", true) ? "checked" : ""}><span></span></label></div></div>
+        <div class="setrow"><span>${t("set.algo")}</span><div class="seg">${["optimized", "greedy"].map(a => `<button data-algo="${a}" class="${S.algo === a ? "on" : ""}">${t("algo." + a)}</button>`).join("")}</div></div></div>
       <div class="card"><h2>${ic("chart")} ${t("set.model")} ${src("model")}</h2><p class="fine">${t("set.modelNote")}</p>
         <p>${t("set.modelVer")}: <b>${M.MODEL_VERSION}</b> · ${t("set.field")}: <b>${M.fieldValidated(S.P) ? t("how.yes") : t("how.no")}</b></p>
         <div class="params">${paramInputs()}
@@ -2102,7 +2199,6 @@
         <button class="btn btn-ghost btn-sm" id="setGuest">${t("set.clearGuest")}</button></p><p class="fine">${t("set.version")}: 2026.11 · ${esc(navigator.onLine ? "online" : "offline")}</p></div>`;
     $$("#setPage [data-l]").forEach(b => b.onclick = () => setLang(b.dataset.l));
     $$("#setPage [data-m]").forEach(b => b.onclick = () => { S.mode = b.dataset.m; C.ls.set("jaiylym:mode", S.mode); if (S.D) paintMap(); renderSettings(); });
-    $("#setDemo").onchange = e => C.ls.set("jaiylym:demo", e.target.checked);
     $$("#setPage [data-algo]").forEach(b => b.onclick = () => { S.algo = b.dataset.algo; C.ls.set("jaiylym:algo", S.algo); if (S.D) render(); renderSettings(); });
     $$("#setPage [data-param]").forEach(i => i.onchange = () => { if (setParam(i.dataset.param, i.value, i, $("#setPage")) && S.D) render(); });
     $("#setVeg").onchange = e => { S.userP = Object.assign({}, S.userP, { vegetation_type: e.target.value }); S.P = resolveParams(S.userP, S.calib); saveParams(); };
@@ -2162,9 +2258,11 @@
     } else setTimeout(() => heroMap.invalidateSize(), 60);
     const ha = plots.reduce((s, p) => s + p.pasture_ha, 0);
     $("#heroStats").innerHTML = `<div><b>${plots.length}</b><span>${t("home.stat.plots")}</span></div><div><b>${DEFAULT.source.dates.length}</b><span>${t("home.stat.scenes")}</span></div><div><b>${fmt(ha)}</b><span>${t("home.stat.ha")}</span></div>`;
-    $("#heroStatNote").textContent = `${t("home.stat.note")} ${DEFAULT.source.year}. ${t("map.mode.plan")}: ${t("herds.demo").toLowerCase()}.`;
+    $("#heroStatNote").textContent = `${t("home.stat.note", { v: exName(EXAMPLES[0]) })} ${DEFAULT.source.year}. ${t("map.mode.plan")}: ${t("herds.demo").toLowerCase()}.`;
+    $("#heroBadge").textContent = "Sentinel-2 · " + exName(EXAMPLES[0]);
+    $("#exBtns").innerHTML = EXAMPLES.map((e, i) => `<a class="btn ${i ? "btn-ghost" : "btn-soft"}" href="${villageHash(e.data.village, true)}">${t("home.demo", { v: esc(exName(e)) })}</a>`).join("");
     const last = C.ls.get("jaiylym:last", null), cb = $("#continueBtn");
-    if (last && !isKegen(last.lat, last.lon)) { cb.hidden = false; cb.textContent = t("home.continue") + last.name; cb.href = `#/map?lat=${last.lat}&lon=${last.lon}&name=${encodeURIComponent(last.name)}`; }
+    if (last && !exampleAt(last.lat, last.lon)) { cb.hidden = false; cb.textContent = t("home.continue") + last.name; cb.href = `#/map?lat=${last.lat}&lon=${last.lon}&name=${encodeURIComponent(last.name)}`; }
     else cb.hidden = true;
   }
 
