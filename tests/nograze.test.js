@@ -79,9 +79,13 @@ test("применение к участкам: кормовая площадь 
 test("сеть: 429, затем ответ — повтор; сбой OSM не ломает расчёт села", async () => {
   let n = 0;
   const fake = async () => { n++; return n === 1 ? { ok: false, status: 429 } : { ok: true, status: 200, json: async () => OSM }; };
-  const r = await NG.fetchOSM(bbox, { fetchImpl: fake });
+  const r = await NG.fetchOSM(bbox, { fetchImpl: fake, retryMs: 1 });
   assert.equal(r.elements.length, 5); assert.equal(n, 2);
   const bad = await PL.noGrazeFor({ lat: LAT, lon: LON, bbox, land: land(30), fetchImpl: async () => { throw new Error("нет сети"); } });
   assert.equal(bad.status, "error");
   assert.match(bad.error, /нет сети/);
+  // ответ 200 с пометкой «timed out» — не данные, а сбой: идём к следующему зеркалу
+  let k = 0;
+  const slow = async () => { k++; return k === 1 ? { ok: true, status: 200, json: async () => ({ remark: "runtime error: Query timed out", elements: [] }) } : { ok: true, status: 200, json: async () => OSM }; };
+  assert.equal((await NG.fetchOSM(bbox, { fetchImpl: slow, retryMs: 1 })).elements.length, 5);
 });
