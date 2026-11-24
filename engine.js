@@ -526,6 +526,11 @@
   // ======================================================================================
   const NEAR_PENALTY = 10;         // км: «цена» занять ближний участок не дойным стадом (ближние — дойным и на отдых)
   const MIN_STAY = 14;             // сут: короче — перегон не оправдан (то же правило, что у жадного плана)
+  // Пересчёт при согласовании (opts.keep, opts.prefer): «цена» ухода с прежнего участка и занятия нежелаемого, км. Больше любого
+  // перегона (до ~35 км), поэтому сначала держим прежние участки, потом экономим перегон. Крупнее нельзя: точность потока.
+  // SOFT_PREFER меньше KEEP_COST: мягкое пожелание занимает только свободное место и никого не сдвигает.
+  const KEEP_COST = 100, PREFER_COST = 1000, SOFT_PREFER = 50;
+  const STABLE_DAYS = 3;           // сут: меньше — участок стада считается прежним
 
   /** Граф для потоков: Dinic (максимальный поток) и SSP с Беллманом–Фордом (поток мин. стоимости). */
   function Graph(n) {
@@ -559,8 +564,17 @@
     };
   }
 
-  /** Модель задачи потока: стада, участки, допустимые пары. */
+  /**
+   * Модель задачи потока: стада, участки, допустимые пары.
+   * Для согласования (web/kelisim.js) opts может содержать:
+   *   keep    { стадо: { участок: усл.гол.·сут } } — прежняя раскладка, от которой отступаем только при необходимости;
+   *   prefer, prefer_soft { стадо: [участки] } — желаемые участки (доли хозяйств не меняют, только кто где стоит); мягкие — лишь на свободное место;
+   *   free    [стада], чьи перемены не считаются «задели лишних»;
+   *   floors  { стадо: доля } — доля, ниже которой стадо опускать нельзя;
+   *   weights { стадо: вес } — скорость роста доли (правило справедливости), умножается на приоритет хозяйства.
+   */
   function flowModel(plots, herds, p, opts) {
+    opts = opts || {};
     const prep = prepare(plots, p, opts);
     const byId = Object.fromEntries(prep.map(q => [q.id, q]));
     const H = herds.map(h => ({ h, au: herdAU(h, p) })).filter(x => x.au > 0).map(x => Object.assign(x, { d: x.au * p.season_days }));
@@ -570,10 +584,14 @@
       prep.forEach((q, j) => {
         if (q.cap <= 0 || herdReasons(x.h, q).length) return;
         const km = dist(home, q.pl) + (!x.h.daily_return && q.ring === "near" ? NEAR_PENALTY : 0);
-        pairs.push({ i, j, cap: x.au * (q.win[1] - q.win[0] + 1), km, realKm: dist(home, q.pl) });
+        pairs.push({ i, j, cap: x.au * (q.win[1] - q.win[0] + 1), km, realKm: dist(home, q.pl),
+          keep: (opts.keep && opts.keep[x.h.id] && opts.keep[x.h.id][q.id]) || 0, pref: !!(opts.prefer && (opts.prefer[x.h.id] || []).includes(q.id)),
+          soft: !!(opts.prefer_soft && (opts.prefer_soft[x.h.id] || []).includes(q.id)) });
       });
     });
-    return { prep, byId, H, pairs };
+    return { prep, byId, H, pairs, keep: opts.keep || null, free: new Set(opts.free || []), hasPref: pairs.some(e => e.pref || e.soft),
+      floors: H.map(x => Math.min(1, Math.max(0, (opts.floors && +opts.floors[x.h.id]) || 0))),
+      weights: H.map(x => { const w = opts.weights && +opts.weights[x.h.id]; return (w > 0 && Number.isFinite(w) ? w : 1) * herdWeight(x.h); }) };
   }
   /** Сколько корма можно дать стадам при заданных верхних пределах lim_i (максимальный поток). */
   function feasibleFlow(m, lim) {
@@ -592,8 +610,18 @@
   const herdWeight = h => { const w = +h.weight; return Number.isFinite(w) && w > 0 ? Math.min(3, Math.max(0.25, w)) : 1; };
   function fairShares(m) {
     const n = m.H.length, s = new Array(n).fill(0), frozen = new Array(n).fill(false);
-    const w = m.H.map(x => herdWeight(x.h));
-    const target = (t, i) => Math.min(1, t * w[i]);
+    const w = m.weights;
+    // гарантированные доли (согласование). Вместе не помещаются (например, календарь урезал пару) — снижаем всем одинаково
+    let floor = m.floors;
+    if (floor.some(f => f > 0)) {
+      const fits = k => { const L = m.H.map((x, i) => k * floor[i] * x.d), need = L.reduce((a, b) => a + b, 0); return feasibleFlow(m, L).flow >= need - 1e-9 * (1 + need); };
+      if (!fits(1)) {
+        let lo = 0, hi = 1;
+        for (let k = 0; k < 40; k++) { const mid = (lo + hi) / 2; if (fits(mid)) lo = mid; else hi = mid; }
+        floor = floor.map(f => f * lo); m.floorScale = lo;
+      }
+    }
+    const target = (t, i) => Math.min(1, Math.max(floor[i], t * w[i]));
     const lim = t => m.H.map((x, i) => (frozen[i] ? s[i] : target(t, i)) * x.d);
     const ok = t => { const L = lim(t), need = L.reduce((a, b) => a + b, 0); return feasibleFlow(m, L).flow >= need - 1e-9 * (1 + need); };
     const top = 1 / Math.min(...w, 1);                     // при t = top у всех доля 1
@@ -625,7 +653,14 @@
   function minDistanceAlloc(m, amounts) {
     const nH = m.H.length, nP = m.prep.length, S = nH + nP, T = S + 1, G = Graph(T + 1);
     amounts.forEach((a, i) => { if (a > 0) G.add(S, i, a); });
-    const edges = m.pairs.map(e => ({ e, edge: G.add(e.i, nH + e.j, e.cap, e.km) }));
+    const edges = [];
+    for (const e of m.pairs) {
+      if (!m.keep && !m.hasPref) { edges.push({ e, edge: G.add(e.i, nH + e.j, e.cap, e.km) }); continue; }
+      // каждая единица корма проходит ровно одну пару, поэтому добавка «не желаемый» и «не прежний» — чистое предпочтение
+      const base = e.km + (!m.hasPref || e.pref ? 0 : e.soft ? PREFER_COST - SOFT_PREFER : PREFER_COST), k = Math.min(e.cap, e.keep);
+      if (k > 1e-9) edges.push({ e, edge: G.add(e.i, nH + e.j, k, base) });
+      if (e.cap - k > 1e-9) edges.push({ e, edge: G.add(e.i, nH + e.j, e.cap - k, base + (m.keep ? KEEP_COST : 0)) });
+    }
     m.prep.forEach((q, j) => { if (q.cap > 0) G.add(nH + j, T, q.cap); });
     const need = amounts.reduce((a, b) => a + b, 0);
     const r = G.mincost(S, T, need);
@@ -727,7 +762,19 @@
    * (справедливость и общий корм не меняются), участков стало меньше (а при равенстве — меньше коротких стоянок, потом км)
    * и календарь укладывается в окна не хуже. Ёмкости пар после шага возвращаются.
    */
-  /** Оценка раскладки по календарю: [перегоны, короткие стоянки (< MIN_STAY), км × голов] — меньше лучше, по порядку. */
+  /** Сколько стад (кроме free) встало не туда, где стояло: больше STABLE_DAYS суток на новом месте. */
+  function churn(m, a) {
+    let n = 0;
+    a.forEach((row, i) => {
+      const id = m.H[i].h.id, k = m.keep[id];
+      if (!k || m.free.has(id)) return;
+      let moved = 0;
+      for (const [pid, v] of Object.entries(row)) moved += Math.max(0, v - (k[pid] || 0));
+      if (moved > STABLE_DAYS * m.H[i].au) n++;
+    });
+    return n;
+  }
+  /** Оценка раскладки по календарю: [сколько чужих стад задели — при пересчёте], перегоны, короткие стоянки (< MIN_STAY), км × голов — меньше лучше, по порядку. */
   function planScore(m, a, season) {
     const pairOf = {}; for (const e of m.pairs) pairOf[e.i + "|" + m.prep[e.j].id] = e;
     let moves = 0, short = 0, km = 0;
@@ -738,9 +785,12 @@
       short += stays.filter(s => s.to - s.from + 1 < MIN_STAY).length;
       for (const s of segs) km += s.au_days * (pairOf[i + "|" + s.plot] ? pairOf[i + "|" + s.plot].km : 0);
     });
-    return [moves, short, km];
+    return m.keep ? [churn(m, a), moves, short, km] : [moves, short, km];
   }
-  const scoreBetter = (x, y) => x[0] < y[0] || (x[0] === y[0] && (x[1] < y[1] || (x[1] === y[1] && x[2] < y[2] - 1e-6)));
+  function scoreBetter(x, y) {
+    for (let k = 0; k < x.length - 1; k++) if (x[k] !== y[k]) return x[k] < y[k];
+    return x[x.length - 1] < y[y.length - 1] - 1e-6;
+  }
   function prune(m, alloc, season, maxTries = 60) {
     const amounts = alloc.map(a => Object.values(a).reduce((s, x) => s + x, 0));
     const need = amounts.reduce((s, x) => s + x, 0);
@@ -907,6 +957,7 @@
       herds_short: herds.filter(h => unmet[h.id]).map(h => h.id), diagnostics, algorithm: "fair-optimal-v2",
       optimal: true, objective: ["max_min_share", "max_total", "min_moves", "min_short_stays", "min_km"], calendar_repairs: repairs,
       shares: Object.fromEntries(m.H.map((x, i) => [x.h.id, shares[i]])), kind: "plan" }, s);
+    if (opts.floors) res.floor_scale = m.floorScale == null ? 1 : m.floorScale;
     res.warnings = planWarnings(prep, res, herds);
     res.suggestions = suggestions(plots, herds, p, opts, prep, res);
     res.violations = checkLoad(prep, herds, load, p, { plan: res });
@@ -1089,7 +1140,7 @@
     return Math.floor((date - start) / 86400000) + 1;
   }
 
-  const _internal = { flowModel, feasibleFlow, fairShares, minDistanceAlloc, consolidate, exchange, prune, schedule, herdWeight };
+  const _internal = { flowModel, feasibleFlow, fairShares, minDistanceAlloc, consolidate, exchange, prune, schedule, herdWeight, prepare, herdReasons, dist };
   return { DIRS, DEFAULTS, ALGORITHM, MODEL: M, NEAR_PENALTY, MIN_STAY, _internal, params, herdAU, plotCapacity, explainCapacity, explainPlan, current, plan, optimize, solve, bottlenecks, planMetrics,
     schedule, exactBound, wells, wellEffect,
     compareScenarios, defaultVariants, sensitivity, totalCapacity, hayTonnes, plotOnDay, seasonDay, dist };
