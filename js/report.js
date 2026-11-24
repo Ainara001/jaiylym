@@ -88,6 +88,7 @@
           <td ${td}>${esc(t("ws." + M.waterStatus(p)))}</td></tr>`; }).join("")}
       </tbody></table>
       <p style="font-size:10px;color:#555;margin:4px 0 0">${t("plots.qualityNote")}</p>
+      ${S.plots.some(p => p.nograze_ha != null) ? `<p style="font-size:10.5px;margin:4px 0 0">${t("ng.title")}: ${fmt1(S.plots.reduce((s, p) => s + (p.nograze_ha || 0), 0))} ${t("common.ha")} — ${t("plots.nograzeNote", { b: S.ngBuf })}</p>` : ""}
 
       <div style="display:flex;gap:12px;page-break-inside:avoid;margin-top:10px">
         <div style="flex:1;text-align:center;background:#f3f4ee;border-radius:8px;padding:6px">${scheme(S.plots, p => loadColor(S.cur.load[p.id].known ? S.cur.load[p.id].load : null), p => (S.cur.load[p.id].used ? pct(S.cur.load[p.id].load) : ""), { size: 280 })}<b>${t("map.mode.current")}</b></div>

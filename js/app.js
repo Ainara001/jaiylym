@@ -4,6 +4,7 @@
   "use strict";
   const J = window.Jaiylym, M = window.JaiylymModel, PL = window.JaiylymPipeline, C = window.Client, I = window.I18N, t = I.t;
   const DEFAULT = window.JAIYLYM_DATA, DEMO_HERDS = window.JAIYLYM_HERDS;
+  const NG = window.JaiylymNoGraze;          // где нельзя пасти: жильё, фермы, промзоны (OpenStreetMap)
   const BOT = "JAIYLYM_bot";
   const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
   // числа и даты в казахстанском формате для обоих языков: 1 234,5 и 21.11.2026 14:05
@@ -30,6 +31,7 @@
     D: null, plots: [], baseWater: {}, added: new Set(), forbidden: new Set(), waterSet: {}, herds: [],
     userP: C.ls.get("jaiylym:params", null) || {}, calib: C.ls.get("jaiylym:calibration", null), P: null, t0: 0,
     algo: C.ls.get("jaiylym:algo", "optimized") === "greedy" ? "greedy" : "optimized",
+    ngBuf: [0, 100, 250, 500].includes(+C.ls.get("jaiylym:ngbuf", 100)) ? +C.ls.get("jaiylym:ngbuf", 100) : 100,
     mode: C.ls.get("jaiylym:mode", "plan"), tab: "brief", cur: null, pl: null, botSubs: {}, picking: false, wx: null, aiBrief: null,
     map: null, layers: {}, group: null, ndviLayer: null, png: null, route: "home", loadingKey: null, histKey: null,
   };
@@ -164,7 +166,7 @@
 
   function drawVillage() {
     S.layers = {};
-    if (S.noLeaflet || !S.map) return;   // карта ещё не создана (село открыто для ИИ-чата) — нарисуем при переходе на карту            // запасная схема рисуется в paintMap(), когда нагрузка уже посчитана
+    if (S.noLeaflet || !S.map) return;   // нет карты: запасная схема рисуется в paintMap(); село для ИИ-чата — дорисуем при переходе
     S.group.clearLayers();
     const [w, s, e, n] = S.D.bbox;
     S.ndviLayer = L.imageOverlay(S.png, [[s, w], [n, e]], { opacity: 0.85 });
@@ -183,6 +185,34 @@
     S.vBounds = b; S.mapMoved = false;
     S.fitting = true; S.map.invalidateSize(); S.map.fitBounds(b, { padding: [12, 12], animate: false }); S.fitting = false;
     drawPastures();
+    drawNoGraze();
+  }
+  /** Зоны «нельзя пасти» на карте: контуры жилья, ферм и промзон из OSM (не перехватывают нажатия на участки). */
+  function drawNoGraze() {
+    if (!S.map || !S.D) return;
+    if (S.ngLayer) S.ngLayer.remove();
+    const ng = S.D.nograze;
+    if (!ng || ng.status !== "ok" || !(ng.zones || []).length) return;
+    S.ngLayer = L.layerGroup().addTo(S.map);
+    for (const z of ng.zones)
+      L.polygon(z.ring.map(([x, y]) => [y, x]), { color: "#7a1f0f", weight: 1, fillColor: "#bf4a2a", fillOpacity: 0.35, interactive: false, dashArray: z.point ? "3 3" : null })
+        .addTo(S.ngLayer);
+  }
+  /** Кеген и ранее открытые сёла без расчёта зон — досчитать (WorldCover + OSM), результат в кэш браузера. */
+  function loadNoGraze(key, data, force) {
+    if (!NG || typeof PL.buildNoGraze !== "function") return;
+    if (!force && data.nograze && data.nograze.status === "ok") return;
+    const hit = !force && C.ls.get(key + ":ng", null);
+    if (hit && hit.status === "ok") { data.nograze = hit; return; }
+    if (!navigator.onLine) { S.ngState = "offline"; return; }
+    S.ngState = "loading";
+    PL.buildNoGraze({ lat: data.village.lat, lon: data.village.lon }).then(ng => {
+      data.nograze = ng;
+      if (ng.status === "ok") C.ls.set(key + ":ng", ng);
+      S.ngState = ng.status;
+      if (S.D !== data) return;
+      rebuildPlots(); render(); drawNoGraze();
+    }).catch(e => { S.ngState = "error"; data.nograze = { status: "error", error: String(e.message || e) }; if (S.D === data && S.tab === "data") renderPane("data"); });
   }
 
   // ---------- свои пастбища: фермер рисует контур, NDVI считается по снимкам внутри него ----------
@@ -397,6 +427,9 @@
     if (!opts.herds) loadBotData();
     loadPrev(key, data);
     loadMulti(key, data);
+    S.ngState = data.nograze ? data.nograze.status : null;
+    loadNoGraze(key, data);
+    if (data.nograze && data.nograze.status === "ok") { rebuildPlots(); render(); drawNoGraze(); }
     if (S.histKey !== key) { S.histKey = key; C.addHistory({ kind: "open", village: data.village, summary: summary() }); }
     const want = opts.plot;
     if (want) setTimeout(() => focusPlot(want), 350);
@@ -406,7 +439,9 @@
 
   // ввод пользователя поверх спутниковых данных: смоделированный водопой, подтверждение/отсутствие воды, закрытый участок
   function rebuildPlots() {
-    S.plots = S.D.plots.map(p => {
+    // кормовая площадь без жилья, ферм и промзон (OSM) с выбранным буфером; исходная — в pasture_ha_gross
+    const base = NG && S.D.nograze && S.D.nograze.status === "ok" ? NG.apply(S.D.plots, S.D.nograze, S.ngBuf) : S.D.plots;
+    S.plots = base.map(p => {
       const o = Object.assign({}, p);
       if (S.added.has(p.id)) { o.water_status = "modeled"; o.water = true; o.water_source = t("ws.modeled"); }
       else if (S.waterSet[p.id]) { o.water_status = S.waterSet[p.id]; o.water = M.waterUsable(o); }
@@ -533,6 +568,8 @@
     if (ws === "assumed") return { color: "#ffffff", weight: 1.4, dashArray: null };
     return { color: "#ffffff", weight: 1.2, dashArray: "4 4" };
   }
+  const ngLegend = () => (S.D && S.D.nograze && S.D.nograze.status === "ok" && (S.D.nograze.zones || []).length
+    ? `<i style="background:#bf4a2a;opacity:.6"></i>${t("map.legend.nograze")}<br>` : "");
   function paintMap() {
     if (S.noLeaflet) { renderSchemeMap(); }
     else {
@@ -555,7 +592,7 @@
       `<i style="border:1.5px solid #c9c9c9"></i>${t("map.legend.wassumed")}<br><i style="border:1.5px dashed #555"></i>${t("map.legend.wnone")}<br><i style="border:2px dotted #bf4a2a"></i>${t("map.legend.closed")}<br><small>${t("map.legend.rights")}</small>`;
     lg.innerHTML = S.mode === "ndvi"
       ? `<b>${t("map.legend.ndvi")} ${S.D.source.year}</b><i style="background:#2f9a4b"></i>${t("map.legend.dense")}<br><i style="background:#9fd068"></i>${t("map.legend.mid")}<br><i style="background:#d8b56a"></i>${t("map.legend.sparse")}<br><i style="background:#8c510a"></i>${t("map.legend.none")}<br><i style="background:#9aa29a"></i>${t("map.legend.nodata")}<br><small>${t("map.legend.nonpasture")}</small>`
-      : `<b>${t("map.legend.load")}</b><i style="background:#3e8e5a"></i>${t("map.legend.ok")}<br><i style="background:#c9970f"></i>${t("map.legend.warn")}<br><i style="background:#bf4a2a"></i>${t("map.legend.bad")}<br><i style="background:#9aa29a"></i>${t("map.legend.idle")}<br><i style="background:#d9d2bf"></i>${t("map.legend.nodata")}<br>${border}`;
+      : `<b>${t("map.legend.load")}</b><i style="background:#3e8e5a"></i>${t("map.legend.ok")}<br><i style="background:#c9970f"></i>${t("map.legend.warn")}<br><i style="background:#bf4a2a"></i>${t("map.legend.bad")}<br><i style="background:#9aa29a"></i>${t("map.legend.idle")}<br><i style="background:#d9d2bf"></i>${t("map.legend.nodata")}<br>${ngLegend()}${border}`;
     $$(".modes button").forEach(b => { const on = b.dataset.mode === S.mode; b.classList.toggle("on", on); b.setAttribute("aria-selected", on); });
   }
 
@@ -612,6 +649,7 @@
     return `<div class="pop"><h3 style="margin:0 0 6px">${esc(p.id)} <small style="font-weight:500;color:#627064">${p.ring === "near" ? t("pop.near") : t("pop.far")}, ~${p.dist_km} ${t("common.km")}, ${p.dir}</small></h3>
       <table><tbody>
       <tr><td>${t("pop.pasture")}</td><td>${fmt(p.pasture_ha)} ${t("common.ha")} ${src("sat")}</td></tr>
+      ${p.nograze_ha != null ? `<tr><td>${t("pop.nograze")}</td><td style="white-space:normal">${fmt1(p.nograze_ha)} ${t("common.ha")} ${t("pop.nograzeOf", { g: fmt(p.pasture_ha_gross), b: p.nograze_buffer_m })} ${src("osm")}</td></tr>` : ""}
       <tr><td>${t("pop.ndvi")}${p.ndvi_base != null ? ` ${S.D.source.base_year} → ${S.D.source.year}` : ""}</td><td>${ndviRow} ${src("sat")}</td></tr>
       <tr><td>${t("pop.quality")}</td><td>${confTag(p)}</td></tr>
       <tr><td>${t("pop.forageConf")}</td><td>${fcTag(p)}</td></tr>
@@ -937,17 +975,18 @@
   }
 
   function panePlots(el) {
-    const hasComp = S.plots.some(p => p.excluded_ha != null);
-    el.innerHTML = `<div class="tablewrap"><table class="plots-t"><thead><tr><th>${t("plots.id")}</th><th class="num">${t("plots.ha")}</th>${hasComp ? `<th class="num">${t("plots.comp")}</th>` : ""}<th class="num">${t("plots.ndvi")}</th>
+    const hasComp = S.plots.some(p => p.excluded_ha != null), hasNg = S.plots.some(p => p.nograze_ha != null);
+    el.innerHTML = `<div class="tablewrap"><table class="plots-t"><thead><tr><th>${t("plots.id")}</th><th class="num">${t("plots.ha")}</th>${hasNg ? `<th class="num">${t("plots.nograze")}</th>` : ""}${hasComp ? `<th class="num">${t("plots.comp")}</th>` : ""}<th class="num">${t("plots.ndvi")}</th>
       <th class="num">${t("plots.cap")}</th><th class="num">${t("plots.load")}</th><th>${t("plots.quality")}</th><th>${t("plots.forage")}</th><th>${t("plots.water")}</th></tr></thead><tbody>
       ${S.plots.map(p => { const ld = S.pl.load[p.id], c = capOf(p);
         return `<tr data-plot="${p.id}" tabindex="0" style="cursor:pointer"><td class="pt-id"><b>${esc(p.id)}</b> ${p.water ? ic("drop") : ""}${p.forbidden ? ` <span class="tag tag-closed">${t("pop.closedTag")}</span>` : ""}</td><td class="num" data-l="${esc(t("plots.ha"))}">${fmt(p.pasture_ha)}</td>
+        ${hasNg ? `<td class="num" data-l="${esc(t("plots.nograze"))}">${p.nograze_ha != null ? fmt1(p.nograze_ha) : "—"}</td>` : ""}
         ${hasComp ? `<td class="num" data-l="${esc(t("plots.comp"))}">${fmt(p.excluded_ha || 0)} / ${fmt(p.uncertain_ha || 0)}</td>` : ""}
         <td class="num" data-l="${esc(t("plots.ndvi"))}">${p.ndvi ?? "—"}</td><td class="num" data-l="${esc(t("plots.cap"))}">${sheepCap(c)}</td>
         <td class="num pt-load" data-l="${esc(t("plots.load"))}"><span class="loadpill" style="background:${ld.known ? loadColor(ld.load) : loadColor(null)}">${!ld.known ? "?" : ld.used ? pct(ld.load) : "—"}</span></td><td data-l="${esc(t("plots.quality"))}">${confTag(p)}</td><td data-l="${esc(t("plots.forage"))}">${fcTag(p)}</td>
         <td class="pt-water" data-l="${esc(t("plots.water"))}" style="white-space:normal;min-width:110px"><small>${esc(wsLabel(p))}</small></td></tr>`; }).join("")}
       </tbody></table></div><p class="srcrow" style="margin-top:10px">${t("plots.ha")}, NDVI: ${src("sat")} &nbsp; ${t("plots.cap")}, ${t("plots.load")}: ${src("model")} &nbsp; ${t("plots.water")}: ${src("sat")} ${src("input")} ${src("model")}</p>
-      <p class="fine">${t("plots.qualityNote")}</p>${hasComp ? `<p class="fine">${t("plots.compNote")}</p>` : ""}`;
+      <p class="fine">${t("plots.qualityNote")}</p>${hasNg ? `<p class="fine">${t("plots.nograzeNote", { b: S.ngBuf })} ${src("osm")}</p>` : ""}${hasComp ? `<p class="fine">${t("plots.compNote")}</p>` : ""}`;
     el.querySelectorAll("tr[data-plot]").forEach(r => {
       const go2 = () => { if (window.matchMedia("(max-width: 860px)").matches) window.scrollTo({ top: 0, behavior: "smooth" }); focusPlot(r.dataset.plot); };
       r.onclick = go2; r.onkeydown = e => { if (e.key === "Enter") go2(); };
@@ -1150,11 +1189,29 @@
         ${S.fromCache ? `<p class="note warn">${t("meta.cached", { d: meta.calculated_at ? dateStr(meta.calculated_at, false) : t("meta.unknownDate") })}</p>` : ""}
         ${days != null && days > 30 ? `<p class="note warn">${t("meta.stale", { n: Math.round(days) })}</p>` : ""}
         <h3>${t("meta.title")}</h3>${metaHtml(meta)}</div>
+      ${noGrazeHtml()}
       <div class="srcblock s-input"><h3>${src("input")} ${t("data.input.t")}</h3><p>${t("data.input.d")}</p></div>
       <div class="srcblock s-model"><h3>${src("model")} ${t("data.model.t")}</h3><p>${t("data.model.d")}</p></div>
       <div class="srcblock"><h3>${ic("wifioff")} ${t("off.title")}</h3><p>${t("off.d")}</p></div>
       <p><a href="#/data">${t("nav.data")}</a></p>`;
     const mr = $("#multiRun", el); if (mr) mr.onclick = runMulti;
+    const nb = $("#ngBuf", el);
+    if (nb) nb.onchange = () => { S.ngBuf = +nb.value; C.ls.set("jaiylym:ngbuf", S.ngBuf); rebuildPlots(); render(); };
+    const nr = $("#ngRetry", el);
+    if (nr) nr.onclick = () => { loadNoGraze(cacheKey(S.D.village.lat, S.D.village.lon), S.D, true); renderPane("data"); };
+  }
+  /** Вкладка «Данные»: где нельзя пасти — источник, сколько зон, площадь по участкам, буфер. */
+  function noGrazeHtml() {
+    const ng = S.D.nograze, st = ng ? ng.status : S.ngState;
+    const head = `<div class="srcblock s-osm"><h3>${src("osm")} ${t("ng.title")}</h3>`;
+    if (!ng || st === "loading") return head + `<p>${st === "offline" ? t("ng.offline") : t("ng.loading")}</p></div>`;
+    if (st === "error") return head + `<p class="note warn">${t("ng.error")}: ${esc(ng.error || "")}</p><button class="btn btn-ghost btn-sm" id="ngRetry">${t("ng.retry")}</button></div>`;
+    const tot = S.plots.reduce((s, p) => s + (p.nograze_ha || 0), 0), gross = S.plots.reduce((s, p) => s + (p.pasture_ha_gross ?? p.pasture_ha), 0);
+    const c = ng.counts || {};
+    return head + `<p>${st === "empty" ? t("ng.none") : t("ng.sum", { t: fmt1(tot), g: fmt(gross), p: gross ? Math.round(tot / gross * 100) : 0,
+        s: c.settlement || 0, f: c.farm || 0, i: c.industrial || 0, o: c.other || 0 })}</p>
+      <label class="field" style="max-width:320px">${t("ng.buffer")}<select id="ngBuf">${(ng.buffers || NG.BUFFERS).map(b => `<option value="${b}" ${+S.ngBuf === b ? "selected" : ""}>${b} м</option>`).join("")}</select></label>
+      <p class="fine">${t("ng.note")} ${c.points ? t("ng.points", { n: c.points }) : ""} ${ng.osm_timestamp ? t("ng.date", { d: dateStr(ng.osm_timestamp, false) }) : ""}</p></div>`;
   }
 
   // ---------- «Что если?»: варианты рядом, на одном экране ----------
@@ -1835,7 +1892,10 @@
         исключённые_участки: S.pl.diagnostics[h.id].excluded, не_хватает_дней: Math.round(S.P.season_days - S.pl.coverage[h.id]) })),
       что_можно_изменить: (S.pl.suggestions || []).map(sgText).map(x => x.replace(/<[^>]+>/g, "")),
       предупреждения: (S.pl.warnings || []).map(wrText).map(x => x.replace(/<[^>]+>/g, "")),
+      нельзя_пасти: S.D.nograze && S.D.nograze.status === "ok" ? { источник: "OpenStreetMap: жильё, населённые пункты, фермы, промзоны", буфер_м: S.ngBuf,
+        вычтено_из_пастбищ_га: Math.round(S.plots.reduce((s, p) => s + (p.nograze_ha || 0), 0)), зон: S.D.nograze.counts } : "не посчитано",
       участки: S.plots.map(p => ({ id: p.id, кольцо: p.ring === "near" ? "ближний" : "дальний", км_от_села: p.dist_km, направление: p.dir,
+        нельзя_пасти_га_osm: p.nograze_ha != null ? p.nograze_ha : undefined,
         пастбище_га_спутник: p.pasture_ha, ndvi_спутник: p.ndvi, трава_за_лето_проц: (p.series || []).length >= 2 ? Math.round((p.series[p.series.length - 1].v - p.series[0].v) / p.series[0].v * 100) : null,
         качество_снимка: confidence(p), достоверность_корма: M.forageConfidence(p, S.P), статус_данных: capOf(p).status,
         вода: t("ws." + M.waterStatus(p)), закрыт_по_вводу: !!p.forbidden, отдых_выпас_только_дни: p.window ? `${p.window.from}-${p.window.to}` : undefined,
