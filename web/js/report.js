@@ -67,6 +67,7 @@
         <tr><td ${td}>${t("meta.calc")}</td><td ${td}>${meta.calculated_at ? ds(meta.calculated_at) : t("meta.unknownDate")}</td></tr>
         <tr><td ${td}>${t("meta.status")}</td><td ${td}>${t("meta." + meta.data_status)}</td></tr>
         ${c.norm ? `<tr><td ${td}>${t("nm.title")}</td><td ${td}>${c.norm} ${tag("norm")}</td></tr>` : ""}
+        ${c.zone ? `<tr><td ${td}>${t("zn.title")}</td><td ${td}>${c.zone}</td></tr>` : ""}
         ${meta.warnings.length ? `<tr><td ${td}>${t("meta.warn")}</td><td ${td}>${meta.warnings.map(esc).join("<br>")}</td></tr>` : ""}
       </tbody></table>
 

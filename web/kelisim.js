@@ -297,7 +297,7 @@
       decisions: (k.proposals || []).map(p => ({ id: p.id, household: p.household, type: p.type, plot: p.plot || null, to: p.to || null, herd: p.herd || null, reason: p.reason || null, observed_on: p.observed_on || null,
         status: p.status, variant: p.variant || null, version: p.version, decided_at: p.decided_at || null,
         losers: p.effect && p.effect.variants && p.variant && p.effect.variants[p.variant] ? p.effect.variants[p.variant].losers.map(x => ({ id: x.id, delta: x.delta })) : [] })),
-      snapshot: { source: k.snapshot.source, check: k.snapshot.check, norm: k.snapshot.norm || null, model_version: k.snapshot.model_version, deficit_t: now ? now.deficit_t : null, status: now ? now.status : null },
+      snapshot: { zone: k.snapshot.zone || null, source: k.snapshot.source, check: k.snapshot.check, norm: k.snapshot.norm || null, model_version: k.snapshot.model_version, deficit_t: now ? now.deficit_t : null, status: now ? now.status : null },
       observations: obsOf(k), herds: herdCheck(k), restored: k.restored || null,
       // что этот документ не делает — показывать всегда
       limits: ["not_a_contract", "no_land_rights", "herds_declared", "model_estimate"],
