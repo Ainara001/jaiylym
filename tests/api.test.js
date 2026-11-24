@@ -110,9 +110,14 @@ test("профиль хозяйства: неверные данные откл�
 test("сценарии: свои видны только владельцу, чужие нельзя удалить", async () => {
   other = (await login(222, "Ерлан")).poll.data.token;
   assert.equal((await call("POST", "/api/scenarios", { token: farmer, body: { name: "x", village: KEGEN, water: ["Д-З", "x"] } })).status, 400, "неизвестный участок");
-  const s = await call("POST", "/api/scenarios", { token: farmer, body: { name: "Мой план", village: KEGEN, herds: [{ name: "A", sheep: 100 }], water: ["Д-З"] } });
+  const s = await call("POST", "/api/scenarios", { token: farmer, body: { name: "Мой план", village: KEGEN, herds: [{ name: "A", sheep: 100, weight: 2 }], water: ["Д-З"],
+    rest: { "Б-С": { spring: 30, autumn: 0 }, "Д-С": { spring: 0, autumn: 0 } } } });
   assert.equal(s.status, 200);
   assert.deepEqual(s.data.water, ["Д-З"]);
+  assert.deepEqual(s.data.rest, { "Б-С": { spring: 30, autumn: 0 } }, "отдых участка сохраняется, пустой — отбрасывается");
+  assert.equal(s.data.herds[0].weight, 2, "приоритет хозяйства сохраняется");
+  for (const bad of [{ rest: { "X-Y": { spring: 1 } } }, { rest: { "Б-С": { spring: -5 } } }, { rest: { "Б-С": { spring: 1.5 } } }, { herds: [{ name: "A", sheep: 1, weight: 5 }] }])
+    assert.equal((await call("POST", "/api/scenarios", { token: farmer, body: Object.assign({ name: "x", village: KEGEN }, bad) })).status, 400, JSON.stringify(bad));
   assert.equal(s.data.model_version, "2.0.0");
   assert.equal((await call("GET", "/api/scenarios", { token: farmer })).data.own.length, 1);
   assert.equal((await call("GET", "/api/scenarios", { token: other })).data.own.length, 0);
