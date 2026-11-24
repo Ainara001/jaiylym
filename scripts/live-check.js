@@ -6,6 +6,7 @@
 const { Jaiylym: J, loadPlots, loadHerds } = require("../data");
 const M = require("../web/model.js");
 const NG = require("../web/nograze.js");
+const NM = require("../web/norms.js");
 const PL = require("../web/pipeline.js");
 PL.setUserAgent("Jaiylym-live-check/1.0 (+https://github.com/Ainara001/jaiylym)");
 const SITE = process.env.SITE_URL || "https://ainara001.github.io/jaiylym/";
@@ -25,7 +26,7 @@ async function wake() {
 
 /** Данные села в том же виде, в каком их передаёт сайт (сокращённо). По умолчанию — Кеген с демо-стадами. */
 function context(D0 = loadPlots(), H = loadHerds().map(h => Object.assign({ demo: true }, h))) {
-  const D = Object.assign({}, D0, { plots: NG.apply(D0.plots, D0.nograze) }), P = J.params();
+  const D = Object.assign({}, D0, { plots: NM.attach(NG.apply(D0.plots, D0.nograze), { region: NM.regionOf(D0.village.region) }) }), P = J.params();
   const pl = J.solve(D.plots, H, P), cur = J.current(D.plots, H, P);
   return {
     село: D.village.name, лето_снимков: D.source.year, статус_плана: pl.status, версия_модели: M.MODEL_VERSION, демо_стада: H.some(h => h.demo),
@@ -33,6 +34,7 @@ function context(D0 = loadPlots(), H = loadHerds().map(h => Object.assign({ demo
     участки: D.plots.map(p => { const c = J.plotCapacity(p, P); return { id: p.id, пастбищный_покров_га_спутник: p.pasture_ha_gross ?? p.pasture_ha,
       нельзя_пасти_га_osm: p.nograze_ha ?? undefined, кормовая_площадь_га: p.pasture_ha, ndvi_спутник: p.ndvi,
       ёмкость_овец_оценка: c.known ? Math.round(c.au_season / P.au.sheep) : null, вода: M.waterStatus(p),
+      что_ограничивает: c.limited_by ? (c.limited_by === "norm" ? "норма МСХ" : "трава по снимку") : undefined,
       как_рассчитано: J.explainCapacity(p, P).steps.map(s => `${s.key}: ${s.formula}`).join("; "),
       нагрузка_если_все_у_села_проц: Math.round(cur.load[p.id].load * 100), нагрузка_по_плану_проц: Math.round(pl.load[p.id].load * 100) }; }),
     стада: H.map(h => ({ имя: h.name, демо: !!h.demo, овцы: h.sheep, крс: h.cattle, лошади: h.horses, усл_голов: J.herdAU(h, P) })),
@@ -118,6 +120,7 @@ async function ask(body, label) {
   // другое село (не демо): ИИ должен помогать по любому селу — Нарынкол считается по снимкам здесь же, как в браузере
   try {
     const N = await PL.buildVillage({ name: "Нарынкол", lat: 42.717, lon: 80.183 });
+    N.village.region = await PL.regionAt(N.village.lat, N.village.lon).catch(() => "");
     const nctx = context(N, [{ id: "h1", name: "Стадо 1", sheep: 400, cattle: 20, horses: 10, home: N.plots[0].id }]);
     const top = nctx.участки.filter(x => x.ёмкость_овец_оценка != null).sort((a, b) => b.ёмкость_овец_оценка - a.ёмкость_овец_оценка)[0];
     const a6 = await ask({ mode: "chat", lang: "ru", context: nctx, messages: [{ role: "user", text: `Сколько овец выдержит участок ${top.id} и откуда это число?` }] }, `ru, другое село: Нарынкол, ${top.id}`);

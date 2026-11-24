@@ -8,8 +8,8 @@ const plots = D.plots;
 const herds = loadHerds();
 const P = J.params();
 
-test("условные головы: КРС 1, лошадь 1, овца/коза 0.2", () => {
-  assert.equal(J.herdAU({ cattle: 10, horses: 5, sheep: 100, goats: 50 }), 10 + 5 + 20 + 10);
+test("условные головы: КРС 1, лошадь 1.2 (как в приказе о норме), овца/коза 0.2", () => {
+  assert.equal(J.herdAU({ cattle: 10, horses: 5, sheep: 100, goats: 50 }), 10 + 6 + 20 + 10);
   assert.equal(J.herdAU({}), 0);
 });
 
