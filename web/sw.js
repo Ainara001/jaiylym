@@ -4,9 +4,9 @@
  * Только с сетью: поиск мест, новые снимки Sentinel-2 и WorldCover, сервер (вход, профиль, бот, ИИ), погода, подложка карты.
  * PDF-библиотека — своя копия (vendor/), тоже в кэше.
  * Спутниковые запросы здесь НЕ кэшируются, чтобы старые значения не выдавались за свежие. */
-const VERSION = "jaiylym-v17";
+const VERSION = "jaiylym-v18";
 const SHELL = [
-  "./", "index.html", "css/app.css", "model.js", "engine.js", "pipeline.js",
+  "./", "index.html", "css/app.css", "model.js", "engine.js", "pipeline.js", "trend.js",
   "js/i18n.js", "js/client.js", "js/report.js", "js/aitext.js", "js/app.js",
   "data/plots.js", "data/herds.js", "data/ndvi.png", "vendor/html2pdf-0.10.1.bundle.min.js",
 ];
