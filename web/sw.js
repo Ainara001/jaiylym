@@ -4,7 +4,7 @@
  * Только с сетью: поиск мест, новые снимки Sentinel-2 и WorldCover, сервер (вход, профиль, бот, ИИ), погода, подложка карты.
  * PDF-библиотека и карта Leaflet — свои копии (vendor/), тоже в кэше.
  * Спутниковые запросы здесь НЕ кэшируются, чтобы старые значения не выдавались за свежие. */
-const VERSION = "jaiylym-v32";
+const VERSION = "jaiylym-v33";
 const SHELL = [
   "./", "index.html", "css/app.css", "model.js", "engine.js", "nograze.js", "norms.js", "pipeline.js", "trend.js",
   "js/i18n.js", "js/client.js", "js/report.js", "js/aitext.js", "js/app.js",

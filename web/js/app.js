@@ -308,13 +308,16 @@
     if (hit && hit.status === "ok") { data.nograze = hit; return; }
     if (!navigator.onLine) { S.ngState = "offline"; return; }
     S.ngState = "loading";
-    PL.buildNoGraze({ lat: data.village.lat, lon: data.village.lon }).then(ng => {
+    const later = !force && S.ngLater; S.ngLater = null;
+    (later || PL.buildNoGraze({ lat: data.village.lat, lon: data.village.lon })).then(ng => {
       data.nograze = ng;
       if (ng.status === "ok") C.ls.set(key + ":ng", ng);
+      if (S.D !== data) return;                             // пока грузилось, открыли другое село
       S.ngState = ng.status;
-      if (S.D !== data) return;
       rebuildPlots(); render(); drawNoGraze();
-    }).catch(e => { S.ngState = "error"; data.nograze = { status: "error", error: String(e.message || e) }; if (S.D === data && S.tab === "data") renderPane("data"); });
+      // серверы OSM часто перегружены ненадолго — один тихий повтор, пока открыто это же село
+      if (ng.status === "error" && !S.ngRetried) { S.ngRetried = true; setTimeout(() => { if (S.D === data && S.ngState === "error") { loadNoGraze(key, data, true); renderPane(S.tab); } }, 45000); }
+    }).catch(e => { data.nograze = { status: "error", error: String(e.message || e) }; if (S.D !== data) return; S.ngState = "error"; renderPane(S.tab); });
   }
 
   // ---------- свои пастбища: фермер рисует контур, NDVI считается по снимкам внутри него ----------
@@ -502,13 +505,14 @@
         S.building = key;
         showBuilding(name, lat, lon);
         if (!opts.keepRoute) history.replaceState(null, "", villageHash({ name, lat, lon }));
-        const [res, region] = await Promise.all([PL.buildVillage({ name, lat, lon, onProgress: m => {
+        const [res, region] = await Promise.all([PL.buildVillage({ name, lat, lon, ngWaitMs: 4000, onProgress: m => {
           const k = /снимк.*Sentinel/.test(m) ? "st.scenes" : /Загружаю/.test(m) ? "st.loading" : "st.computing";
           status(t(k), { busy: true });
         } }), PL.regionAt ? PL.regionAt(lat, lon).catch(() => "") : ""]);
         res.village.region = region;                           // область — для нормы нагрузки
         if (S.loadingKey !== key) return;                      // пока считали, выбрали другое место
         png = ndviPng(res.grid); delete res.grid;
+        S.ngLater = res.nograzeLater; delete res.nograzeLater;   // зоны OSM ещё идут — вычтем, когда придут
         data = res; S.justBuilt = true;
         C.ls.set(key, Object.assign({}, res, { png }));
       } catch (e) {
@@ -534,6 +538,8 @@
     if (opts.params) { S.userP = Object.assign({}, S.userP, opts.params); paramErr = null; S.P = resolveParams(S.userP, S.calib); if (paramErr) toast(paramErr, true); }
     S.normSel = NM ? NM.clean(opts.norm) || NM.clean(C.ls.get(normKey(key), null)) || NM.clean({ region: NM.regionOf(data.village.region) }) : null;
     S.normState = S.normSel ? "ok" : "none";
+    S.ngState = data.nograze ? data.nograze.status : null; S.ngRetried = false;
+    loadNoGraze(key, data);                                   // из кэша — сразу; из OSM — в фоне, до прихода числа без вычета и с пометкой
     rebuildPlots();
     S.herds = opts.herds ? opts.herds.map(h => Object.assign({}, h)) : (ex && opts.demo ? demoHerds() : []);
     addOwnFarm();
@@ -548,9 +554,6 @@
     loadRegion(key, data);
     loadPrev(key, data);
     loadMulti(key, data);
-    S.ngState = data.nograze ? data.nograze.status : null;
-    loadNoGraze(key, data);
-    if (data.nograze && data.nograze.status === "ok") { rebuildPlots(); render(); drawNoGraze(); }
     if (S.histKey !== key) { S.histKey = key; C.addHistory({ kind: "open", village: data.village, summary: summary() }); }
     const want = opts.plot;
     if (want) setTimeout(() => focusPlot(want), 350);
@@ -1591,7 +1594,8 @@
     $("#tgGo").onclick = openTelegramLogin;
     const pw = $('#pwForm [name="password"]');
     $("#pwShow").onclick = e => { const on = pw.type === "password"; pw.type = on ? "text" : "password"; e.currentTarget.setAttribute("aria-pressed", on); e.currentTarget.textContent = t(on ? "acct.hide" : "acct.show"); };
-    const first = $('#pwForm input'); if (first) setTimeout(() => first.focus(), 30);
+    // окно показано — курсор в первое поле, но не отбираем его, если человек уже начал заполнять форму
+    const first = $('#pwForm input'); if (first) setTimeout(() => { const a = document.activeElement; if (!(a && a.closest && a.closest("#pwForm"))) first.focus(); }, 30);
     $("#pwForm").onsubmit = async e => {
       e.preventDefault();
       const f = e.target, err = $("#pwErr"), go = $("#pwGo");
@@ -1888,8 +1892,11 @@
     const trend = near.length ? near.reduce((s, p) => s + (p.series[p.series.length - 1].v - p.series[0].v) / p.series[0].v, 0) / near.length * 100 : null;
     return { Sd, water, capAU, au, ratio, worst, shortHerds, deficitT, excessAU, well, trend };
   }
+  /** Зоны, где нельзя пасти, ещё идут из OSM или не загрузились: площадь и число овец пока без вычета — говорим прямо. */
+  const ngNote = () => (S.D.nograze && ["ok", "empty"].includes(S.D.nograze.status) ? "" : S.ngState === "loading" ? `<p class="note" id="ngNote">${t("ng.wait")}</p>`
+    : S.ngState === "error" ? `<p class="note warn" id="ngNote">${t("ng.failNote")} <button type="button" class="linkbtn" data-goto="data">${t("ng.toData")}</button></p>` : "");
   function briefHtml() {
-    if (!S.herds.length) return `<div class="brief"><p>${t("brief.noherds")}</p>
+    if (!S.herds.length) return `${ngNote()}<div class="brief"><p>${t("brief.noherds")}</p>
       <p style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn btn-soft btn-sm" id="addDemo">${ic("plus")} ${t("ov.addDemo")}</button>
       <button class="btn btn-ghost btn-sm" id="addHerd0">${ic("plus")} ${t("herds.add")}</button></p></div>`;
     const b = briefData();
@@ -1914,7 +1921,7 @@
     if (b.deficitT >= 1) todo.push(t("brief.do.reduce"));
     todo.push(t("brief.do.bot"));
     todo.push(t("brief.do.calib"));
-    return `${demoBanner()}${res}<div class="brief"><span class="brief-status st-${st[0]}">${t(st[1])}</span>
+    return `${demoBanner()}${ngNote()}${res}<div class="brief"><span class="brief-status st-${st[0]}">${t(st[1])}</span>
       ${lines.map(x => `<p>${x}</p>`).join("")}
       <h3 style="margin:12px 0 2px;font-size:15px">${t("brief.do")}</h3>
       <ul class="todo">${todo.slice(0, 4).map(x => `<li>${ic("check")}<span>${x}</span></li>`).join("")}</ul>

@@ -89,3 +89,19 @@ test("сеть: 429, затем ответ — повтор; сбой OSM не �
   const slow = async () => { k++; return k === 1 ? { ok: true, status: 200, json: async () => ({ remark: "runtime error: Query timed out", elements: [] }) } : { ok: true, status: 200, json: async () => OSM }; };
   assert.equal((await NG.fetchOSM(bbox, { fetchImpl: slow, retryMs: 1 })).elements.length, 5);
 });
+
+test("сервер молчит — параллельно спрашиваем следующий, первый ответ отменяет остальные; все отказали — понятная ошибка", async () => {
+  const asked = [], aborted = [];
+  const hang = (url, { signal }) => new Promise((_, rej) => { asked.push(url); signal.addEventListener("abort", () => { aborted.push(url); rej(new Error("отмена")); }); });
+  const t0 = Date.now();
+  const r = await NG.fetchOSM(bbox, { hedgeMs: 20, retryMs: 1, mirrors: ["https://a/x", "https://b/x", "https://c/x"],
+    fetchImpl: (url, o) => (url.startsWith("https://b") ? Promise.resolve({ ok: true, status: 200, json: async () => OSM }) : hang(url, o)) });
+  assert.equal(r.elements.length, 5);
+  assert.ok(Date.now() - t0 < 1000, "молчащий сервер не держит расчёт");
+  assert.deepEqual(asked, ["https://a/x"]); assert.deepEqual(aborted, ["https://a/x"], "лишний запрос отменён");
+  let n = 0;
+  await assert.rejects(NG.fetchOSM(bbox, { retryMs: 1, mirrors: ["https://a/x", "https://b/x"], fetchImpl: async () => { n++; return { ok: false, status: 504 }; } }),
+    /Overpass\) не ответил — a: HTTP 504; b: HTTP 504; a: HTTP 504/);
+  assert.equal(n, 3, "каждый сервер один раз и ещё раз первый");
+  await assert.rejects(NG.fetchOSM(bbox, { timeoutMs: 30, hedgeMs: 5, retryMs: 1, mirrors: ["https://a/x", "https://b/x"], fetchImpl: hang }), /a: тайм-аут/);
+});
