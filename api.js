@@ -57,6 +57,10 @@ const SEARCH_RULE = {
 // для таких вопросов в задачу добавляется прямое указание искать (только когда поиск разрешён).
 const WEB_Q = /погод|прогноз|дожд|снег|мороз|заморозк|град|ветер|температур|(?<![а-яё])цен[аыуе]|стоимост|почём|почем(?![а-яё])|сколько стоит|закупочн|субсиди|закон|правил[аио] выпас|ветеринар|вакцин|карантин|эпизоот|новост|ауа ?райы|болжам|жаңбыр|аяз|баға|құн[ыі]|заң|ереже|жаңалық/i;
 const needsWeb = text => WEB_Q.test(String(text || ""));
+const WEB_RETRY = {
+  ru: "ВНИМАНИЕ: в прошлой попытке ты не выполнил поиск. Сейчас обязательно вызови поиск в интернете и ответь по найденному.",
+  kk: "НАЗАР АУДАР: алдыңғы әрекетте іздеу жасалмады. Қазір міндетті түрде интернеттен ізде де, табылғанмен жауап бер.",
+};
 const WEB_TASK = {
   ru: " ПОИСК: вопрос о свежих внешних сведениях — сначала выполни поиск в интернете и ответь по найденному (найденное помечай [интернет]); цифры села — только из ДАННЫХ.",
   kk: " ІЗДЕУ: сұрақ жаңа сыртқы мәлімет туралы — алдымен интернеттен ізде де, табылғанмен жауап бер (табылғанды [интернет] деп белгіле); ауыл сандары — тек ДЕРЕКТЕРДЕН.",
@@ -363,7 +367,9 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
       // --- состояние ИИ: есть ли ключ, какие модели доступны, последние ошибки (без ключа) ---
       if (p === "/api/ai/status" && req.method === "GET") {
         if (limited(req, "aistatus", 6, 60e3)) return json(res, 429, { error: "слишком часто" }), true;
-        return json(res, 200, Object.assign(await G.status(), { last_answer: lastAnswer })), true;
+        // время работы и память процесса: видно, перезапускался ли сервер (например, по нехватке памяти на Render)
+        return json(res, 200, Object.assign(await G.status(), { last_answer: lastAnswer, uptime_s: Math.round(process.uptime()),
+          rss_mb: Math.round(process.memoryUsage().rss / 1048576) })), true;
       }
       // --- ИИ-помощник (DeepSeek или Gemini, ai.js): сводка по селу и чат. Доступен и гостю, с ограничением частоты ---
       if (p === "/api/ai" && req.method === "POST") {
@@ -397,8 +403,17 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         // Поиск в интернете — только в чате и в пределах дневного лимита (найденные страницы оплачиваются как токены);
         // сводка строится только по данным села. Искать ли — решает модель по правилу SEARCH_RULE.
         const search = !summary && searchAllowed();
+        let retried = false;
         let r = await G.ask(Object.assign({ input, budgetMs: 60000, search }, opts, search ? { system: opts.system + " " + SEARCH_RULE[lang] } : {}));
         if (r.ok && r.searches) searchUsed(r.searches);
+        // модель ищет не каждый раз (на проде тот же вопрос о погоде — то 3 поиска, то 0): вопрос о свежих сведениях без поиска —
+        // один повтор с прямым требованием, если хватает времени; лучше ответ с поиском
+        if (r.ok && web && !r.searches && searchAllowed() && Date.now() - started < 30000) {
+          const again = await G.ask(Object.assign({ budgetMs: 30000, search: true }, opts, { system: opts.system + " " + SEARCH_RULE[lang],
+            input: input + "\n\n" + WEB_RETRY[lang] }));
+          if (again.ok && again.searches) { searchUsed(again.searches); r = again; }
+          retried = true;
+        }
         if (!r.ok) {
           // ИИ не ответил — шаблон из тех же данных: сайт и демо не зависят от перегрузок и баланса провайдера
           const ERR = { no_key: "ИИ не настроен на сервере", timeout: "ИИ не ответил вовремя, попробуйте ещё раз",
@@ -424,7 +439,7 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
           if (again.ok) { const c2 = F.verifyNumbers(again.text, packed.obj, userText); if (c2.unknown.length <= check.unknown.length) { r = again; check = c2; } }
         }
         lastAnswer = { at: new Date().toISOString(), mode: summary ? "summary" : "chat", search_allowed: search, web_task: web, searches: r.searches || 0,
-          sources: (r.sources || []).length, numbers_ok: check.ok, unknown_numbers: check.unknown.length };
+          sources: (r.sources || []).length, numbers_ok: check.ok, unknown_numbers: check.unknown.length, search_retry: retried };
         // [интернет] без единого источника — это общие знания модели, а не поиск: метка исправляется на [общее]
         if (!(r.sources || []).length) r.text = fixWebLabels(r.text);
         return json(res, 200, { text: r.text, model: r.model, issues, numbers: check,
