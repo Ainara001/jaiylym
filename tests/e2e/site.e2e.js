@@ -154,18 +154,47 @@ async function journey(page, label) {
   assert.deepEqual(errors, [], label + ": ошибки JavaScript");
 }
 
+// Офлайн: после первого визита service worker кэширует оболочку и пример Кегена; без сети сайт открывается,
+// Кеген считается, а новое село честно говорит «нет сети», а не ломается.
+async function offline(browser, label) {
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on("pageerror", e => errors.push(e.message));
+  await stubNetwork(page);
+  await page.goto(base + "#/home");
+  await page.waitForFunction(() => navigator.serviceWorker && navigator.serviceWorker.controller, null, { timeout: 30000 });
+  await page.waitForFunction(async () => (await caches.keys()).length > 0 && !!(await caches.match("data/plots.js")), null, { timeout: 30000 });
+  await ctx.setOffline(true);
+  await page.reload();
+  await page.waitForSelector("#heroQ");
+  assert.equal(await page.isVisible("#netbar"), true, label + ": показана полоса «нет сети»");
+  await page.goto(base + "#/map?lat=43.02&lon=79.22&name=Кеген");
+  await page.waitForFunction(() => window.JaiylymApp && window.JaiylymApp.S.D && window.JaiylymApp.S.pl);
+  assert.equal(await page.evaluate(() => window.JaiylymApp.S.plots.length), 16, label + ": Кеген считается без сети");
+  await page.goto(base + "#/map?lat=50.1&lon=70.1&name=Новое");
+  await page.waitForFunction(() => !document.querySelector("#status").hidden, null, { timeout: 10000 });
+  assert.match(await page.textContent("#status"), /Нет сети|Желі жоқ/, label + ": новое село без сети — понятное сообщение");
+  assert.deepEqual(errors, [], label + ": ошибки JavaScript без сети");
+  await ctx.close();
+}
+
 for (const name of BROWSERS) {
   const skip = !pw && "playwright не установлен";
+  test(`${name}: офлайн — оболочка и Кеген из кэша, новое село — «нет сети»`, { skip, timeout: 120000 }, async () => {
+    const b = await pw[name].launch();
+    try { await offline(b, name + " офлайн"); } finally { await b.close(); }
+  });
   test(`${name}: путь пользователя на компьютере`, { skip, timeout: 180000 }, async () => {
     const b = await pw[name].launch();
-    try { const ctx = await b.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true }); await journey(await ctx.newPage(), name + " ПК"); }
+    try { const ctx = await b.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true, serviceWorkers: "block" }); await journey(await ctx.newPage(), name + " ПК"); }
     finally { await b.close(); }
   });
   test(`${name}: путь пользователя на телефоне (iPhone 13)`, { skip, timeout: 180000 }, async () => {
     const b = await pw[name].launch();
     const dev = Object.assign({}, pw.devices["iPhone 13"]);
     if (name !== "webkit") delete dev.defaultBrowserType;
-    try { const ctx = await b.newContext(Object.assign(dev, { acceptDownloads: true })); await journey(await ctx.newPage(), name + " телефон"); }
+    try { const ctx = await b.newContext(Object.assign(dev, { acceptDownloads: true, serviceWorkers: "block" })); await journey(await ctx.newPage(), name + " телефон"); }
     finally { await b.close(); }
   });
 }
