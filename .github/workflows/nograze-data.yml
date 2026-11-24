@@ -1,0 +1,28 @@
+name: Зоны «нельзя пасти» Кегена
+# Пересчёт данных для web/data/plots.js (поле nograze): OpenStreetMap (Overpass) + WorldCover.
+# Только вручную: это генерация данных, а не тест — сбой серверов Overpass не должен валить проверки на каждом push
+# (сам расчёт зон проверяется в tests/nograze.test.js, живой OSM — в tests/net/nograze.net.js с пропуском при сбое Overpass).
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  nograze-kegen:
+    # где нельзя пасти для Кегена: OSM + WorldCover (нужен интернет) → файл для web/data/plots.js
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: node scripts/add_nograze.js
+      - name: Зоны Кегена в журнал (сжатый JSON, для переноса в web/data без доступа к файлам артефактов)
+        run: |
+          node -e 'const z=require("zlib");const D=require("./web/data/plots.json");const b=z.gzipSync(JSON.stringify(D.nograze)).toString("base64");console.log("NOGRAZE-BEGIN");for(let i=0;i<b.length;i+=900)console.log("NG:"+b.slice(i,i+900));console.log("NOGRAZE-END "+require("crypto").createHash("sha256").update(JSON.stringify(D.nograze)).digest("hex"))'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kegen-nograze
+          path: |
+            web/data/plots.js
+            web/data/plots.json
