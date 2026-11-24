@@ -640,14 +640,19 @@
     const capIn = plotsIn.reduce((a, j) => a + m.prep[j].cap, 0);
     const windowOut = m.pairs.filter(e => seen[e.i] && !seen[nH + e.j]).reduce((a, e) => a + e.cap, 0);
     const need = herdsIn.reduce((a, i) => a + m.H[i].d, 0);
-    const excluded = {};
-    for (const i of herdsIn) for (const q of m.prep) if (!plotsIn.includes(m.prep.indexOf(q))) for (const r of herdReasons(m.H[i].h, q)) (excluded[r] = excluded[r] || new Set()).add(q.id);
+    // причина исключения относится к конкретным стадам («далеко для дойного» — только к дойным), а не ко всей группе
+    const excluded = {}, excludedFor = {};
+    for (const i of herdsIn) for (const q of m.prep) if (!plotsIn.includes(m.prep.indexOf(q))) for (const r of herdReasons(m.H[i].h, q)) {
+      (excluded[r] = excluded[r] || new Set()).add(q.id);
+      (excludedFor[r] = excludedFor[r] || new Set()).add(m.H[i].h.id);
+    }
     return {
       feasible: false, deficit_au_days: demand - flow,
       groups: [{ herds: herdsIn.map(i => m.H[i].h.id), plots: plotsIn.map(j => m.prep[j].id),
         demand_au_days: need, capacity_au_days: capIn, window_limited_au_days: windowOut,
         shortfall_au_days: need - capIn - windowOut,
-        excluded: Object.fromEntries(Object.entries(excluded).map(([r, set]) => [r, [...set]])) }],
+        excluded: Object.fromEntries(Object.entries(excluded).map(([r, set]) => [r, [...set]])),
+        excluded_for: Object.fromEntries(Object.entries(excludedFor).map(([r, set]) => [r, [...set]])) }],
     };
   }
 
