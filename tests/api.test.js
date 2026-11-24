@@ -268,6 +268,11 @@ test("ИИ: ключ не нужен браузеру, проблемы данн
     const r = await call("POST", "/api/ai", { ip: "10.7.7.1", body: { mode: "chat", lang: "ru", context: {}, messages: [{ role: "user", text: "сколько овец?" }] } });
     assert.equal(r.status, 200);
     assert.match(seen.input, /ПРОБЛЕМЫ_ДАННЫХ: Село не открыто/);
+    assert.equal(seen.search, true, "в чате поиск разрешён");
+    assert.doesNotMatch(seen.input, /ПОИСК:/, "вопрос о данных села — без указания искать");
+    await call("POST", "/api/ai", { ip: "10.7.7.3", body: { mode: "chat", lang: "ru", context: {}, messages: [{ role: "user", text: "Какая погода ожидается в Кегене на этой неделе?" }] } });
+    assert.match(seen.input, /ПОИСК: вопрос о свежих внешних сведениях/, "вопрос о погоде — прямое указание искать");
+    assert.match(seen.system, /важнее правила «только ДАННЫЕ»/);
     assert.ok(r.data.issues.length >= 1);
     assert.match(r.data.note, /не заключение агронома/);
     const ctx = { "село": "Кеген", "статус_плана": "feasible", "итог": { "дефицит_сена_т_по_плану_оценка": 12 },
@@ -333,4 +338,12 @@ test("ограничение частоты запросов на вход", asy
   let last;
   for (let i = 0; i < 11; i++) last = await call("POST", "/auth/start", { ip: "10.1.1.1" });
   assert.equal(last.status, 429);
+});
+
+test("ИИ: какие вопросы требуют поиска в интернете", () => {
+  const { needsWeb } = require("../api.js");
+  for (const q of ["Какая погода ожидается в Кегене на этой неделе?", "Сколько стоит сено сейчас?", "почём баран?", "Ауа райы қандай болады?", "Шөп бағасы қанша?", "Нужна ли вакцинация овец весной?"])
+    assert.equal(needsWeb(q), true, q);
+  for (const q of ["Откуда взялось число 313 овец на участке Б-С?", "Почему стадо Ерлана пасётся на Д-ЮЗ?", "ёмкость оценена верно?", "Сколько овец выдержит моё пастбище?"])
+    assert.equal(needsWeb(q), false, q);
 });
