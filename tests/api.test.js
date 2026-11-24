@@ -390,3 +390,44 @@ test("ИИ: вопрос о погоде, а модель не искала — 
     assert.equal(seen.length, 1);
   } finally { G.ask = orig; }
 });
+
+test("аккаунт по логину и паролю (без Telegram): регистрация, вход, профиль, ошибки, удаление", async () => {
+  const reg = b => call("POST", "/auth/register", { body: b, ip: "10.9.0." + Math.floor(Math.random() * 250) });
+  assert.equal((await reg({ name: "Айгерим", login: "ab", password: "pastbishe-2026" })).data.field, "login", "короткий логин");
+  assert.equal((await reg({ name: "Айгерим", login: "8 701 123 45 67", password: "1234567" })).data.field, "password", "пароль короче 8");
+  assert.equal((await reg({ name: "Айгерим", login: "8 701 123 45 67", password: "12345678" })).data.field, "password", "слишком простой");
+  assert.equal((await reg({ name: "", login: "8 701 123 45 67", password: "pastbishe-2026" })).data.field, "name");
+  const r = await reg({ name: "Айгерим", login: "8 (701) 123-45-67", password: "pastbishe-2026" });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.user.via, "password");
+  assert.equal(r.data.user.login, "+77011234567", "телефон приведён к +7…");
+  assert.ok(!("pw" in r.data.user), "хэш пароля не уходит в браузер");
+  const me = await call("GET", "/api/me", { token: r.data.token });
+  assert.equal(me.data.name, "Айгерим");
+  // тот же номер в другой записи — уже занят
+  assert.equal((await reg({ name: "Другой", login: "+7 701 123 45 67", password: "drugoi-parol-1" })).status, 409);
+  // вход
+  const bad = await call("POST", "/auth/login", { body: { login: "87011234567", password: "neverno-123" }, ip: "10.9.1.1" });
+  assert.equal(bad.status, 401);
+  assert.equal(bad.data.error, "неверный логин или пароль");
+  const nobody = await call("POST", "/auth/login", { body: { login: "nobody_here", password: "neverno-123" }, ip: "10.9.1.2" });
+  assert.equal(nobody.status, 401, "неизвестный логин — тот же ответ, что и неверный пароль");
+  const ok = await call("POST", "/auth/login", { body: { login: "+77011234567", password: "pastbishe-2026" }, ip: "10.9.1.3" });
+  assert.equal(ok.status, 200);
+  assert.notEqual(ok.data.token, r.data.token);
+  // хозяйство сохраняется так же, как у вошедших через Telegram
+  const farm = await call("PUT", "/api/me/farm", { token: ok.data.token, body: { name: "Хозяйство Айгерим", village: KEGEN, sheep: 120, home: "Б-С", plots: ["Б-С"] } });
+  assert.equal(farm.status, 200);
+  // удаление аккаунта освобождает логин
+  assert.equal((await call("DELETE", "/api/me", { token: ok.data.token })).status, 200);
+  assert.equal((await call("POST", "/auth/login", { body: { login: "+77011234567", password: "pastbishe-2026" }, ip: "10.9.1.4" })).status, 401);
+  assert.equal((await reg({ name: "Айгерим", login: "+77011234567", password: "pastbishe-2026" })).status, 200, "логин снова свободен");
+});
+
+test("аккаунт по паролю: после 10 неверных попыток логин закрыт на 15 минут (с любых адресов)", async () => {
+  const r = await call("POST", "/auth/register", { body: { name: "Ерлан", login: "erlan.k", password: "jailau-parol-7" }, ip: "10.9.2.1" });
+  assert.equal(r.status, 200);
+  for (let i = 0; i < 10; i++) assert.equal((await call("POST", "/auth/login", { body: { login: "Erlan.K", password: "wrong-" + i }, ip: "10.9.3." + i })).status, 401);
+  const locked = await call("POST", "/auth/login", { body: { login: "erlan.k", password: "jailau-parol-7" }, ip: "10.9.4.1" });
+  assert.equal(locked.status, 429, "даже верный пароль — после 10 неверных попыток подождать");
+});
