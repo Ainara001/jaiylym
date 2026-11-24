@@ -31,7 +31,18 @@ function searchAllowed() {
   return searchDay.n < AI_SEARCH_DAILY;
 }
 const searchUsed = n => { searchDay.n += n || 0; };
-let lastAnswer = null;   // для /api/ai/status: искал ли ИИ в последнем ответе, были ли источники, прошла ли проверка чисел
+let lastAnswer = null;
+/** Сегодняшняя дата по Алматы (UTC+5) словами: «24 ноября 2026, вторник». Снимки и расчёт — за лето, вопросы — о сегодняшнем дне. */
+function todayText(lang, now = new Date()) {
+  const d = new Date(now.getTime() + 5 * 3600e3);
+  const M = { ru: ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"],
+    kk: ["қаңтар", "ақпан", "наурыз", "сәуір", "мамыр", "маусым", "шілде", "тамыз", "қыркүйек", "қазан", "қараша", "желтоқсан"] };
+  const W = { ru: ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"],
+    kk: ["жексенбі", "дүйсенбі", "сейсенбі", "сәрсенбі", "бейсенбі", "жұма", "сенбі"] };
+  const L = lang === "kk" ? "kk" : "ru";
+  return L === "kk" ? `${d.getUTCFullYear()} жылғы ${d.getUTCDate()} ${M.kk[d.getUTCMonth()]}, ${W.kk[d.getUTCDay()]}`
+    : `${d.getUTCDate()} ${M.ru[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${W.ru[d.getUTCDay()]}`;
+}   // для /api/ai/status: искал ли ИИ в последнем ответе, были ли источники, прошла ли проверка чисел
 const SEARCH_RULE = {
   ru: "Поиск в интернете: ищи, только если для ответа нужны свежие внешние сведения, которых нет в ДАННЫХ, — погода и прогноз, цены на сено и скот, " +
     "ветеринарные и правовые нормы Казахстана, новости района. Цифры села (участки, поголовье, ёмкость, нагрузка) бери только из ДАННЫХ, не из поиска. " +
@@ -369,11 +380,13 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         const ctx = packed.json;
         const msgs = (Array.isArray(b.messages) ? b.messages : []).slice(-12)
           .map(m => `${m.role === "ai" ? "Помощник" : "Пользователь"}: ${str(m.text, 1200)}`).join("\n");
-        const userText = userQ;   // числа из вопросов пользователя (не из прошлых ответов ИИ) допустимы в ответе
+        // сегодняшняя дата: без неё модель берёт «лето снимков» за текущее время и ищет прогноз на июль
+        const today = todayText(lang);
+        const userText = userQ + "\n" + today;   // числа из вопросов пользователя и сегодняшняя дата допустимы в ответе
         const lastQ = (Array.isArray(b.messages) ? b.messages : []).filter(m => m && m.role !== "ai").slice(-1).map(m => str(m.text, 1200))[0] || "";
         const web = b.mode !== "summary" && searchAllowed() && needsWeb(lastQ);
         const task = (b.mode === "summary" ? AI_SUMMARY[lang] : AI_CHAT[lang]) + (web ? WEB_TASK[lang] : "");
-        const input = `ДАННЫЕ (JSON):\n${ctx}\n\nПРОБЛЕМЫ_ДАННЫХ: ${issues.length ? issues.join(" ") : "нет"}\n\n` +
+        const input = `СЕГОДНЯ: ${today}\n\nДАННЫЕ (JSON):\n${ctx}\n\nПРОБЛЕМЫ_ДАННЫХ: ${issues.length ? issues.join(" ") : "нет"}\n\n` +
           `${msgs ? "РАЗГОВОР:\n" + msgs + "\n\n" : ""}ЗАДАЧА: ${task}`;
         // Казахский текст занимает больше токенов, чем русский: сводке нужен запас по длине и времени.
         // Сайт ждёт 90 с, поэтому общий бюджет — 60 с, на одну модель — до 30 с.
@@ -588,4 +601,4 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
   return { handle, confirmLogin, loginInfo, roleOf };
 }
 
-module.exports = { createApi, aiContextIssues, fixWebLabels, searchAllowed, searchUsed, SEARCH_RULE, needsWeb };
+module.exports = { createApi, aiContextIssues, fixWebLabels, searchAllowed, searchUsed, SEARCH_RULE, needsWeb, todayText };

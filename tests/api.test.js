@@ -268,6 +268,7 @@ test("ИИ: ключ не нужен браузеру, проблемы данн
     const r = await call("POST", "/api/ai", { ip: "10.7.7.1", body: { mode: "chat", lang: "ru", context: {}, messages: [{ role: "user", text: "сколько овец?" }] } });
     assert.equal(r.status, 200);
     assert.match(seen.input, /ПРОБЛЕМЫ_ДАННЫХ: Село не открыто/);
+    assert.match(seen.input, /^СЕГОДНЯ: \d{1,2} [а-я]+ 20\d\d, [а-я]+/, "сегодняшняя дата — первой строкой запроса");
     assert.equal(seen.search, true, "в чате поиск разрешён");
     assert.doesNotMatch(seen.input, /ПОИСК:/, "вопрос о данных села — без указания искать");
     await call("POST", "/api/ai", { ip: "10.7.7.3", body: { mode: "chat", lang: "ru", context: {}, messages: [{ role: "user", text: "Какая погода ожидается в Кегене на этой неделе?" }] } });
@@ -360,4 +361,10 @@ test("ИИ: ответ, для которого модель искала в и�
     assert.equal(st.data.last_answer.searches, 3);
     assert.equal(st.data.last_answer.web_task, true);
   } finally { G.ask = orig; }
+});
+
+test("ИИ: сегодняшняя дата по Алматы словами (ru, kk)", () => {
+  const { todayText } = require("../api.js");
+  assert.equal(todayText("ru", new Date("2026-11-24T20:30:00Z")), "25 ноября 2026, среда", "UTC+5: после 19:00 UTC — уже завтра");
+  assert.equal(todayText("kk", new Date("2026-11-24T10:00:00Z")), "2026 жылғы 24 қараша, сейсенбі");
 });
