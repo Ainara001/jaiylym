@@ -90,12 +90,10 @@
    */
   function seriesTrend(years, ndvi, precip) {
     const n = years.length;
-    if (n < MIN_YEARS) return { n, verdict: "few_years" };
+    if (n < MIN_YEARS) return { n, verdict: "few_years", basis: null };
     const ts = theilSen(years, ndvi), mk = mannKendall(ndvi);
     const span = years[n - 1] - years[0];
-    const change = ts.slope * span;
-    const big = Math.abs(change) >= MIN_CHANGE;
-    const out = { n, slope_per_year: ts.slope, intercept: ts.intercept, change_total: change, p: mk.p, exact: mk.exact, rain: null, resid: null };
+    const out = { n, slope_per_year: ts.slope, intercept: ts.intercept, change_total: ts.slope * span, p: mk.p, exact: mk.exact, rain: null, resid: null };
     const havePrecip = precip && precip.every(v => v != null && isFinite(v));
     if (havePrecip) {
       const r = ols(precip, ndvi);
@@ -107,12 +105,30 @@
         out.resid = { slope_per_year: rts.slope, change_total: rts.slope * span, p: rmk.p };
       }
     }
-    const sig = mk.p < ALPHA && big;
-    const rsig = out.resid && out.resid.p < ALPHA && Math.abs(out.resid.change_total) >= MIN_CHANGE;
-    if (sig && ts.slope < 0) out.verdict = out.rain && out.rain.valid && !(rsig && out.resid.slope_per_year < 0) ? "decline_rain" : "decline_unexplained";
-    else if (sig && ts.slope > 0) out.verdict = "increase";
-    else if (rsig && out.resid.slope_per_year < 0) out.verdict = "decline_unexplained";   // влажные годы скрыли снижение
-    else out.verdict = "no_change";
+    return classify(out, out.p, out.resid && out.resid.p);
+  }
+  /**
+   * Вывод по статистикам ряда при заданных p (сырых или с поправкой на множественную проверку).
+   * Если трава заметно зависит от осадков, снижение решают остатки RESTREND: значимое снижение остатков — «не объяснено осадками»
+   * (даже если сырой ряд растёт за счёт влажных лет), снижение сырого ряда без снижения остатков — «объясняют осадки».
+   * basis — по какому ряду вывод: raw (NDVI) или resid (NDVI с учётом осадков), чтобы текст показывал нужный наклон.
+   */
+  function classify(out, pRaw, pRes) {
+    const rainValid = !!(out.rain && out.rain.valid && out.resid);
+    const sig = pRaw < ALPHA && Math.abs(out.change_total) >= MIN_CHANGE;
+    const rsig = rainValid && pRes < ALPHA && Math.abs(out.resid.change_total) >= MIN_CHANGE;
+    if (rsig && out.resid.slope_per_year < 0) { out.verdict = "decline_unexplained"; out.basis = "resid"; }
+    else if (sig && out.slope_per_year < 0) { out.verdict = rainValid ? "decline_rain" : "decline_unexplained"; out.basis = "raw"; }
+    else if (sig && out.slope_per_year > 0) { out.verdict = "increase"; out.basis = "raw"; }
+    else { out.verdict = "no_change"; out.basis = "raw"; }
+    return out;
+  }
+  /** Поправка Бенджамини — Хохберга (доля ложных открытий) для p-значений участков одного села. */
+  function bhAdjust(ps) {
+    const idx = ps.map((p, i) => [p, i]).filter(([p]) => p != null).sort((a, b) => a[0] - b[0]);
+    const m = idx.length, out = ps.map(() => null);
+    let min = 1;
+    for (let k = m - 1; k >= 0; k--) { min = Math.min(min, idx[k][0] * m / (k + 1)); out[idx[k][1]] = Math.min(1, min); }
     return out;
   }
 
@@ -152,11 +168,22 @@
       }
       plots[id] = seriesTrend(pts.map(q => q.year), pts.map(q => q.ndvi), pts.every(q => q.precip != null) ? pts.map(q => q.precip) : null);
     }
-    return { years, village, plots, rules: { alpha: ALPHA, min_years: MIN_YEARS, min_change: MIN_CHANGE, rain_r2: RAIN_R2, min_dates: MIN_DATES } };
+    // 16 участков проверяются одновременно: без поправки ~1 участок на село выглядел бы «значимым» случайно.
+    // Выводы участков — по p с поправкой Бенджамини — Хохберга (сырые p сохраняются для прозрачности).
+    const tested = ids.filter(id => plots[id].verdict !== "few_years");
+    const adjRaw = bhAdjust(tested.map(id => plots[id].p));
+    const adjRes = bhAdjust(tested.map(id => (plots[id].resid ? plots[id].resid.p : null)));
+    tested.forEach((id, i) => {
+      const s = plots[id];
+      s.p_adj = adjRaw[i];
+      if (s.resid) s.resid.p_adj = adjRes[i];
+      classify(s, adjRaw[i], adjRes[i]);
+    });
+    return { years, village, plots, rules: { alpha: ALPHA, min_years: MIN_YEARS, min_change: MIN_CHANGE, rain_r2: RAIN_R2, min_dates: MIN_DATES, plots_fdr: "Benjamini–Hochberg" } };
   }
 
   /** Старое правило для сравнения: разница первого и последнего года больше порога — «тревога». */
   function twoYearAlarm(ndvi, thr = MIN_CHANGE) { return ndvi.length >= 2 && ndvi[0] - ndvi[ndvi.length - 1] >= thr; }
 
-  return { theilSen, mannKendall, mahonian, ols, seriesTrend, yearQuality, analyze, twoYearAlarm, median, ALPHA, MIN_YEARS, MIN_CHANGE, RAIN_R2 };
+  return { theilSen, mannKendall, mahonian, ols, seriesTrend, classify, bhAdjust, yearQuality, analyze, twoYearAlarm, median, ALPHA, MIN_YEARS, MIN_CHANGE, RAIN_R2 };
 });

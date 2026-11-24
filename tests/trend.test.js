@@ -92,3 +92,38 @@ test("старое правило «разница двух лет» ложно 
   assert.equal(T.twoYearAlarm(ndvi), true);
   assert.notEqual(T.seriesTrend(YEARS, ndvi, rain).verdict, "decline_unexplained");
 });
+
+test("поправка Бенджамини — Хохберга: известный пример, монотонность, пропуски", () => {
+  const adj = T.bhAdjust([0.01, 0.04, 0.03, 0.005, null]);
+  assert.deepEqual(adj.map(v => v == null ? v : +v.toFixed(4)), [0.02, 0.04, 0.04, 0.02, null]);
+});
+
+test("сырой ряд растёт за счёт влажных лет, с учётом осадков — снижение: вывод по остаткам, наклон — остатков", () => {
+  const rain = [170, 330, 180, 320, 200, 340, 210, 360].map((r, i) => r + 8 * i);
+  const ndvi = YEARS.map((y, i) => +(0.30 + (rain[i] - 260) * 0.0015 - 0.006 * i).toFixed(4));
+  const t = T.seriesTrend(YEARS, ndvi, rain);
+  assert.ok(t.slope_per_year > 0, "сырой наклон положительный");
+  assert.equal(t.verdict, "decline_unexplained");
+  assert.equal(t.basis, "resid", "текст должен показывать наклон с учётом осадков, а не сырой рост");
+  assert.ok(t.resid.slope_per_year < 0);
+});
+
+test("правило: значимое снижение остатков важнее значимого роста сырого ряда", () => {
+  const s = { n: 8, slope_per_year: 0.01, change_total: 0.07, rain: { valid: true }, resid: { slope_per_year: -0.006, change_total: -0.042 } };
+  assert.equal(T.classify(s, 0.01, 0.02).verdict, "decline_unexplained");
+  assert.equal(T.classify(s, 0.01, 0.3).verdict, "increase", "остатки без тренда — рост");
+});
+
+test("16 участков чистого шума: после поправки на множественную проверку ни один не помечен", () => {
+  let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const gauss = () => Math.sqrt(-2 * Math.log(rnd())) * Math.cos(2 * Math.PI * rnd());
+  let flagged = 0, rawFlagged = 0;
+  for (let v = 0; v < 30; v++) {
+    const ids = Array.from({ length: 16 }, (_, i) => "P" + i);
+    const seasons = YEARS.map(y => ({ year: y, status: "measured", dates: ["a", "b", "c", "d"], plots: ids.map(id => ({ id, ndvi: 0.3 + 0.02 * gauss(), valid_fraction: 1 })) }));
+    const a = T.analyze(seasons, null);
+    for (const s of Object.values(a.plots)) { if (s.verdict !== "no_change") flagged++; if (s.p < 0.05 && Math.abs(s.change_total) >= 0.02) rawFlagged++; }
+  }
+  assert.ok(rawFlagged > 5, "без поправки на 480 участков-шумов есть «значимые»: " + rawFlagged);
+  assert.ok(flagged <= 2, "с поправкой — почти нет: " + flagged);
+});
