@@ -37,3 +37,8 @@ test("код участка не рвётся по дефису", () => {
   assert.ok(h.includes('<span class="plot-id">Д-ЮЗ</span>') && h.includes('<span class="plot-id">Б-С</span>'));
   assert.ok(!h.includes('<span class="plot-id">Д-С</span>'));
 });
+
+test("метка «[общее]» (и казахская «[жалпы]») — ярлык общих знаний", () => {
+  const h = A.inline("правило выпаса [общее]; ереже [жалпы]", k => ({ gen: "Общие знания" }[k] || k));
+  assert.equal((h.match(/<span class="src src-gen">Общие знания<\/span>/g) || []).length, 2);
+});
