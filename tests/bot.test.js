@@ -69,6 +69,7 @@ test("ИИ в боте: многолетний ряд в данных, поис�
     assert.match(seen.system, /Поиск в интернете/);
     assert.match(seen.input, /многолетний_ряд/);
     assert.match(seen.input, /вывод_по_селу/);
+    assert.match(seen.input, /ПОИСК: вопрос о свежих внешних сведениях/, "вопрос о погоде — прямое указание искать");
     const t = last();
     assert.match(t, /Найдено в интернете:\n— Прогноз: https:\/\/meteo\.example\/kegen/);
     assert.doesNotMatch(t, /\*\*/);
