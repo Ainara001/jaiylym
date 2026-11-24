@@ -262,7 +262,8 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
       if (h.home != null && h.home !== "" && !PLOT_RE.test(h.home)) throw bad("стадо " + (i + 1) + ": неизвестный участок " + str(h.home, 10));
       return { id, name: str(h.name, 60) || "Стадо", sheep: count(h.sheep, SPECIES_RU.sheep), goats: count(h.goats, SPECIES_RU.goats),
         cattle: count(h.cattle, SPECIES_RU.cattle), horses: count(h.horses, SPECIES_RU.horses), home: h.home || "Б-С", daily_return: !!h.daily_return,
-        allowed_plots: plotList(h.allowed_plots, "разрешённые участки"), demo: !!h.demo };
+        allowed_plots: plotList(h.allowed_plots, "разрешённые участки"), demo: !!h.demo,
+        weight: (w => { if (w == null || w === "") return 1; const n = +w; if (![1, 1.5, 2].includes(n)) throw bad("стадо " + (i + 1) + ": приоритет 1, 1.5 или 2"); return n; })(h.weight) };
     });
     let params = {};
     if (b.params != null) {
@@ -276,10 +277,19 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
       if (!PLOT_RE.test(id) || !["confirmed", "absent", "unknown"].includes(st)) throw bad("статус водопоя: " + str(id, 10) + " = " + str(st, 20));
       water_status[id] = st;
     }
+    // отдых участков: { участок: { spring: дни, autumn: дни } } — целые 0…365
+    const rs = b.rest && typeof b.rest === "object" ? b.rest : {};
+    const rest = {};
+    for (const [id, r] of Object.entries(rs)) {
+      if (!PLOT_RE.test(id) || !r || typeof r !== "object") throw bad("отдых участка: " + str(id, 10));
+      const d = x => { const n = x == null || x === "" ? 0 : +x; if (!Number.isInteger(n) || n < 0 || n > 365) throw bad("отдых участка " + id + ": дни 0…365"); return n; };
+      const spring = d(r.spring), autumn = d(r.autumn);
+      if (spring || autumn) rest[id] = { spring, autumn };
+    }
     return {
       id: rnd(9), name: str(b.name, 80) || "Сценарий", owner: u.uid, ownerName: u.name,
       village: { name: str(v.name, 80), lat: +(+v.lat).toFixed(5), lon: +(+v.lon).toFixed(5) },
-      herds, water: plotList(b.water, "водопои"), forbidden: plotList(b.forbidden, "закрытые участки"), water_status, params,
+      herds, water: plotList(b.water, "водопои"), forbidden: plotList(b.forbidden, "закрытые участки"), water_status, rest, params,
       model_version: M.MODEL_VERSION,
       request_id: /^[A-Za-z0-9_-]{8,64}$/.test(b.request_id || "") ? b.request_id : null,
       summary: b.summary && typeof b.summary === "object" ? JSON.parse(JSON.stringify(b.summary).slice(0, 2000)) : null,

@@ -302,11 +302,22 @@
     const w = s => s.window || [1, season];
     let parts;
     if (near.length && far.length) {
-      parts = [
-        ...near.map(s => ({ plot: s.plot, days: s.days / 2, window: w(s) })),
-        ...far.map(s => ({ plot: s.plot, days: s.days, window: w(s) })),
-        ...near.slice().reverse().map(s => ({ plot: s.plot, days: s.days / 2, window: w(s) })),
-      ];
+      // Весна и осень на ближних, лето на дальних. Ближние участки не режем пополам каждый (это удваивало перегоны и
+      // короткие стоянки): целые участки делятся на весеннюю и осеннюю группы с примерно равным числом дней.
+      // Единственный ближний участок режется пополам, только если обе половины не короче MIN_STAY.
+      const spring = [], autumn = [];
+      if (near.length === 1) {
+        const s = near[0];
+        if (s.days >= 2 * MIN_STAY) { spring.push({ plot: s.plot, days: s.days / 2, window: w(s) }); autumn.push({ plot: s.plot, days: s.days / 2, window: w(s) }); }
+        else spring.push({ plot: s.plot, days: s.days, window: w(s) });
+      } else {
+        let a = 0, b = 0;
+        for (const s of near.slice().sort((x, y) => y.days - x.days)) {
+          const part = { plot: s.plot, days: s.days, window: w(s) };
+          if (a <= b) { spring.push(part); a += s.days; } else { autumn.unshift(part); b += s.days; }
+        }
+      }
+      parts = [...spring, ...far.map(s => ({ plot: s.plot, days: s.days, window: w(s) })), ...autumn];
     } else parts = segs.map(s => ({ plot: s.plot, days: s.days, window: w(s) }));
     let free = [[0, season]];
     const pieces = [], unplaced = {};
@@ -469,7 +480,7 @@
   }
 
   // ======================================================================================
-  // Оптимизатор распределения (fair-optimal-v1)
+  // Оптимизатор распределения (fair-optimal-v2)
   // Задача: стада h с потребностью d_h (усл. гол.·сут), участки p с ёмкостью C_p (× max_load),
   // допустимые пары (h, p) — те же ограничения, что у жадного плана; на паре не больше au_h × длина окна.
   // Шаг 1. Справедливость: лексикографический max-min по доле обеспеченности s_h = x_h / d_h
@@ -543,24 +554,33 @@
   }
 
   /** Шаг 1: доли обеспеченности s_i (лексикографический max-min, прогрессивное заполнение). */
+  /**
+   * Вес хозяйства (приоритет при нехватке): доля стада растёт со скоростью w — взвешенный max-min.
+   * Вес 1 у всех — обычная справедливость. Вес задаёт координатор или акимат (например, малым семейным хозяйствам), не модель.
+   */
+  const herdWeight = h => { const w = +h.weight; return Number.isFinite(w) && w > 0 ? Math.min(3, Math.max(0.25, w)) : 1; };
   function fairShares(m) {
     const n = m.H.length, s = new Array(n).fill(0), frozen = new Array(n).fill(false);
-    const lim = t => m.H.map((x, i) => (frozen[i] ? s[i] : t) * x.d);
+    const w = m.H.map(x => herdWeight(x.h));
+    const target = (t, i) => Math.min(1, t * w[i]);
+    const lim = t => m.H.map((x, i) => (frozen[i] ? s[i] : target(t, i)) * x.d);
     const ok = t => { const L = lim(t), need = L.reduce((a, b) => a + b, 0); return feasibleFlow(m, L).flow >= need - 1e-9 * (1 + need); };
+    const top = 1 / Math.min(...w, 1);                     // при t = top у всех доля 1
     let base = 0;
     for (let round = 0; round < n && frozen.some(f => !f); round++) {
-      let lo = base, hi = 1;
-      if (ok(1)) lo = 1;
+      let lo = base, hi = top;
+      if (ok(top)) lo = top;
       else for (let k = 0; k < 50 && hi - lo > 1e-9; k++) { const mid = (lo + hi) / 2; if (ok(mid)) lo = mid; else hi = mid; }
-      for (let i = 0; i < n; i++) if (!frozen[i]) s[i] = lo;
-      if (lo >= 1 - 1e-9) { for (let i = 0; i < n; i++) frozen[i] = true; break; }
+      for (let i = 0; i < n; i++) if (!frozen[i]) s[i] = target(lo, i);
+      for (let i = 0; i < n; i++) if (!frozen[i] && s[i] >= 1 - 1e-9) frozen[i] = true;   // насытились — дальше не растут
+      if (!frozen.some(f => !f)) break;
       // фиксируем тех, кому уже нельзя добавить ни капли при остальных на текущем уровне
       // сравниваем прирост потока, а не «сошлось ли до копейки»: так погрешность поиска не замораживает всех сразу
-      const eps = Math.max(1e-4, (1 - lo) * 1e-2);
+      const eps = Math.max(1e-4, (1 - Math.max(...s.filter((v, i) => !frozen[i]))) * 1e-2);
       const base0 = feasibleFlow(m, m.H.map((x, k) => s[k] * x.d)).flow;
       for (let i = 0; i < n; i++) {
         if (frozen[i]) continue;
-        const L = m.H.map((x, k) => s[k] * x.d); L[i] = Math.min(1, s[i] + eps) * m.H[i].d;
+        const L = m.H.map((x, k) => s[k] * x.d); L[i] = Math.min(1, s[i] + eps * w[i]) * m.H[i].d;
         const gain = feasibleFlow(m, L).flow - base0, want = L[i] - s[i] * m.H[i].d;
         if (gain < 0.5 * want) frozen[i] = true;
       }
@@ -620,6 +640,108 @@
       if (!changed) break;
     }
     return alloc;
+  }
+
+  /**
+   * Шаг 2в. Обмен кусками между стадами — меньше участков на стадо при тех же объёмах.
+   * Стадо i переносит кусок s с участка X на свой участок Y, а стадо k — столько же с Y на X.
+   * Нагрузка каждого участка и объём каждого стада не меняются (справедливость и общий корм — те же),
+   * у i становится на один участок меньше; у k участков не прибавляется и не появляется короткой стоянки.
+   * Обмен принимается, только если календарь обоих стад по-прежнему укладывается в окна участков.
+   * Из возможных обменов берётся тот, что меньше всего добавляет перегона (км × голов).
+   */
+  function exchange(m, alloc, season) {
+    const pairs = {};
+    for (const e of m.pairs) pairs[e.i + "|" + m.prep[e.j].id] = e;
+    const room = (i, id) => { const e = pairs[i + "|" + id]; return e ? e.cap - (alloc[i][id] || 0) : -Infinity; };
+    const km = (i, id) => { const e = pairs[i + "|" + id]; return e ? e.km : Infinity; };
+    const fits = i => schedule(Object.entries(alloc[i]).filter(([, v]) => v > 1e-6)
+      .map(([id, v]) => ({ plot: id, ring: m.byId[id].ring, days: v / m.H[i].au, au_days: v, window: m.byId[id].win })), season).unplaced.length === 0;
+    const has = (k, id) => (alloc[k][id] || 0) > 1e-6;
+    const tabu = new Set();                                  // обмены, после которых не сошёлся календарь
+    for (let guard = 0; guard < 400; guard++) {
+      let best = null;
+      m.H.forEach((x, i) => {
+        const mine = Object.entries(alloc[i]).filter(([, v]) => v > 1e-6);
+        if (mine.length < 2) return;
+        for (const [X, s] of mine) for (const [Y] of mine) {
+          if (Y === X || room(i, Y) < s - 1e-6) continue;
+          m.H.forEach((z, k) => {
+            if (k === i || !has(k, Y) || alloc[k][Y] < s - 1e-6 || room(k, X) < s - 1e-6) return;
+            const rest = alloc[k][Y] - s;
+            if (!has(k, X) && rest > 1e-6) return;                          // у k прибавился бы участок
+            if (rest > 1e-6 && rest / z.au < MIN_STAY) return;              // у k появилась бы короткая стоянка
+            if (tabu.has(i + "|" + X + "|" + Y + "|" + k)) return;
+            const cost = s * (km(i, Y) - km(i, X) + km(k, X) - km(k, Y));
+            if (!best || cost < best.cost) best = { i, k, X, Y, s, cost };
+          });
+        }
+      });
+      if (!best) break;
+      const { i, k, X, Y, s } = best, save = [alloc[i][X], alloc[i][Y], alloc[k][X], alloc[k][Y]];
+      alloc[i][Y] = (alloc[i][Y] || 0) + s; delete alloc[i][X];
+      alloc[k][X] = (alloc[k][X] || 0) + s; alloc[k][Y] -= s; if (alloc[k][Y] <= 1e-6) delete alloc[k][Y];
+      if (!fits(i) || !fits(k)) {                                         // календарь не сходится — откат и запрет этого обмена
+        [alloc[i][X], alloc[i][Y], alloc[k][X], alloc[k][Y]] = save;
+        for (const [h, id] of [[i, X], [i, Y], [k, X], [k, Y]]) if (!(alloc[h][id] > 1e-6)) delete alloc[h][id];
+        tabu.add(i + "|" + X + "|" + Y + "|" + k);
+      }
+    }
+    return alloc;
+  }
+
+  /**
+   * Шаг 2г. Меньше участков на стадо при тех же объёмах: по очереди запрещаем самые мелкие куски (пару стадо–участок)
+   * и заново решаем поток минимальной стоимости с теми же объёмами стад. Запрет остаётся, если все объёмы поставлены
+   * (справедливость и общий корм не меняются), участков стало меньше (а при равенстве — меньше коротких стоянок, потом км)
+   * и календарь укладывается в окна не хуже. Ёмкости пар после шага возвращаются.
+   */
+  /** Оценка раскладки по календарю: [перегоны, короткие стоянки (< MIN_STAY), км × голов] — меньше лучше, по порядку. */
+  function planScore(m, a, season) {
+    const pairOf = {}; for (const e of m.pairs) pairOf[e.i + "|" + m.prep[e.j].id] = e;
+    let moves = 0, short = 0, km = 0;
+    a.forEach((row, i) => {
+      const segs = Object.entries(row).filter(([, v]) => v > 1e-6).map(([id, v]) => ({ plot: id, ring: m.byId[id].ring, days: v / m.H[i].au, au_days: v, window: m.byId[id].win }));
+      const stays = schedule(segs, season).segments.filter(s => s.plot);
+      moves += Math.max(0, stays.length - 1);
+      short += stays.filter(s => s.to - s.from + 1 < MIN_STAY).length;
+      for (const s of segs) km += s.au_days * (pairOf[i + "|" + s.plot] ? pairOf[i + "|" + s.plot].km : 0);
+    });
+    return [moves, short, km];
+  }
+  const scoreBetter = (x, y) => x[0] < y[0] || (x[0] === y[0] && (x[1] < y[1] || (x[1] === y[1] && x[2] < y[2] - 1e-6)));
+  function prune(m, alloc, season, maxTries = 60) {
+    const amounts = alloc.map(a => Object.values(a).reduce((s, x) => s + x, 0));
+    const need = amounts.reduce((s, x) => s + x, 0);
+    const key = e => e.i + "|" + m.prep[e.j].id;
+    const pairOf = {}; for (const e of m.pairs) pairOf[key(e)] = e;
+    const saved = m.pairs.map(e => e.cap);
+    const unplaced = a => m.H.reduce((t, x, i) => t + schedule(Object.entries(a[i]).filter(([, v]) => v > 1e-6)
+      .map(([id, v]) => ({ plot: id, ring: m.byId[id].ring, days: v / x.au, au_days: v, window: m.byId[id].win })), season).unplaced.reduce((u, z) => u + z.days * x.au, 0), 0);
+    const score = a => planScore(m, a, season);
+    const better = scoreBetter;
+    let cur = alloc, curScore = score(cur), curUnplaced = unplaced(cur);
+    const tried = new Set();
+    for (let t = 0; t < maxTries; t++) {
+      const cand = [];
+      cur.forEach((row, i) => { if (Object.keys(row).length > 1) for (const [id, v] of Object.entries(row)) if (v > 1e-6 && !tried.has(i + "|" + id)) cand.push({ i, id, v: v / m.H[i].au }); });
+      if (!cand.length) break;
+      cand.sort((a, b) => a.v - b.v);
+      const c = cand[0], e = pairOf[c.i + "|" + c.id];
+      tried.add(c.i + "|" + c.id);
+      const old = e.cap; e.cap = 0;
+      const r = minDistanceAlloc(m, amounts);
+      let ok = r.flow >= need - 1e-6 * (1 + need);
+      if (ok) {
+        consolidate(m, r.alloc); exchange(m, r.alloc, season);
+        const sc = score(r.alloc), un = unplaced(r.alloc);
+        ok = better(sc, curScore) && un <= curUnplaced + 1e-6;
+        if (ok) { cur = r.alloc; curScore = sc; curUnplaced = un; }
+      }
+      if (!ok) e.cap = old;
+    }
+    m.pairs.forEach((e, k) => { e.cap = saved[k]; });
+    return cur;
   }
 
   /**
@@ -703,7 +825,12 @@
     for (let iter = 0; iter < 5; iter++) {
       shares = fairShares(m);
       alloc = minDistanceAlloc(m, m.H.map((x, i) => shares[i] * x.d)).alloc;
-      if (!opts.no_consolidate) consolidate(m, alloc);
+      if (!opts.no_consolidate) {
+        // склейка и обмены не должны сделать календарь хуже исходного решения потока — иначе берём исходное
+        const raw = alloc.map(a => Object.assign({}, a));
+        consolidate(m, alloc); exchange(m, alloc, p.season_days);
+        if (scoreBetter(planScore(m, raw, p.season_days), planScore(m, alloc, p.season_days))) alloc = raw;
+      }
       let conflict = false;
       m.H.forEach((x, i) => {
         const segs = Object.entries(alloc[i]).map(([id, v]) => ({ plot: id, ring: m.byId[id].ring, days: v / x.au, au_days: v, window: m.byId[id].win }));
@@ -715,6 +842,7 @@
       if (!conflict || iter === 4) break;
       repairs++;
     }
+    if (!opts.no_consolidate) alloc = prune(m, alloc, p.season_days);
     const prep = m.prep, byId = m.byId;
     const load = emptyLoad(prep);
     const herdPlans = {}, unmet = {}, coverage = {}, diagnostics = {};
@@ -745,8 +873,8 @@
     const status = demand <= EPS ? "no_demand" : deficitAUd <= EPS ? "feasible" : allocated <= EPS ? "infeasible" : "partially_feasible";
     const res = Object.assign({ load, herdPlans, unmet, coverage, deficit_kg: deficitAUd * p.intake, deficit_au_days: deficitAUd,
       demand_au_days: demand, allocated_au_days: allocated, status, herds_full: herds.filter(h => !unmet[h.id]).map(h => h.id),
-      herds_short: herds.filter(h => unmet[h.id]).map(h => h.id), diagnostics, algorithm: "fair-optimal-v1",
-      optimal: true, objective: ["max_min_share", "max_total", "min_km"], calendar_repairs: repairs,
+      herds_short: herds.filter(h => unmet[h.id]).map(h => h.id), diagnostics, algorithm: "fair-optimal-v2",
+      optimal: true, objective: ["max_min_share", "max_total", "min_moves", "min_short_stays", "min_km"], calendar_repairs: repairs,
       shares: Object.fromEntries(m.H.map((x, i) => [x.h.id, shares[i]])), kind: "plan" }, s);
     res.warnings = planWarnings(prep, res, herds);
     res.suggestions = suggestions(plots, herds, p, opts, prep, res);
@@ -881,7 +1009,7 @@
     return Math.floor((date - start) / 86400000) + 1;
   }
 
-  const _internal = { flowModel, feasibleFlow, fairShares, minDistanceAlloc, consolidate };
+  const _internal = { flowModel, feasibleFlow, fairShares, minDistanceAlloc, consolidate, exchange, prune, schedule, herdWeight };
   return { DIRS, DEFAULTS, ALGORITHM, MODEL: M, NEAR_PENALTY, MIN_STAY, _internal, params, herdAU, plotCapacity, explainCapacity, current, plan, optimize, solve, bottlenecks, planMetrics,
     schedule, exactBound, wells, wellEffect,
     compareScenarios, defaultVariants, sensitivity, totalCapacity, hayTonnes, plotOnDay, seasonDay, dist };

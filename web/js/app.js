@@ -379,6 +379,7 @@
     S.baseWater = Object.fromEntries(data.plots.map(p => [p.id, M.waterUsable(p)]));
     S.added = new Set((opts.water || []).filter(id => S.baseWater[id] === false));
     S.forbidden = new Set(opts.forbidden || []);
+    S.rest = Object.assign({}, opts.rest || {});
     S.waterSet = Object.assign({}, opts.water_status || {});
     if (opts.params) { S.userP = Object.assign({}, S.userP, opts.params); paramErr = null; S.P = resolveParams(S.userP, S.calib); if (paramErr) toast(paramErr, true); }
     rebuildPlots();
@@ -409,6 +410,10 @@
       else if (S.waterSet[p.id]) { o.water_status = S.waterSet[p.id]; o.water = M.waterUsable(o); }
       else { o.water_status = M.waterStatus(p); o.water = M.waterUsable(o); }
       o.forbidden = S.forbidden.has(p.id);
+      // отдых участка: не пасти первые/последние дни сезона — окно выпаса, которое учитывают план и календарь
+      const r = (S.rest || {})[p.id];
+      if (r && (r.spring > 0 || r.autumn > 0)) o.window = { from: (r.spring || 0) + 1, to: S.P.season_days - (r.autumn || 0) };
+      else delete o.window;
       return o;
     });
   }
@@ -625,6 +630,10 @@
         <option value="absent" ${userWs === "absent" ? "selected" : ""}>${t("ws.absent")}</option></select></label>
       ${S.baseWater[p.id] === false && !userWs ? `<label class="check" style="margin-top:8px"><input type="checkbox" data-water="${p.id}" ${S.added.has(p.id) ? "checked" : ""}> ${t("pop.hasWater")} ${src("input")}</label>` : ""}
       <label class="check" style="margin-top:8px"><input type="checkbox" data-closed="${esc(p.id)}" ${S.forbidden.has(p.id) ? "checked" : ""}> ${t("pop.closed")} ${src("input")}</label>
+      <fieldset class="rest"><legend>${t("rest.title")} ${src("input")}</legend>
+        <label class="field">${t("rest.spring")}<input type="number" inputmode="numeric" min="0" max="${S.P.season_days}" step="1" data-rest="${esc(p.id)}" data-side="spring" value="${((S.rest || {})[p.id] || {}).spring || 0}"></label>
+        <label class="field">${t("rest.autumn")}<input type="number" inputmode="numeric" min="0" max="${S.P.season_days}" step="1" data-rest="${esc(p.id)}" data-side="autumn" value="${((S.rest || {})[p.id] || {}).autumn || 0}"></label>
+        <small class="fine">${t("rest.note", { d: S.P.season_days })}</small></fieldset>
       <a class="btn btn-tg btn-sm" style="width:100%;margin-top:10px;color:#fff" href="${botLink(p.id)}" target="_blank" rel="noopener">${ic("send")} ${t("pop.subscribe")}</a>
       ${S.botSubs[p.id] ? `<p class="fine" style="margin:6px 0 0">${t("pop.subsCount", { n: S.botSubs[p.id] })}</p>` : ""}</div>`;
   }
@@ -636,6 +645,14 @@
       chk.checked ? S.forbidden.add(id) : S.forbidden.delete(id);
       rebuildPlots(); render(); closePlotCard();
       toast((chk.checked ? t("pop.closedOn") : t("pop.closedOff")) + ": " + id);
+    });
+    root.querySelectorAll("[data-rest]").forEach(inp => inp.onchange = () => {
+      const id = inp.dataset.rest, v = Math.max(0, Math.min(S.P.season_days, Math.round(+inp.value || 0)));
+      const r = Object.assign({ spring: 0, autumn: 0 }, (S.rest || {})[id], { [inp.dataset.side]: v });
+      S.rest = Object.assign({}, S.rest);
+      if (r.spring || r.autumn) S.rest[id] = r; else delete S.rest[id];
+      rebuildPlots(); render(); closePlotCard();
+      toast(r.spring || r.autumn ? t("rest.on", { id, a: r.spring + 1, b: S.P.season_days - r.autumn }) : t("rest.off", { id }));
     });
     root.querySelectorAll("[data-ws]").forEach(sel => sel.onchange = () => {
       const id = sel.dataset.ws;
@@ -847,14 +864,15 @@
         <div class="herd-foot">
           <label class="field" style="flex-direction:row;align-items:center;gap:8px">${t("herds.home")}<select data-k="home" ${h.mine || h.from_bot ? "disabled" : ""}>${near.map(id => `<option ${id === h.home ? "selected" : ""}>${id}</option>`).join("")}</select></label>
           <label class="check"><input type="checkbox" data-k="daily_return" ${h.daily_return ? "checked" : ""} ${h.mine || h.from_bot ? "disabled" : ""}> ${t("herds.daily")}</label>
+          <label class="field" style="flex-direction:row;align-items:center;gap:8px" title="${esc(t("herds.wNote"))}">${t("herds.weight")}<select data-k="weight" data-num="1">${[[1, t("herds.w1")], [1.5, t("herds.w15")], [2, t("herds.w2")]].map(([w, l]) => `<option value="${w}" ${(+h.weight || 1) === w ? "selected" : ""}>${l}</option>`).join("")}</select></label>
           <span class="au">${fmt(J.herdAU(h, S.P))} ${t("herds.au")} ${src("input")}</span>
         </div>${rights(h)}</div>`).join("") +
-      `<button class="btn btn-soft" id="addHerd">${ic("plus")} ${t("herds.add")}</button><p class="note">${t("herds.note")}</p><p class="note">${t("herds.codes")}</p>`;
+      `<button class="btn btn-soft" id="addHerd">${ic("plus")} ${t("herds.add")}</button><p class="note">${t("herds.note")}</p><p class="note">${t("herds.wNote")}</p><p class="note">${t("herds.codes")}</p>`;
     $$(".herd", el).forEach(card => {
       const h = S.herds[+card.dataset.i];
       card.querySelectorAll("[data-k]").forEach(inp => inp.onchange = () => {
         const k = inp.dataset.k;
-        h[k] = inp.type === "checkbox" ? inp.checked : inp.type === "number" ? Math.max(0, Math.round(+inp.value || 0)) : inp.value;
+        h[k] = inp.type === "checkbox" ? inp.checked : inp.type === "number" ? Math.max(0, Math.round(+inp.value || 0)) : inp.dataset.num ? +inp.value : inp.value;
         if (inp.type === "number") inp.value = h[k];
         if (h.demo) h.demo_edited = true;                  // изменённое демо-стадо остаётся демо-стадом
         S.cur = J.current(S.plots, S.herds, S.P); S.pl = solve(S.plots, S.herds); paintMap();
@@ -1236,9 +1254,9 @@
   function scenarioPayload(name, shared) {
     return { name, shared: !!shared, village: S.D.village, request_id: "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10),
       herds: S.herds.filter(h => !h.from_bot).map(h => ({ id: h.id, name: h.name, sheep: h.sheep || 0, goats: h.goats || 0, cattle: h.cattle || 0, horses: h.horses || 0,
-        home: h.home, daily_return: !!h.daily_return, allowed_plots: h.allowed_plots || [], demo: !!h.demo })),
+        home: h.home, daily_return: !!h.daily_return, allowed_plots: h.allowed_plots || [], demo: !!h.demo, weight: +h.weight || 1 })),
       water: [...S.added], forbidden: [...S.forbidden], water_status: Object.assign({}, S.waterSet), params: Object.assign({}, S.userP),
-      summary: summary() };
+      rest: Object.assign({}, S.rest || {}), summary: summary() };
   }
   async function saveScenario(shared) {
     if (!S.D) return;
@@ -1254,7 +1272,7 @@
   function loadScenario(sc) {
     // сценарий применяется при открытии карты (onRoute) — так не бывает двух параллельных загрузок
     S.pending = { key: cacheKey(sc.village.lat, sc.village.lon), opts: { herds: (sc.herds || []).map(h => Object.assign({}, h, { allowed_plots: (h.allowed_plots || []).length ? h.allowed_plots : undefined })),
-      water: sc.water || [], forbidden: sc.forbidden || [], water_status: sc.water_status || {}, params: sc.params || null } };
+      water: sc.water || [], forbidden: sc.forbidden || [], water_status: sc.water_status || {}, rest: sc.rest || {}, params: sc.params || null } };
     const h = `#/map?lat=${sc.village.lat}&lon=${sc.village.lon}&name=${encodeURIComponent(sc.village.name)}`;
     if (location.hash === h) onRoute(); else location.hash = h;
   }
@@ -1612,7 +1630,7 @@
       </ul>
       <button type="button" class="btn btn-soft btn-sm" data-how="${esc(p.id)}">${ic("info")} ${t("cap.more")}</button></section>`;
   }
-  const briefKey = () => S.D ? JSON.stringify([S.D.village.lat, S.D.village.lon, S.herds.map(h => [h.sheep, h.goats, h.cattle, h.horses, h.home, h.daily_return, h.allowed_plots]), [...S.added], [...S.forbidden], S.waterSet, S.P.k_ndvi, S.P.util, S.P.season_days, I.lang]) : "";
+  const briefKey = () => S.D ? JSON.stringify([S.D.village.lat, S.D.village.lon, S.herds.map(h => [h.sheep, h.goats, h.cattle, h.horses, h.home, h.daily_return, h.allowed_plots, h.weight]), [...S.added], [...S.forbidden], S.waterSet, S.rest, S.P.k_ndvi, S.P.util, S.P.season_days, I.lang]) : "";
 
   // ---------- итог плана простыми словами: возможно ли, почему, что использовано, где дефицит, что изменить, насколько надёжно ----------
   const plotIds = ids => (ids || []).map(esc).join(", ");
@@ -1669,7 +1687,7 @@
       ${g.window_limited_au_days > 0.5 ? t("bn.window", { w: fmt(g.window_limited_au_days) }) : ""} ${exc ? t("bn.excluded", { r: exc }) : ""} ${src("model")}</p>`;
   }
   function algoLine(pl) {
-    if (pl.algorithm !== "fair-optimal-v1") return t("algo.greedyLine");
+    if (pl.algorithm !== "fair-optimal-v2") return t("algo.greedyLine");
     const H = S.herds.filter(h => J.herdAU(h, S.P) > 0 && pl.diagnostics[h.id] && pl.diagnostics[h.id].candidates.length);
     const minS = H.length ? Math.min(...H.map(h => 1 - (pl.unmet[h.id] || 0) / (J.herdAU(h, S.P) * S.P.season_days))) : 1;
     return t(pl.status === "feasible" ? "algo.optLineOk" : "algo.optLine", { p: pct(minS) }) + (pl.gap_au_days > 1 ? " " + t("algo.gap", { t: fmt(J.hayTonnes(pl.gap_au_days * S.P.intake, S.P)) }) : "");
@@ -1801,7 +1819,7 @@
         участки: Object.entries(a.plots).map(([id, s]) => { const b = basisOf(s); return `${id}: ${s.verdict}${b.sl.slope_per_year != null ? ` ${b.sl.slope_per_year.toFixed(4)}/год${s.basis === "resid" ? " с учётом осадков" : ""} p=${b.p.toFixed(2)}` : ""}`; }),
         p_участков: "с поправкой на множественную проверку (Бенджамини — Хохберг)",
       }))(M.a) : { статус: !M ? "нет" : { idle: "не посчитан (кнопка на вкладке «Данные»)", loading: "считается", error: "не посчитался" }[M.state] || "нет" })(S.multi),
-      алгоритм: S.pl.algorithm === "fair-optimal-v1" ? "оптимизация: 1) у всех хозяйств одинаковая доля обеспеченности, насколько позволяют ограничения (max-min); 2) при этом максимум корма; 3) при этом минимум перегона; затем календарь"
+      алгоритм: S.pl.algorithm === "fair-optimal-v2" ? "оптимизация: 1) у всех хозяйств одинаковая доля обеспеченности, насколько позволяют ограничения (max-min); 2) при этом максимум корма; 3) при тех же долях — меньше перегонов и коротких стоянок (< 14 дней), затем меньше км; затем календарь с учётом отдыха участков; приоритет хозяйств (если задан) действует только при нехватке"
         : "жадная эвристика (не оптимизатор)",
       доли_обеспеченности_проц: S.pl.shares ? Object.fromEntries(S.herds.filter(h => S.pl.shares[h.id] != null).map(h => [h.name, Math.round(S.pl.shares[h.id] * 100)])) : null,
       узкое_место: S.pl.bottleneck && S.pl.bottleneck.groups.length ? (g => ({ стада: g.herds.map(id => (S.herds.find(h => h.id === id) || {}).name || id),
@@ -1818,13 +1836,14 @@
       участки: S.plots.map(p => ({ id: p.id, кольцо: p.ring === "near" ? "ближний" : "дальний", км_от_села: p.dist_km, направление: p.dir,
         пастбище_га_спутник: p.pasture_ha, ndvi_спутник: p.ndvi, трава_за_лето_проц: (p.series || []).length >= 2 ? Math.round((p.series[p.series.length - 1].v - p.series[0].v) / p.series[0].v * 100) : null,
         качество_снимка: confidence(p), достоверность_корма: M.forageConfidence(p, S.P), статус_данных: capOf(p).status,
-        вода: t("ws." + M.waterStatus(p)), закрыт_по_вводу: !!p.forbidden,
+        вода: t("ws." + M.waterStatus(p)), закрыт_по_вводу: !!p.forbidden, отдых_выпас_только_дни: p.window ? `${p.window.from}-${p.window.to}` : undefined,
         ёмкость_овец_оценка: capOf(p).known ? Math.round(sheepOf(capOf(p).au_season)) : null,
         как_рассчитано: J.explainCapacity(p, S.P).steps.map(s => `${s.key}: ${s.formula}`).join("; "),
         нагрузка_если_все_у_села_проц: S.cur.load[p.id].known ? Math.round(S.cur.load[p.id].load * 100) : null,
         нагрузка_по_плану_проц: S.pl.load[p.id].known ? Math.round(S.pl.load[p.id].load * 100) : null })),
       стада: S.herds.map(h => ({ имя: h.name, демо: !!h.demo, права_на_участки: h.allowed_plots && h.allowed_plots.length ? { участки: h.allowed_plots, источник: "ввод пользователя, не госреестр" } : "не указаны",
         овцы: h.sheep || 0, козы: h.goats || 0, крс: h.cattle || 0, лошади: h.horses || 0, дойное: !!h.daily_return,
+        приоритет_при_нехватке: (+h.weight || 1) !== 1 ? +h.weight : undefined,
         усл_голов: Math.round(J.herdAU(h, S.P)), дней_корма_по_плану: Math.round((S.pl.coverage || {})[h.id] ?? b.Sd),
         маршрут: (S.pl.herdPlans[h.id] || []).map(s => `${s.plot || "нет корма"} д.${s.from}-${s.to}`).join("; ") })),
       итог: { перегружено_если_все_у_села: S.cur.overloaded, перегружено_по_плану: S.pl.overloaded,
