@@ -946,3 +946,21 @@ main .kans .btn { min-height: 54px; font-size: 16px; padding-inline: 10px; }
 .wcand > details > summary, .wrest > summary { min-height: 44px; font-size: 13.5px; align-items: center; }
 .wcform { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding-bottom: 8px; }
 .wcform .field:last-child { grid-column: 1 / -1; }
+
+/* где селу можно пасти */
+.zone { border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; margin: 0 0 12px; background: var(--surface); }
+.zone h3 { margin: 0 0 6px; font-size: 16px; }
+.zone p { margin: 0 0 8px; }
+.zone p.fine { display: block; }
+.zone-all.zone, .card.zone-all { background: var(--accent-soft); border-color: #ead6ae; }
+.zbtns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+@media (max-width: 560px) { .zbtns .btn { flex: 1 1 100%; } }
+.modes button { white-space: nowrap; }
+/* телефон: панель рисования — у нижнего края экрана, чтобы карта была видна целиком */
+@media (max-width: 860px) {
+  .drawbar { position: fixed; left: 0; right: 0; bottom: 0; width: 100%; transform: none; z-index: 1100; border-radius: 18px 18px 0 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px)); }
+  .drawbar p { margin: 0 0 8px; font-size: 13.5px; }
+  .drawbtns { flex-wrap: nowrap; gap: 6px; }
+  .drawbtns .btn { flex: 1 1 0; padding-inline: 8px; font-size: 13.5px; }
+  .drawbtns .btn .ic { display: none; }
+}

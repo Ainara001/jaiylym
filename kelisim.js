@@ -15,6 +15,7 @@ const crypto = require("crypto");
 const K = require("./web/kelisim.js");
 const M = require("./web/model.js");
 const NM = require("./web/norms.js");
+const Z = require("./web/zone.js");
 
 const TTL = 180 * 24 * 3600;
 const MAX = { households: 60, proposals: 300, log: 600, versions: 40, text: 300, perDay: 200 };
@@ -86,6 +87,7 @@ function cleanSnapshot(b, known) {
   const s = b.source || {};
   return {
     village: { name: text(v.name, 80, "село") || "Село", lat: +(+v.lat).toFixed(5), lon: +(+v.lon).toFixed(5) },
+    zone: (z => (z ? { mode: z.mode, ha: Math.round(Z.total(plots.filter(p => !p.forbidden))), official: !!(b.zone && b.zone.official) } : { mode: "all", ha: Math.round(Z.total(plots.filter(p => !p.forbidden))), official: false }))(Z.clean(b.zone && b.zone.mode === "contour" ? { mode: "contour", rings: [[[0, 0], [0, 1], [1, 1]]] } : b.zone)),
     plots, params: params.values, norm, model_version: M.MODEL_VERSION,
     source: { year: int(s.year, 2100, "год"), dates: (Array.isArray(s.dates) ? s.dates : []).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).slice(0, 30), nograze: ["ok", "empty", "error"].includes(s.nograze) ? s.nograze : "none" },
     check: checkSnapshot(plots, known && known(+v.lat, +v.lon)), taken: new Date().toISOString(),

@@ -50,7 +50,7 @@ test("все ключи, которые использует интерфейс,
   for (const m of read("kelisim.js").matchAll(/why: "(\w+)"/g)) used.add("kel.err." + m[1]);
   for (const m of read("web/index.html").matchAll(/data-i18n(?:-ph|-label)?="([a-zA-Z0-9._]+)"/g)) used.add(m[1]);
   // ключи, собираемые из переменной: t("conf." + c) — их полноту проверяет следующий тест
-  const dynamic = /^(conf|role|herds|src|hist|ab|map\.mode|fc|how\.step|how\.f|unit|meta|rsn|set\.origin|veg|vt|why|wi\.a|wi\.st|wi\.v|wi\.v\.algo|algo|wr|ws|sg|rs|obs\.r|obs\.w|obs\.v|map\.legend|water\.st|wc\.right|wc\.source|mt\.v|mt\.r|mt\.s)\.$/;
+  const dynamic = /^(conf|role|herds|src|hist|ab|map\.mode|fc|how\.step|how\.f|unit|meta|rsn|set\.origin|veg|vt|why|wi\.a|wi\.st|wi\.v|wi\.v\.algo|algo|wr|ws|sg|rs|obs\.r|obs\.w|obs\.v|map\.legend|zn\.k|water\.st|wc\.right|wc\.source|mt\.v|mt\.r|mt\.s)\.$/;
   const missing = [...used].filter(k => !ru.includes(k) && !dynamic.test(k) && !/^ab\.(f|g\.)$/.test(k));
   assert.deepEqual(missing, []);
 });
@@ -74,7 +74,7 @@ test("для всех кодов движка и модели есть текс�
     ...["cautious", "base", "optimistic"].map(x => "wi.a." + x),
     ...["optimized", "greedy"].flatMap(x => ["algo." + x, "wi.v.algo." + x]),
     ...["area", "ndvi", "biomass", "forage", "au_days", "au_season", "sheep", "herd_intake", "days"].flatMap(x => ["how.step." + x, "unit." + x]),
-    "how.f.area", "how.f.ndvi", "how.step.norm", "how.step.limit", "unit.norm", "unit.limit", "src.norm", "how.step.nograze", "unit.nograze", "src.osm",
+    "how.f.area", "how.f.ndvi", "how.step.norm", "how.step.limit", "how.step.zone", "unit.zone", "zn.k.all", "zn.k.contour", "zn.k.ha", "zn.k.haO", "unit.norm", "unit.limit", "src.norm", "how.step.nograze", "unit.nograze", "src.osm",
     ...["measured", "no_data"].map(x => "meta." + x),
     ...["q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "q9"].map(x => "rs." + x),
   ];
