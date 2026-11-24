@@ -198,8 +198,12 @@
     };
   }
 
+  /** Вопрос о том, как трава менялась по годам (ru, kk) — для него ИИ нужен многолетний ряд. */
+  const YEARS_Q = /по годам|тренд|многолет|динамик|из года в год|за (последние |несколько )?\d* ?(лет|года)|с 20\d\d|раньше|ухудша|деград|истощ|становит(ся|ь) (хуже|лучше)|жылдар|жыл сайын|жылдан жылға|бұрын|нашарла|тозу/i;
+  const asksYears = text => YEARS_Q.test(String(text || ""));
+
   /** Старое правило для сравнения: разница первого и последнего года больше порога — «тревога». */
   function twoYearAlarm(ndvi, thr = MIN_CHANGE) { return ndvi.length >= 2 && ndvi[0] - ndvi[ndvi.length - 1] >= thr; }
 
-  return { theilSen, mannKendall, mahonian, ols, seriesTrend, classify, bhAdjust, yearQuality, analyze, aiFacts, twoYearAlarm, median, ALPHA, MIN_YEARS, MIN_CHANGE, RAIN_R2 };
+  return { theilSen, mannKendall, mahonian, ols, seriesTrend, classify, bhAdjust, yearQuality, analyze, aiFacts, asksYears, twoYearAlarm, median, ALPHA, MIN_YEARS, MIN_CHANGE, RAIN_R2 };
 });
