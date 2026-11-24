@@ -226,6 +226,56 @@
     return { declared: t, official: o, over: SPECIES.filter(s => o[s] != null && t[s] > o[s] * 1.05 + 1).map(s => ({ species: s, declared: t[s], official: o[s] })) };
   }
 
+  // ---------- наблюдения людей ----------
+  // Причины возражений, которые говорят о самом участке. Наблюдение числа не меняет: только «проверить на месте».
+  const OBS = ["no_grass", "weeds", "no_water", "far"];
+  const OBS_DAYS = 15;                           // снимок и наблюдение — об одном времени, если между ними не больше 15 суток
+  const OBS_SPARSE = 0.25;                       // ниже — по снимку трава редкая (та же граница, что в легенде карты)
+  const dayNo = s => Math.round(Date.parse(s + "T00:00:00Z") / 864e5);
+  /** Наблюдения из возражений: одно на двор, участок и причину (последнее). Отозванные самим двором не считаются. */
+  function observations(k) {
+    const out = {}, alive = new Set(active(k).map(h => h.id));
+    for (const p of k.proposals || [])
+      if (["avoid", "swap"].includes(p.type) && OBS.includes(p.reason) && p.status !== "withdrawn" && alive.has(p.household))
+        out[p.household + p.plot + p.reason] = { household: p.household, plot: p.plot, reason: p.reason, on: p.observed_on || null, at: p.at || null };
+    return Object.values(out);
+  }
+  /**
+   * Наблюдение против данных, только за одно и то же время.
+   * verdict: check — расходится или снимок этого не видит (проверить на месте); match — сходится; other_time — данные за другое время, не сравниваем;
+   *          no_date — не сказано, когда видели; info — сравнивать не с чем (далеко).
+   */
+  function compareObs(o, plot, source, P0) {
+    if (o.reason === "far" || !plot) return { verdict: "info" };
+    if (!o.on) return { verdict: "no_date" };
+    const d = dayNo(o.on);
+    if (o.reason === "no_water") {
+      const P = J.params(P0 || null), from = dayNo(`${source.year}-${P.season_start || "05-01"}`);
+      if (d < from || d >= from + P.season_days) return { verdict: "other_time" };
+      return ["unknown", "absent"].includes(plot.water_status) || (!plot.water_status && !plot.water) ? { verdict: "match", why: "water_unknown" } : { verdict: "check", why: "water_listed" };
+    }
+    const near = (plot.series || []).map(s => ({ d: s.d, v: s.v, gap: Math.abs(dayNo(s.d) - d) })).filter(s => s.gap <= OBS_DAYS).sort((a, b) => a.gap - b.gap)[0];
+    if (!near) return { verdict: "other_time" };
+    const scene = { scene: near.d, ndvi: near.v };
+    if (o.reason === "weeds") return Object.assign({ verdict: "check", why: "sat_blind" }, scene);
+    return Object.assign(near.v < OBS_SPARSE ? { verdict: "match", why: "sat_sparse" } : { verdict: "check", why: "sat_green" }, scene);
+  }
+  /** Сводка по участкам: { участок: { verdict, items: [{ reason, households, dates, verdict, why, scene, ndvi }] } }. */
+  function plotObs(list, plots, source, P) {
+    const rank = ["check", "match", "other_time", "no_date", "info"], out = {};
+    for (const o of list) {
+      const c = compareObs(o, plots.find(p => p.id === o.plot), source, P), g = (out[o.plot] = out[o.plot] || { verdict: "info", items: [] });
+      let i = g.items.find(x => x.reason === o.reason && x.verdict === c.verdict && x.why === c.why);
+      if (!i) g.items.push(i = Object.assign({ reason: o.reason, households: [], dates: [] }, c));
+      if (!i.households.includes(o.household)) i.households.push(o.household);
+      if (o.on && !i.dates.includes(o.on)) i.dates.push(o.on);
+      if (rank.indexOf(c.verdict) < rank.indexOf(g.verdict)) g.verdict = c.verdict;
+    }
+    for (const g of Object.values(out)) { g.items.sort((a, b) => rank.indexOf(a.verdict) - rank.indexOf(b.verdict)); g.items.forEach(i => i.dates.sort()); }
+    return out;
+  }
+  const obsOf = k => plotObs(observations(k), k.snapshot.plots, k.snapshot.source, k.snapshot.params);
+
   // ---------- протокол ----------
   /** agree — согласен с текущей версией; object — возражает; pending — не ответил на текущую версию. */
   function answerState(k, h) {
@@ -248,12 +298,12 @@
         status: p.status, variant: p.variant || null, version: p.version, decided_at: p.decided_at || null,
         losers: p.effect && p.effect.variants && p.variant && p.effect.variants[p.variant] ? p.effect.variants[p.variant].losers.map(x => ({ id: x.id, delta: x.delta })) : [] })),
       snapshot: { source: k.snapshot.source, check: k.snapshot.check, norm: k.snapshot.norm || null, model_version: k.snapshot.model_version, deficit_t: now ? now.deficit_t : null, status: now ? now.status : null },
-      herds: herdCheck(k), restored: k.restored || null,
+      observations: obsOf(k), herds: herdCheck(k), restored: k.restored || null,
       // что этот документ не делает — показывать всегда
       limits: ["not_a_contract", "no_land_rights", "herds_declared", "model_estimate"],
     };
   }
 
   return { REASONS, TYPES, RULES, WEIGHTS, SPECIES, TOL, SHIFT_DAYS, active, herdOf, allowedOf, solve, compare, routeChanged, plotsOf, applyProposal, candidates, effect, needsChoice, mustReconfirm,
-    why, herdTotals, herdCheck, answerState, protocol, withHousehold };
+    why, herdTotals, herdCheck, answerState, protocol, withHousehold, OBS, observations, compareObs, plotObs, obsOf };
 });
