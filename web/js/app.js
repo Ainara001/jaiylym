@@ -1772,7 +1772,7 @@
     loadWeather();
   }
 
-  /** Пометка под ответом ИИ: шаблон без Gemini или числа, которых нет в расчёте (проверка на сервере, ai-facts.js). */
+  /** Пометка под ответом ИИ: шаблон без ИИ или числа, которых нет в расчёте (проверка на сервере, ai-facts.js). */
   function aiMark(r) {
     if (r.fallback) return `<p class="fine ai-mark">${t("ai.fallback")}</p>`;
     if (r.numbers && !r.numbers.ok) return `<p class="fine ai-mark warn">${t("ai.unverified", { n: esc(r.numbers.unknown.join(", ")) })}</p>`;

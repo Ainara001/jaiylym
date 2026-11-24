@@ -76,13 +76,15 @@ async function ask(body, label) {
   try {
     const st = await (await get(API + "/api/ai/status")).json();
     console.log("\n--- состояние ИИ ---\n" + JSON.stringify(st, null, 1));
-    ok(st.key_configured === true, "ключ Gemini задан на сервере");
+    ok(st.key_configured === true, `ключ ИИ задан на сервере (${st.provider || "gemini"})`);
     if (st.configured_available && st.configured_available.every(x => !x.available)) note("ни одна модель из GEMINI_MODELS не доступна ключу; запасные: " + (st.fallback_candidates || []).join(", "));
   } catch (e) { note("/api/ai/status недоступен (сервер на старой версии?): " + e.message); }
   const ctx = context();
   const a1 = await ask({ mode: "chat", lang: "ru", context: ctx, messages: [{ role: "user", text: "Откуда взялось число 367 овец на участке Б-С?" }] }, "ru, откуда 367 овец");
-  // перегрузка серверов Google — внешний сбой: отмечаем, но не считаем ошибкой нашей системы
-  const aiOk = (r, msg) => (r.status !== 200 && r.d.reason === "overloaded" ? note(msg + ": Google перегружен (503), сервер повторил запрос и не дождался — внешний сбой") : ok(r.status === 200 && !!r.d.text, msg));
+  // перегрузка серверов ИИ — внешний сбой: отмечаем, но не считаем ошибкой нашей системы.
+  // Шаблонный ответ (fallback) приходит с кодом 200, но это значит, что ИИ НЕ ответил — его нельзя засчитывать как успех.
+  const aiOk = (r, msg) => (r.d.fallback && r.d.reason === "overloaded" ? note(msg + ": серверы ИИ перегружены, сервер повторил запрос и показал шаблон — внешний сбой")
+    : ok(r.status === 200 && !!r.d.text && !r.d.fallback, msg + (r.d.fallback ? ` — ИИ не ответил (${r.d.reason}), показан шаблон` : "")));
   aiOk(a1, "ИИ отвечает по-русски");
   if (a1.d.text && !/367/.test(a1.d.text)) note("ИИ не назвал 367 в объяснении — проверьте ответ выше");
   const a2 = await ask({ mode: "summary", lang: "kk", context: ctx }, "kk, сводка");
