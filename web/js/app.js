@@ -464,7 +464,16 @@
       return o;
     });
   }
-  const demoHerds = () => DEMO_HERDS.map(h => Object.assign({}, h, { demo: true }));
+  // имена демо-стад на языке интерфейса (данные примера по-русски); имя, изменённое пользователем, не трогаем
+  const DEMO_KK = { gulnar: "Гүлнар (сауын)", village: "Ауылдың сиыр табыны", baur: "Бауыржан", asan: "Асан", erlan: "Ерлан" };
+  const demoName = h => (I.lang === "kk" && DEMO_KK[h.id]) || h.name;
+  const demoHerds = () => DEMO_HERDS.map(h => Object.assign({}, h, { demo: true, name: demoName(h) }));
+  function renameDemo() {
+    for (const h of S.herds || []) {
+      const base = h.demo && DEMO_HERDS.find(d => d.id === h.id);
+      if (base && (h.name === base.name || h.name === DEMO_KK[h.id])) h.name = demoName(base);
+    }
+  }
   function addOwnFarm() {
     const u = C.user;
     S.herds = S.herds.filter(h => !h.mine);
@@ -658,7 +667,9 @@
     const ws = M.waterStatus(p), userWs = S.waterSet[p.id] || "";
     return `<div class="pop"><h3 style="margin:0 0 6px">${esc(p.id)} <small style="font-weight:500;color:#627064">${p.ring === "near" ? t("pop.near") : t("pop.far")}, ~${p.dist_km} ${t("common.km")}, ${p.dir}</small></h3>
       <table><tbody>
-      <tr><td>${t("pop.pasture")}</td><td>${fmt(p.pasture_ha)} ${t("common.ha")} ${src("sat")}</td></tr>
+      ${p.nograze_ha > 0 && p.pasture_ha_gross != null
+        ? `<tr><td>${t("pop.pastureNet")}</td><td>${fmt(p.pasture_ha)} ${t("common.ha")} = ${fmt(p.pasture_ha_gross)} ${src("sat")} − ${fmt1(p.nograze_ha)} ${src("osm")}</td></tr>`
+        : `<tr><td>${t("pop.pasture")}</td><td>${fmt(p.pasture_ha)} ${t("common.ha")} ${src("sat")}</td></tr>`}
       ${p.nograze_ha != null ? `<tr><td>${t("pop.nograze")}</td><td style="white-space:normal">${fmt1(p.nograze_ha)} ${t("common.ha")} ${t("pop.nograzeOf", { g: fmt(p.pasture_ha_gross), b: p.nograze_buffer_m })} ${src("osm")}</td></tr>` : ""}
       <tr><td>${t("pop.ndvi")}${p.ndvi_base != null ? ` ${S.D.source.base_year} → ${S.D.source.year}` : ""}</td><td>${ndviRow} ${src("sat")}</td></tr>
       <tr><td>${t("pop.quality")}</td><td>${confTag(p)}</td></tr>
@@ -1181,7 +1192,7 @@
       ${row("lc", esc(meta.landcover_source) + (meta.landcover_year ? ", " + meta.landcover_year : ""))}
       ${row("calc", meta.calculated_at ? dateStr(meta.calculated_at) : t("meta.unknownDate"))}${row("model", esc(meta.model_version))}
       ${row("status", t("meta." + meta.data_status) )}
-      ${meta.warnings.length ? row("warn", meta.warnings.map(esc).join("<br>")) : ""}</tbody></table></div>`;
+      ${meta.warnings.length ? row("warn", meta.warnings.map(w => esc(metaWarn(w))).join("<br>")) : ""}</tbody></table></div>`;
   }
   function paneData(el) {
     const s = S.D.source, counts = { high: 0, medium: 0, low: 0, none: 0 };
@@ -1718,6 +1729,19 @@
     if (s.type === "hay") return t("sg.hay", { t: fmt(s.tonnes) });
     return "";
   }
+  /** Предупреждение о данных (строка из model.js / pipeline.js по-русски) → текст на языке интерфейса; неизвестное — как есть. */
+  const META_WARN = [
+    [/^Число валидных пикселей/, () => t("mw.legacy")],
+    [/^Дата расчёта не записана/, () => t("mw.noCalcDate")],
+    [/^Безоблачных дат мало: (\d+)/, m => t("mw.fewDates", { n: m[1] })],
+    [/^Тайлы одной даты склеены: (\d+) сцен → (\d+)/, m => t("mw.merged", { a: m[1], b: m[2] })],
+    [/^Нет NDVI для участков: (.*?)\.?$/, m => t("mw.noNdvi", { ids: m[1] })],
+    [/^Зоны, где нельзя пасти \(OpenStreetMap\), не загрузились: (.*)$/, m => t("mw.ngFail", { e: m[1] })],
+  ];
+  function metaWarn(w) {
+    for (const [re, f] of META_WARN) { const m = re.exec(String(w)); if (m) return f(m); }
+    return String(w);
+  }
   function wrText(w) {
     if (w.type === "no_data_excluded" || w.type === "low_quality_used") return t("wr." + w.type, { ids: plotIds(w.plots) });
     if (w.type === "water_unconfirmed") return t("wr.water_unconfirmed", { n: w.plots.length });
@@ -2068,6 +2092,7 @@
   // ---------- язык, сеть, запуск ----------
   function setLang(l) {
     I.setLang(l);
+    renameDemo();
     $$(".langsw button").forEach(b => b.setAttribute("aria-pressed", b.dataset.lang === I.lang));
     renderAccount();
     if (S.D) { rebuildPlots(); render(); }
