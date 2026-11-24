@@ -244,7 +244,7 @@
       households: list.map(h => ({ id: h.id, name: h.name, herd: h.herd, herd_status: h.herd_status, weight: h.weight || 1, daily_return: !!h.daily_return,
         share: now ? now.share[h.id] : null, days: now ? now.days[h.id] : null, route: now ? now.routes[h.id] : [], answer: answerState(k, h),
         answered_at: h.answer && h.answer.version === k.version ? h.answer.at : null, carried: !!(h.answer && h.answer.version === k.version && h.answer.carried) })),
-      decisions: (k.proposals || []).map(p => ({ id: p.id, household: p.household, type: p.type, plot: p.plot || null, to: p.to || null, reason: p.reason || null, observed_on: p.observed_on || null,
+      decisions: (k.proposals || []).map(p => ({ id: p.id, household: p.household, type: p.type, plot: p.plot || null, to: p.to || null, herd: p.herd || null, reason: p.reason || null, observed_on: p.observed_on || null,
         status: p.status, variant: p.variant || null, version: p.version, decided_at: p.decided_at || null,
         losers: p.effect && p.effect.variants && p.variant && p.effect.variants[p.variant] ? p.effect.variants[p.variant].losers.map(x => ({ id: x.id, delta: x.delta })) : [] })),
       snapshot: { source: k.snapshot.source, check: k.snapshot.check, norm: k.snapshot.norm || null, model_version: k.snapshot.model_version, deficit_t: now ? now.deficit_t : null, status: now ? now.status : null },
