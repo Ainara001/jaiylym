@@ -3,7 +3,8 @@
  * Гость: сценарии и история хранятся в этом браузере и так и подписаны в интерфейсе. */
 (function () {
   "use strict";
-  const API = "https://jaiylym-bot.onrender.com";
+  // адрес сервера; JAIYLYM_API_URL — только для автотестов (запросы на тот же адрес, без CORS)
+  const API = (typeof window !== "undefined" && window.JAIYLYM_API_URL) || "https://jaiylym-bot.onrender.com";
   const TOKEN_KEY = "jaiylym:session";
   const ls = {
     get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } },
@@ -13,7 +14,7 @@
   let token = ls.get(TOKEN_KEY, null);
   let user = null;
 
-  class ApiError extends Error { constructor(msg, status) { super(msg); this.status = status; } }
+  class ApiError extends Error { constructor(msg, status, field) { super(msg); this.status = status; this.field = field || null; } }
 
   async function req(method, path, body, { timeout = 70000, auth = true } = {}) {
     const headers = {};
@@ -28,7 +29,7 @@
     let data = null;
     try { data = await r.json(); } catch (_) {}
     if (r.status === 401 && auth && token) { setToken(null); user = null; }
-    if (!r.ok) throw new ApiError((data && data.error) || ("HTTP " + r.status), r.status);
+    if (!r.ok) throw new ApiError((data && data.error) || ("HTTP " + r.status), r.status, data && data.field);
     return data;
   }
   function setToken(tk) { token = tk; tk ? ls.set(TOKEN_KEY, tk) : ls.del(TOKEN_KEY); }
@@ -40,6 +41,14 @@
     if (d.status === "ok") { setToken(d.token); user = d.user; }
     return d;
   }
+  // вход и регистрация по логину и паролю (по выбору; Telegram — второй способ)
+  async function passwordAuth(path, body) {
+    const d = await req("POST", path, body, { auth: false, timeout: 90000 });
+    if (d && d.status === "ok") { setToken(d.token); user = d.user; }
+    return d;
+  }
+  const register = (name, login, password) => passwordAuth("/auth/register", { name, login, password });
+  const loginPw = (login, password) => passwordAuth("/auth/login", { login, password });
   async function logout() {
     try { if (token) await req("POST", "/auth/logout", null, { timeout: 15000 }); } catch (_) {}
     setToken(null); user = null;
@@ -95,7 +104,7 @@
   window.Client = {
     API, ApiError, ls,
     get user() { return user; }, get loggedIn() { return !!token; },
-    startLogin, pollLogin, logout, me, saveFarm, deleteAccount, addPasture, deletePasture,
+    startLogin, pollLogin, register, loginPw, logout, me, saveFarm, deleteAccount, addPasture, deletePasture,
     listScenarios, saveScenario, deleteScenario, listHistory, addHistory,
     coordAddVillage, coordRemoveVillage, coordFarms, villageData, ai,
   };

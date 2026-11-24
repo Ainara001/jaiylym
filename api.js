@@ -118,6 +118,30 @@ const MAX_BODY = 256 * 1024;
 const sha = s => crypto.createHash("sha256").update(String(s)).digest("hex");
 const rnd = n => crypto.randomBytes(n).toString("base64url");
 
+// ---------- аккаунты с паролем (вход без Telegram — по выбору пользователя) ----------
+// Логин — телефон Казахстана (+7XXXXXXXXXX), e-mail или имя латиницей. Пароль хранится только как хэш scrypt с солью.
+const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 32 };
+function normLogin(x) {
+  const s = String(x == null ? "" : x).trim().toLowerCase();
+  const digits = s.replace(/[\s()+-]/g, "");
+  if (/^[78]\d{10}$/.test(digits)) return "+7" + digits.slice(1);              // 8 701 …, +7 701 …, 7701…
+  if (/^[^\s@]{1,64}@[^\s@]{1,190}\.[a-zа-я]{2,}$/i.test(s)) return s;          // e-mail
+  if (/^[a-z][a-z0-9_.]{2,31}$/.test(s)) return s;                                  // имя латиницей
+  return null;
+}
+function hashPassword(pw, salt = crypto.randomBytes(16)) {
+  const hash = crypto.scryptSync(String(pw), salt, SCRYPT.keylen, { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p });
+  return { alg: "scrypt", N: SCRYPT.N, salt: salt.toString("base64"), hash: hash.toString("base64") };
+}
+function checkPassword(pw, rec) {
+  if (!rec || rec.alg !== "scrypt") return false;
+  const want = Buffer.from(rec.hash, "base64");
+  const got = crypto.scryptSync(String(pw), Buffer.from(rec.salt, "base64"), want.length, { N: rec.N || SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p });
+  return got.length === want.length && crypto.timingSafeEqual(got, want);
+}
+// хэш-«пустышка»: на неизвестный логин тратим то же время, что на проверку пароля (не выдаём, есть ли такой логин)
+const DUMMY_PW = hashPassword("jaiylym-dummy-password");
+
 const num = (x, max = 1e6) => { const v = Math.round(+x); return Number.isFinite(v) ? Math.min(Math.max(v, 0), max) : 0; };
 const bad = msg => Object.assign(new Error(msg), { code: 400 });
 /** Поголовье: пусто → 0; отрицательное, дробное, нечисловое или больше лимита — ошибка 400 (а не тихое обнуление). */
@@ -164,7 +188,7 @@ const PLOT_RE = /^[БД]-(С|СВ|В|ЮВ|Ю|ЮЗ|З|СЗ)$/;
 
 function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowedOrigins }) {
   // состояние берём при каждом обращении: бот может заменить объект целиком при загрузке
-  const st = () => { const s = getState(); s.users = s.users || {}; s.villagePlans = s.villagePlans || {}; return s; };
+  const st = () => { const s = getState(); s.users = s.users || {}; s.villagePlans = s.villagePlans || {}; s.logins = s.logins || {}; return s; };
   const origins = new Set(allowedOrigins || []);
   const hits = new Map();   // простое ограничение частоты запросов по IP
 
@@ -211,7 +235,7 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
 
   // ---------- представления данных ----------
   const pubUser = u => ({
-    uid: u.uid, name: u.name, username: u.username || null, role: roleOf(u), created: u.created,
+    uid: u.uid, name: u.name, username: u.username || null, login: u.login || null, via: u.login ? "password" : "telegram", role: roleOf(u), created: u.created,
     farm: u.farm || null, pastures: u.pastures || [], villages: roleOf(u) === "coordinator" ? (u.villages || []) : [],
   });
   const farmVk = u => (u.farm && u.farm.village ? vkey(u.farm.village.lat, u.farm.village.lon) : null);
@@ -453,6 +477,43 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         await kv.set("login:" + sha(nonce), { status: "pending", code, created: Date.now() }, LOGIN_TTL);
         return json(res, 200, { nonce, code, link: `https://t.me/${botUsername}?start=login_${nonce}`, expires_in: LOGIN_TTL }), true;
       }
+      // регистрация и вход по логину и паролю — по выбору, вход через Telegram остаётся
+      if (p === "/auth/register" && req.method === "POST") {
+        if (limited(req, "register", 5, 10 * 60e3)) return json(res, 429, { error: "слишком много регистраций, подождите 10 минут" }), true;
+        const b = await body(req);
+        const login = normLogin(b.login);
+        if (!login) return json(res, 400, { error: "логин: телефон +7…, e-mail или имя латиницей (3–32 знака)", field: "login" }), true;
+        const pw = String(b.password == null ? "" : b.password);
+        if (pw.length < 8 || pw.length > 128) return json(res, 400, { error: "пароль — от 8 до 128 знаков", field: "password" }), true;
+        if (pw.toLowerCase() === login || /^(\d)\1+$/.test(pw) || /^(12345678|123456789|1234567890|password|qwerty123|йцукенгш)$/i.test(pw))
+          return json(res, 400, { error: "слишком простой пароль", field: "password" }), true;
+        const name = str(b.name, 80).trim();
+        if (!name) return json(res, 400, { error: "укажите имя", field: "name" }), true;
+        if (st().logins[login]) return json(res, 409, { error: "такой логин уже зарегистрирован — войдите", field: "login" }), true;
+        const uid = "a" + rnd(9);
+        st().users[uid] = { uid, created: new Date().toISOString(), scenarios: [], history: [], name, login, pw: hashPassword(pw), lastLogin: new Date().toISOString() };
+        st().logins[login] = uid;
+        save();
+        const token = rnd(32);
+        await kv.set("sess:" + sha(token), uid, SESSION_TTL);
+        return json(res, 200, { status: "ok", token, user: pubUser(st().users[uid]) }), true;
+      }
+      if (p === "/auth/login" && req.method === "POST") {
+        if (limited(req, "pwlogin", 10, 60e3)) return json(res, 429, { error: "слишком много попыток, подождите минуту" }), true;
+        const b = await body(req);
+        const login = normLogin(b.login), pw = String(b.password == null ? "" : b.password).slice(0, 128);
+        // попытки на один логин (с любых адресов): не больше 10 за 15 минут
+        const lk = "pwfail:" + sha(login || "-"), fails = (await kv.get(lk)) || 0;
+        if (fails >= 10) return json(res, 429, { error: "слишком много неверных попыток для этого логина, подождите 15 минут" }), true;
+        const uid = login && st().logins[login], u = uid && st().users[uid];
+        const ok = checkPassword(pw, u ? u.pw : DUMMY_PW) && !!u;
+        if (!ok) { await kv.set(lk, fails + 1, 15 * 60); return json(res, 401, { error: "неверный логин или пароль" }), true; }
+        await kv.del(lk);
+        u.lastLogin = new Date().toISOString(); save();
+        const token = rnd(32);
+        await kv.set("sess:" + sha(token), uid, SESSION_TTL);
+        return json(res, 200, { status: "ok", token, user: pubUser(u) }), true;
+      }
       if (p === "/auth/poll" && req.method === "GET") {
         if (limited(req, "poll", 120, 60e3)) return json(res, 429, { error: "слишком часто" }), true;
         const nonce = url.searchParams.get("nonce") || "";
@@ -496,6 +557,7 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
       if (p === "/api/me" && req.method === "DELETE") {      // удалить аккаунт и все свои данные
         const vk = farmVk(u);
         delete st().users[u.uid];
+        if (u.login && st().logins[u.login] === u.uid) delete st().logins[u.login];
         for (const vk2 of Object.keys(st().villagePlans)) st().villagePlans[vk2] = st().villagePlans[vk2].filter(s => s.owner !== u.uid);
         if (onFarmSaved) onFarmSaved(u.uid, null, vk);
         await kv.del("sess:" + a.tokenHash);
