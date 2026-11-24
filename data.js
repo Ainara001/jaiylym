@@ -12,6 +12,7 @@ function loadAssign(file) {
 
 module.exports = {
   Jaiylym: require("./web/engine.js"),
-  loadPlots: () => loadAssign("plots.js"),
+  loadPlots: () => loadAssign("plots.js"),                                             // Кеген (эталон для проверок расчёта)
+  loadExamples: () => [loadAssign("beskol.js"), loadAssign("plots.js")],               // готовые сёла сайта и бота, первое — пример по умолчанию
   loadHerds: () => loadAssign("herds.js"),
 };

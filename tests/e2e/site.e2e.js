@@ -35,16 +35,58 @@ async function stubNetwork(page) {
   await page.route(/unpkg\.com|cdnjs\.cloudflare\.com|arcgisonline|open-meteo|fonts\.g/, r => r.abort());
 }
 
-/** ИИ-чат, открытый сразу по ссылке: помощник видит данные села (пример Кегена), а не «село не открыто». */
+/** ИИ-чат, открытый сразу по ссылке: помощник видит данные села (пример), а не «село не открыто». */
 async function chatWithoutMap(page, label) {
   await stubNetwork(page);
   await page.goto(base + "#/ai");
   await page.waitForFunction(() => window.JaiylymApp && window.JaiylymApp.S.D, null, { timeout: 15000 });
-  assert.equal(await page.evaluate(() => window.JaiylymApp.aiContext()["село"]), "Кеген", label + ": контекст чата — Кеген");
-  assert.match(await page.textContent(".chat-ctx"), /Кеген/);
+  assert.equal(await page.evaluate(() => window.JaiylymApp.aiContext()["село"]), "Бесколь", label + ": контекст чата — пример");
+  assert.match(await page.textContent(".chat-ctx"), /Бесколь/);
   assert.match(page.url(), /#\/ai$/, label + ": адрес остался на чате");
   await page.goto(base + "#/map");
   await page.waitForFunction(() => document.querySelectorAll("#schemeMap [data-plot], .leaflet-interactive").length > 0, null, { timeout: 15000 });
+}
+
+/** Новичок на чистом браузере: карта без чужого села, примеры по кнопке, новое село считается — старого на экране нет. */
+async function newcomer(page, label) {
+  const errors = [];
+  page.on("pageerror", e => errors.push(e.message));
+  await stubNetwork(page);
+  await page.route(/planetarycomputer|overpass/, r => new Promise(() => {}));        // снимки «грузятся» — расчёт нового села висит
+  const App = f => page.evaluate(f);
+  await page.goto(base + "#/map");
+  await page.waitForSelector(".start");
+  assert.equal(await App(() => !!window.JaiylymApp.S.D), false, label + ": село само не открывается");
+  assert.match(await page.textContent(".start"), /Выберите село/);
+  assert.equal(await page.isVisible(".tabs"), false, label + ": без села вкладок анализа нет");
+  assert.equal(await page.isVisible("#vtitle b"), false);
+  // пример — по кнопке, с демо-стадами
+  await page.click('.start a[href*="54.77515"]');
+  await page.waitForFunction(() => window.JaiylymApp.S.D && window.JaiylymApp.S.pl);
+  assert.deepEqual(await App(() => { const s = window.JaiylymApp.S; return [s.D.village.name, s.plots.length, s.herds.filter(h => h.demo).length]; }), ["Бесколь", 16, 5]);
+  assert.match(page.url(), /demo=1/, label + ": ссылка на пример сохраняет демо-стада");
+  assert.equal(await page.isVisible(".tabs"), true);
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), label + ": без горизонтальной прокрутки");
+  // новое село: сразу его имя и «считаем», прежнего села на карте и в панели нет
+  await page.goto(base + "#/map?lat=50.1&lon=70.1&name=Новое");
+  await page.waitForFunction(() => /Считаем пастбища: Новое/.test((document.querySelector(".start") || {}).textContent || ""));
+  assert.equal(await App(() => !!window.JaiylymApp.S.D), false);
+  assert.match(await page.textContent("#vtitle"), /Новое/);
+  assert.equal(await page.$$eval("#schemeMap [data-plot]", x => x.length), 0, label + ": прежнего села на схеме нет");
+  // ушли в другой раздел и вернулись — расчёт тот же; пример во время расчёта открывается
+  await page.evaluate(() => { location.hash = "#/about"; });
+  await page.waitForSelector('[data-view="about"]:not([hidden])');
+  await page.evaluate(() => { location.hash = "#/map"; });
+  await page.waitForFunction(() => /Считаем пастбища: Новое/.test((document.querySelector(".start") || {}).textContent || ""));
+  await page.goto(base + "#/map?lat=43.02&lon=79.22&name=Кеген");
+  await page.waitForFunction(() => window.JaiylymApp.S.D && window.JaiylymApp.S.D.village.name === "Кеген" && window.JaiylymApp.S.pl);
+  assert.equal(await App(() => window.JaiylymApp.S.herds.length), 0);
+  // главная: оба примера, первым — Бесколь
+  await page.goto(base + "#/home");
+  await page.waitForSelector("#exBtns a");
+  assert.match((await page.$$eval("#exBtns a", a => a.map(x => x.textContent))).join("|"), /Бесколь\|.*Кеген/);
+  assert.match(await page.textContent("#heroBadge"), /Бесколь/);
+  assert.deepEqual(errors, [], label + ": ошибки JavaScript");
 }
 
 async function journey(page, label) {
@@ -63,7 +105,10 @@ async function journey(page, label) {
   const S = () => page.evaluate(() => { const s = window.JaiylymApp.S; return { plots: s.plots.length, herds: s.herds.length, status: s.pl && s.pl.status, demo: s.herds.filter(h => h.demo).length }; });
   let st = await S();
   assert.equal(st.plots, 16);
-  assert.equal(st.demo, 5, "демо-стада помечены");
+  assert.equal(st.herds, 0, label + ": село найдено поиском — выдуманных стад нет");
+  await page.click("#addDemo");
+  st = await S();
+  assert.equal(st.demo, 5, "демо-стада — только по кнопке и помечены");
   assert.match(await page.textContent('.pane[data-pane="brief"]'), /условных демо-стад/);
   // цепочка «NDVI → овцы» на виду: Б-С Кегена 0.289 → 313 овец (367 до вычета жилья и ферм OSM: 320 − 47,1 га), без открытия карточки
   const chain = await page.textContent(".chain");
@@ -186,7 +231,7 @@ async function offline(browser, label) {
   await stubNetwork(page);
   await page.goto(base + "#/home");
   await page.waitForFunction(() => navigator.serviceWorker && navigator.serviceWorker.controller, null, { timeout: 30000 });
-  await page.waitForFunction(async () => (await caches.keys()).length > 0 && !!(await caches.match("data/plots.js")), null, { timeout: 30000 });
+  await page.waitForFunction(async () => (await caches.keys()).length > 0 && !!(await caches.match("data/plots.js")) && !!(await caches.match("data/beskol.png")), null, { timeout: 30000 });
   await ctx.setOffline(true);
   await page.reload();
   await page.waitForSelector("#heroQ");
@@ -194,6 +239,8 @@ async function offline(browser, label) {
   await page.goto(base + "#/map?lat=43.02&lon=79.22&name=Кеген");
   await page.waitForFunction(() => window.JaiylymApp && window.JaiylymApp.S.D && window.JaiylymApp.S.pl);
   assert.equal(await page.evaluate(() => window.JaiylymApp.S.plots.length), 16, label + ": Кеген считается без сети");
+  await page.goto(base + "#/map?lat=54.77515&lon=69.09779&name=Бесколь&demo=1");
+  await page.waitForFunction(() => window.JaiylymApp.S.D && window.JaiylymApp.S.D.village.name === "Бесколь" && window.JaiylymApp.S.pl);
   await page.goto(base + "#/map?lat=50.1&lon=70.1&name=Новое");
   await page.waitForFunction(() => !document.querySelector("#status").hidden, null, { timeout: 10000 });
   assert.match(await page.textContent("#status"), /Нет сети|Желі жоқ/, label + ": новое село без сети — понятное сообщение");
@@ -269,6 +316,12 @@ for (const name of BROWSERS) {
   test(`${name}: офлайн — оболочка и Кеген из кэша, новое село — «нет сети»`, { skip: offSkip, timeout: 120000 }, async () => {
     const b = await pw[name].launch();
     try { await offline(b, name + " офлайн"); } finally { await b.close(); }
+  });
+  test(`${name}: новичок — выбор села, а не чужой пример; новое село не показывает прежнее`, { skip, timeout: 60000 }, async () => {
+    const b = await pw[name].launch();
+    try { const dev = Object.assign({}, pw.devices["iPhone 13"]); if (name !== "webkit") delete dev.defaultBrowserType;
+      const ctx = await b.newContext(Object.assign({}, dev, { serviceWorkers: "block" }));
+      await newcomer(await ctx.newPage(), name + " новичок"); } finally { await b.close(); }
   });
   test(`${name}: вход по выбору — логин и пароль или Telegram`, { skip, timeout: 60000 }, async () => {
     const b = await pw[name].launch();
