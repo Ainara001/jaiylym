@@ -306,7 +306,10 @@ async function askGemini(question, v, herd) {
   // поиск в интернете (погода, цены, нормы) — в пределах того же дневного лимита, что у сайта; источники — в конце сообщения
   const search = A.searchAllowed(), lang = kk ? "kk" : "ru";
   const r = await G.ask({ system: search ? system + " " + A.SEARCH_RULE[lang] : system, search, budgetMs: 60000,
-    input: `Данные села (JSON): ${JSON.stringify(ctx)}\n\nВопрос пастуха: ${String(question).slice(0, 1200)}`, maxTokens: kk ? 700 : 500 });
+    input: `Данные села (JSON): ${JSON.stringify(ctx)}\n\nВопрос пастуха: ${String(question).slice(0, 1200)}` +
+      (search && A.needsWeb(question) ? (kk ? "\n\nІЗДЕУ: сұрақ жаңа сыртқы мәлімет туралы — алдымен интернеттен ізде, табылғанмен жауап бер; ауыл сандары — тек деректерден."
+        : "\n\nПОИСК: вопрос о свежих внешних сведениях — сначала выполни поиск в интернете и ответь по найденному; цифры села — только из данных.") : ""),
+    maxTokens: kk ? 700 : 500 });
   if (r.ok && r.searches) A.searchUsed(r.searches);
   // Telegram получает обычный текст: убираем остатки markdown (**, __, `, # в начале строки), которые модели иногда добавляют
   if (r.ok) {
