@@ -5,6 +5,7 @@
  */
 const { Jaiylym: J, loadPlots, loadHerds } = require("../data");
 const M = require("../web/model.js");
+const NG = require("../web/nograze.js");
 const SITE = process.env.SITE_URL || "https://ainara001.github.io/jaiylym/";
 const API = process.env.API_URL || "https://jaiylym-bot.onrender.com";
 const fails = [], notes = [];
@@ -22,7 +23,7 @@ async function wake() {
 
 /** Данные Кегена в том же виде, в каком их передаёт сайт (сокращённо). */
 function context() {
-  const D = loadPlots(), H = loadHerds().map(h => Object.assign({ demo: true }, h)), P = J.params();
+  const D0 = loadPlots(), D = Object.assign({}, D0, { plots: NG.apply(D0.plots, D0.nograze) }), H = loadHerds().map(h => Object.assign({ demo: true }, h)), P = J.params();
   const pl = J.solve(D.plots, H, P), cur = J.current(D.plots, H, P);
   return {
     село: D.village.name, лето_снимков: D.source.year, статус_плана: pl.status, версия_модели: M.MODEL_VERSION, демо_стада: true,
@@ -80,13 +81,14 @@ async function ask(body, label) {
     if (st.configured_available && st.configured_available.every(x => !x.available)) note("ни одна модель из GEMINI_MODELS не доступна ключу; запасные: " + (st.fallback_candidates || []).join(", "));
   } catch (e) { note("/api/ai/status недоступен (сервер на старой версии?): " + e.message); }
   const ctx = context();
-  const a1 = await ask({ mode: "chat", lang: "ru", context: ctx, messages: [{ role: "user", text: "Откуда взялось число 367 овец на участке Б-С?" }] }, "ru, откуда 367 овец");
+  const a1 = await ask({ mode: "chat", lang: "ru", context: ctx, messages: [{ role: "user", text: "Откуда взялось число 313 овец на участке Б-С?" }] }, "ru, откуда 313 овец");
   // перегрузка серверов ИИ — внешний сбой: отмечаем, но не считаем ошибкой нашей системы.
   // Шаблонный ответ (fallback) приходит с кодом 200, но это значит, что ИИ НЕ ответил — его нельзя засчитывать как успех.
   const aiOk = (r, msg) => (r.d.fallback && r.d.reason === "overloaded" ? note(msg + ": серверы ИИ перегружены, сервер повторил запрос и показал шаблон — внешний сбой")
     : ok(r.status === 200 && !!r.d.text && !r.d.fallback, msg + (r.d.fallback ? ` — ИИ не ответил (${r.d.reason}), показан шаблон` : "")));
   aiOk(a1, "ИИ отвечает по-русски");
-  if (a1.d.text && !/367/.test(a1.d.text)) note("ИИ не назвал 367 в объяснении — проверьте ответ выше");
+  if (a1.d.text && !/313/.test(a1.d.text)) note("ИИ не назвал 313 в объяснении — проверьте ответ выше");
+  if (a1.d.text && !/47[,.]1/.test(a1.d.text)) note("ИИ не упомянул 47,1 га жилья и ферм (OSM) — проверьте ответ выше");
   const a2 = await ask({ mode: "summary", lang: "kk", context: ctx }, "kk, сводка");
   aiOk(a2, "ИИ отвечает по-казахски");
   if (a2.d.text && /[а-яё]{4,}/i.test(a2.d.text.replace(/[әғқңөұүһі]/gi, "")) && !/[әғқңөұүһі]/i.test(a2.d.text)) note("казахский ответ похож на русский — проверьте");

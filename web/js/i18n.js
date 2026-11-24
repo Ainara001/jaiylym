@@ -573,6 +573,7 @@
     "how.step.nograze": "Нельзя пасти: жильё, фермы, промзоны",
     "unit.nograze": "га",
     "how.f.nograze": "OpenStreetMap с буфером",
+    "cap.n.ng": "Из {g} га пастбища вычтено {n} га — жильё, сёла и фермы из OpenStreetMap с буфером {b} м; корм считается по {a} га.",
   };
 
   const KK = {
@@ -1146,6 +1147,7 @@
     "how.step.nograze": "Жаюға болмайды: тұрғын үй, фермалар, өнеркәсіп аймақтары",
     "unit.nograze": "га",
     "how.f.nograze": "OpenStreetMap, буфермен",
+    "cap.n.ng": "{g} га жайылымнан {n} га шегерілді — OpenStreetMap бойынша тұрғын үй, ауылдар мен фермалар, буфер {b} м; жем {a} га бойынша есептеледі.",
   };
 
   const DICT = { ru: RU, kk: KK };
