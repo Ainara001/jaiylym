@@ -54,3 +54,27 @@ test("ИИ не ответил — бот присылает шаблон из �
     assert.doesNotMatch(t, /\*\*/);
   } finally { AI.ask = orig; if (key === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = key; }
 });
+
+test("ИИ в боте: многолетний ряд в данных, поиск в интернете включён, источники в конце ответа", async () => {
+  const AI = require("../ai.js");
+  const orig = AI.ask, key = process.env.DEEPSEEK_API_KEY;
+  process.env.DEEPSEEK_API_KEY = "test";
+  let seen = null;
+  AI.ask = async o => { seen = o; return { ok: true, text: "**Дождь** ожидается в среду [интернет].", model: "stub", searches: 1,
+    sources: [{ url: "https://meteo.example/kegen", title: "Прогноз" }] }; };
+  try {
+    const c = bot.getState().chats["901"]; c.village = "43.020,79.220";
+    await bot.handle({ message: { chat: { id: 901 }, from: { id: 901, first_name: "Тест" }, text: "какая погода будет в Кегене на неделе?" } }, send);
+    assert.equal(seen.search, true, "поиск разрешён в пределах дневного лимита");
+    assert.match(seen.system, /Поиск в интернете/);
+    assert.match(seen.input, /многолетний_ряд/);
+    assert.match(seen.input, /вывод_по_селу/);
+    const t = last();
+    assert.match(t, /Найдено в интернете:\n— Прогноз: https:\/\/meteo\.example\/kegen/);
+    assert.doesNotMatch(t, /\*\*/);
+    // без источников метка [интернет] — это общие знания модели
+    AI.ask = async () => ({ ok: true, text: "Обычно в ноябре холодно [интернет].", model: "stub" });
+    await bot.handle({ message: { chat: { id: 901 }, from: { id: 901, first_name: "Тест" }, text: "холодно ли в ноябре в горах обычно?" } }, send);
+    assert.doesNotMatch(last(), /\[интернет\]|Найдено в интернете/);
+  } finally { AI.ask = orig; if (key === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = key; }
+});

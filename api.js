@@ -24,6 +24,13 @@ const AI_CTX_MAX = +process.env.AI_CONTEXT_CHARS || 24000;   // ~7–8 тыс. �
 // поиск в интернете (DeepSeek web search или Google у Gemini): не больше AI_SEARCH_DAILY поисков в день — найденные страницы оплачиваются как входные токены
 const AI_SEARCH_DAILY = process.env.AI_SEARCH_DAILY != null ? +process.env.AI_SEARCH_DAILY : 150;
 const searchDay = { day: "", n: 0 };
+/** Можно ли сегодня искать в интернете (лимит общий для сайта и бота — один процесс). */
+function searchAllowed() {
+  const day = new Date().toISOString().slice(0, 10);
+  if (searchDay.day !== day) { searchDay.day = day; searchDay.n = 0; }
+  return searchDay.n < AI_SEARCH_DAILY;
+}
+const searchUsed = n => { searchDay.n += n || 0; };
 const SEARCH_RULE = {
   ru: "Поиск в интернете: ищи, только если для ответа нужны свежие внешние сведения, которых нет в ДАННЫХ, — погода и прогноз, цены на сено и скот, " +
     "ветеринарные и правовые нормы Казахстана, новости района. Цифры села (участки, поголовье, ёмкость, нагрузка) бери только из ДАННЫХ, не из поиска. " +
@@ -363,10 +370,9 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
           timeoutMs: summary ? 30000 : 25000 };
         // Поиск в интернете — только в чате и в пределах дневного лимита (найденные страницы оплачиваются как токены);
         // сводка строится только по данным села. Искать ли — решает модель по правилу SEARCH_RULE.
-        if (searchDay.day !== day) { searchDay.day = day; searchDay.n = 0; }
-        const search = !summary && searchDay.n < AI_SEARCH_DAILY;
+        const search = !summary && searchAllowed();
         let r = await G.ask(Object.assign({ input, budgetMs: 60000, search }, opts, search ? { system: opts.system + " " + SEARCH_RULE[lang] } : {}));
-        if (r.ok && r.searches) searchDay.n += r.searches;
+        if (r.ok && r.searches) searchUsed(r.searches);
         if (!r.ok) {
           // ИИ не ответил — шаблон из тех же данных: сайт и демо не зависят от перегрузок и баланса провайдера
           const ERR = { no_key: "ИИ не настроен на сервере", timeout: "ИИ не ответил вовремя, попробуйте ещё раз",
@@ -566,4 +572,4 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
   return { handle, confirmLogin, loginInfo, roleOf };
 }
 
-module.exports = { createApi, aiContextIssues, fixWebLabels };
+module.exports = { createApi, aiContextIssues, fixWebLabels, searchAllowed, searchUsed, SEARCH_RULE };
