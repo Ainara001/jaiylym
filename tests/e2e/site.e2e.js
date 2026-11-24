@@ -208,6 +208,9 @@ async function accountFlow(page, label) {
   await stubNetwork(page);
   const user = { uid: "aTest", name: "Айгерим", login: "+77011234567", via: "password", role: "farmer", created: "2026-11-24T10:00:00Z", farm: null, pastures: [], villages: [] };
   let regBody = null;
+  const reqs = [], logs = [];
+  page.on("request", r => { if (/__api|onrender/.test(r.url())) reqs.push(r.method() + " " + r.url().replace(/^https?:\/\/[^/]+/, "")); });
+  page.on("console", m => logs.push(m.type() + ": " + m.text().slice(0, 150)));
   // сервер — на том же адресе, что и сайт (/__api): WebKit в Playwright не перехватывает предварительный CORS-запрос к другому домену
   await page.addInitScript(() => { window.JAIYLYM_API_URL = location.origin + "/__api"; });
   const reply = (r, status, data) => r.fulfill({ status, contentType: "application/json", body: JSON.stringify(data) });
@@ -232,7 +235,10 @@ async function accountFlow(page, label) {
   assert.match(await page.textContent("#pwErr"), /не короче 8/, label + ": короткий пароль — сразу, без сервера");
   await page.fill('#pwForm [name="password"]', "pastbishe-2026");
   await page.click("#pwGo");
-  await page.waitForFunction(() => /уже зарегистрирован/.test(document.querySelector("#pwErr").textContent));
+  await page.waitForFunction(() => /уже зарегистрирован/.test(document.querySelector("#pwErr").textContent), null, { timeout: 15000 }).catch(async e => {
+    const st = await page.evaluate(() => ({ err: document.querySelector("#pwErr").textContent, hidden: document.querySelector("#pwErr").hidden, go: document.querySelector("#pwGo").textContent, api: window.JAIYLYM_API_URL }));
+    throw new Error(label + ": нет ошибки «занят»: " + JSON.stringify(st) + " запросы: " + reqs.join(" ") + " консоль: " + logs.join(" | "));
+  });
   await page.click("#pwShow");
   assert.equal(await page.getAttribute('#pwForm [name="password"]', "type"), "text", label + ": «Показать» пароль");
   await page.fill('#pwForm [name="login"]', "8 701 123 45 67");
