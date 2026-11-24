@@ -53,6 +53,8 @@ function ndviPng(grid) {
   const D = await PL.buildVillage({ name, lat, lon, onProgress: say });
   const png = ndviPng(D.grid); delete D.grid;
   D.village.region = V.region;
+  // площадь пастбищ по документам и условные стада примера переносим из прежнего файла, если они там были
+  try { const old = require("../data").loadExamples().find(x => x.village.name === V.name); if (old && old.village.official) D.village.official = old.village.official; if (old && old.herds) D.herds = old.herds; } catch (_) {}
   if (!D.nograze || D.nograze.status !== "ok") D.nograze = await PL.buildNoGraze({ lat, lon, onProgress: say });
   if (D.nograze.status !== "ok") throw new Error("зоны OSM не получены (Overpass): " + D.nograze.error);
   const year = D.source.year;
