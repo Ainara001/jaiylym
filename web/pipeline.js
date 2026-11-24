@@ -194,16 +194,20 @@
     for (const [, list] of [...byDate.entries()].slice(0, maxDates)) for (const it of list) if (out.length < maxItems) out.push(it);
     return out;
   }
+  /**
+   * Снимки лета: сначала окно июнь–август с облачностью < 20 %, если мало — май–сентябрь < 40 %.
+   * У результата свойство window: { from, to, widened } — для многолетнего ряда расширенное окно (другая фенология) помечается.
+   */
   async function findScenes(bbox, year, now = new Date()) {
-    for (const [cloud, from, to] of [[20, "06-01", "08-31"], [40, "05-15", "09-15"]]) {
+    for (const [cloud, from, to, widened] of [[20, "06-01", "08-31", false], [40, "05-15", "09-15", true]]) {
       const raw = await stac({
         collections: ["sentinel-2-l2a"], bbox, datetime: `${year}-${from}/${year}-${to}`,
         query: { "eo:cloud_cover": { lt: cloud } }, limit: 60,
       });
       const { items } = sanitizeScenes(raw, { from: `${year}-${from}`, to: `${year}-${to}`, now });
-      if (new Set(items.map(i => i.properties.datetime.slice(0, 10))).size >= 2) return pickScenes(items);
+      if (new Set(items.map(i => i.properties.datetime.slice(0, 10))).size >= 2) return Object.assign(pickScenes(items), { window: { from, to, widened } });
     }
-    return [];
+    return Object.assign([], { window: null });
   }
 
   // ---------- общие шаги расчёта ----------
@@ -307,14 +311,14 @@
     const d0 = scenes.map(s => s.properties.datetime.slice(0, 10));
     const { per, dates } = mergeSameDate(raw.map(x => x.nd), d0);
     const { per: scls } = mergeSameDate(raw.map(x => x.scl), d0, v => v === 0);
-    return { scenes, per, scls, dates };
+    return { scenes, per, scls, dates, window: scenes.window || null };
   }
 
   /**
    * Одно лето для участков села (любое село, любой год): NDVI (медиана июнь–август по пастбищному покрову)
    * и вода по снимкам. Тот же расчёт, что у buildVillage, без картинки. Для сравнения с прошлым годом и многолетнего ряда.
    */
-  async function buildSeason({ lat, lon, year, onProgress }) {
+  async function buildSeason({ lat, lon, year, onProgress, land }) {
     const say = m => onProgress && onProgress(m);
     const bbox = bboxFor(lat, lon);
     say(`Ищу снимки лета ${year}…`);
@@ -322,7 +326,48 @@
     const plots = makePlots(lat, lon);
     if (!arr) return { year, dates: [], status: "no_data", valid_fraction: 0, plots: plots.map(p => ({ id: p.id, ndvi: null, valid_fraction: 0, obs_count: 0, water_ha: null, water_max_ha: null, water_obs: 0 })) };
     say(`Считаю лето ${year}…`);
-    return seasonFromArrays({ lat, lon, bbox, year, per: arr.per, scls: arr.scls, dates: arr.dates, land: await loadLand(bbox) });
+    return Object.assign(seasonFromArrays({ lat, lon, bbox, year, per: arr.per, scls: arr.scls, dates: arr.dates, land: land || await loadLand(bbox) }),
+      { window: arr.window });
+  }
+
+  /**
+   * Многолетний ряд: лето каждого года из years (последовательно — не перегружать Planetary Computer и телефон).
+   * have — уже посчитанные сезоны { год: сезон } (например, прошлое лето), их не качаем заново. Карта покрытия одна на все годы.
+   */
+  async function buildYears({ lat, lon, years, onProgress, have = {} }) {
+    const out = [];
+    let land = null;
+    for (const [i, year] of years.entries()) {
+      if (have[year]) { out.push(have[year]); continue; }
+      if (!land) land = await loadLand(bboxFor(lat, lon));
+      onProgress && onProgress({ year, i, n: years.length });
+      out.push(await buildSeason({ lat, lon, year, land }));
+    }
+    return out;
+  }
+
+  /**
+   * Осадки апреля–августа каждого года (мм), реанализ ERA5 через архив Open-Meteo (без ключа). Одним запросом на все годы.
+   * Трава отвечает на весеннюю и летнюю влагу с запаздыванием, поэтому окно шире окна снимков. Возвращает { год: мм }.
+   */
+  async function fetchPrecip({ lat, lon, years }) {
+    const y0 = Math.min(...years), y1 = Math.max(...years);
+    const u = `https://archive-api.open-meteo.com/v1/archive?latitude=${(+lat).toFixed(3)}&longitude=${(+lon).toFixed(3)}` +
+      `&start_date=${y0}-04-01&end_date=${y1}-08-31&daily=precipitation_sum&timezone=UTC`;
+    const r = await fetchRetry(u, { headers: headers() });
+    if (!r.ok) throw new Error("Архив осадков недоступен (" + r.status + ")");
+    return precipByYear(await r.json(), years);
+  }
+  /** Суммы осадков апрель–август по годам из ответа архива; год с пропусками > 5 % дней — null. */
+  function precipByYear(d, years) {
+    const t = (d.daily && d.daily.time) || [], p = (d.daily && d.daily.precipitation_sum) || [];
+    const out = {};
+    for (const y of years) {
+      let sum = 0, n = 0, miss = 0;
+      t.forEach((day, i) => { if (day >= `${y}-04-01` && day <= `${y}-08-31`) { n++; if (p[i] == null) miss++; else sum += p[i]; } });
+      out[y] = n >= 150 && miss <= n * 0.05 ? +sum.toFixed(1) : null;
+    }
+    return out;
   }
   /** Вычислительная часть buildSeason без сети (для тестов). */
   function seasonFromArrays({ lat, lon, bbox, year, per, scls, dates, land }) {
@@ -510,7 +555,7 @@
       source: {
         ndvi: "Sentinel-2 L2A (ESA Copernicus), медиана безоблачных снимков лета",
         landcover: "ESA WorldCover 10 м",
-        base_year: null, year, dates, calculated_at: new Date().toISOString(),
+        base_year: null, year, dates, window: scenes.window || null, calculated_at: new Date().toISOString(),
       },
       meta: metaFor({ year, dates, valid, warnings, status: noData.length === plots.length ? "no_data" : "measured" }),
       plots,
@@ -702,7 +747,7 @@
     return m ? (m[1] === "N" ? "Б" : "Д") + "-" + DIRS[+m[2]] : null;
   }
 
-  return { geocode, reverseGeocode, buildVillage, buildSeason, seasonFromArrays, compareSeasons, plotWater, sclFromBands, NDVI_SAME_PCT, latestScene, polygonStats, latestPolygonScene, polygonAreaHa, closeRing, checkRing, ringSelfIntersects,
+  return { geocode, reverseGeocode, buildVillage, buildSeason, buildYears, fetchPrecip, precipByYear, seasonFromArrays, compareSeasons, plotWater, sclFromBands, NDVI_SAME_PCT, latestScene, polygonStats, latestPolygonScene, polygonAreaHa, closeRing, checkRing, ringSelfIntersects,
     plotCode, plotFromCode, bboxFor, makePlots, setUserAgent, summerYear, SIZE,
     LANDCOVER, LANDCOVER_YEAR, SCL_OK, SCL_NAMES, classifyLandcover, landcoverComposition, sanitizeScenes, pickScenes, boaOffset, ndviFromBands,
     mergeSameDate, medianComposite, fetchRetry, plotMeans, maskedMean, insideMask, ringBbox, polygonFromArrays, plotIndex, metaFor };

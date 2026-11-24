@@ -56,6 +56,14 @@ async function journey(page, label) {
   // цепочка «NDVI → овцы» на виду: Б-С Кегена 0.289 → 367 овец (пример из отзыва экспертов), без открытия карточки
   const chain = await page.textContent(".chain");
   for (const re of [/0\.289/, /756/, /367/, /1 усл\. гол\. = 1 корова/, /150 дней с 1 мая/]) assert.match(chain, re, label + ": цепочка расчёта ёмкости");
+  // трава по годам (P3): ряд Кегена посчитан заранее — вывод, график, правило «не деградация»
+  await page.evaluate(() => window.JaiylymApp.renderPane("data"));
+  const mt = await page.textContent(".mt");
+  assert.match(mt, /Трава по годам/);
+  assert.match(mt, /8 лет/, label + ": ряд 2019–2026");
+  assert.ok(await page.$(".mt svg.mt-chart"), label + ": график по годам");
+  assert.doesNotMatch(mt, /(?<!вывод о )деградац/i, label + ": слово «деградация» только в оговорке «не вывод о деградации»");
+  await page.evaluate(() => window.JaiylymApp.renderPane("brief"));
   // убрать демо-стада → добавить своё хозяйство
   await page.click("#demoToggle");
   assert.equal((await S()).herds, 0);
@@ -124,6 +132,8 @@ async function journey(page, label) {
   await page.click('.langsw [data-lang="kk"]');
   assert.match(await page.textContent(".tabs"), /Егер былай болса/);
   await page.goto(base + "#/research");
+  // переход по хэшу отрисовывается асинхронно — ждём страницу, а не читаем её сразу (иначе гонка, особенно в WebKit)
+  await page.waitForFunction(() => /Жазылған сұхбаттар/.test((document.querySelector("#rsPage") || {}).textContent || ""), null, { timeout: 10000 });
   assert.match(await page.textContent("#rsPage"), /Жазылған сұхбаттар: 0/);
   for (const route of ["research", "map?lat=43.02&lon=79.22&name=Кеген", "settings", "about", "home"]) {
     await page.goto(base + "#/" + route);

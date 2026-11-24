@@ -2656,5 +2656,821 @@
     "water_obs": 6
    }
   ]
+ },
+ "multiyear": {
+  "first": 2019,
+  "last": 2026,
+  "calculated_at": "2026-11-24T09:09:44.516Z",
+  "precip": {
+   "2019": 397,
+   "2020": 339.4,
+   "2021": 379.9,
+   "2022": 379.9,
+   "2023": 454,
+   "2024": 448.5,
+   "2025": 343.6,
+   "2026": 391.7
+  },
+  "seasons": [
+   {
+    "year": 2019,
+    "status": "measured",
+    "dates": [
+     "2019-07-02",
+     "2019-07-12",
+     "2019-08-01",
+     "2019-08-06",
+     "2019-08-11",
+     "2019-08-26"
+    ],
+    "window": {
+     "from": "06-01",
+     "to": "08-31",
+     "widened": false
+    },
+    "valid_fraction": 1,
+    "plots": [
+     {
+      "id": "Б-С",
+      "ndvi": 0.308,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-СВ",
+      "ndvi": 0.317,
+      "valid_fraction": 0.999
+     },
+     {
+      "id": "Б-В",
+      "ndvi": 0.378,
+      "valid_fraction": 0.998
+     },
+     {
+      "id": "Б-ЮВ",
+      "ndvi": 0.236,
+      "valid_fraction": 0.999
+     },
+     {
+      "id": "Б-Ю",
+      "ndvi": 0.266,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-ЮЗ",
+      "ndvi": 0.326,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-З",
+      "ndvi": 0.308,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-СЗ",
+      "ndvi": 0.213,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-С",
+      "ndvi": 0.25,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-СВ",
+      "ndvi": 0.347,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-В",
+      "ndvi": 0.231,
+      "valid_fraction": 0.998
+     },
+     {
+      "id": "Д-ЮВ",
+      "ndvi": 0.248,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-Ю",
+      "ndvi": 0.377,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-ЮЗ",
+      "ndvi": 0.526,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-З",
+      "ndvi": 0.384,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-СЗ",
+      "ndvi": 0.314,
+      "valid_fraction": 1
+     }
+    ]
+   },
+   {
+    "year": 2020,
+    "status": "measured",
+    "dates": [
+     "2020-06-01",
+     "2020-06-21",
+     "2020-07-16",
+     "2020-08-05",
+     "2020-08-15",
+     "2020-08-25"
+    ],
+    "window": {
+     "from": "06-01",
+     "to": "08-31",
+     "widened": false
+    },
+    "valid_fraction": 0.999,
+    "plots": [
+     {
+      "id": "Б-С",
+      "ndvi": 0.306,
+      "valid_fraction": 0.999
+     },
+     {
+      "id": "Б-СВ",
+      "ndvi": 0.313,
+      "valid_fraction": 0.999
+     },
+     {
+      "id": "Б-В",
+      "ndvi": 0.389,
+      "valid_fraction": 0.995
+     },
+     {
+      "id": "Б-ЮВ",
+      "ndvi": 0.253,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-Ю",
+      "ndvi": 0.272,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-ЮЗ",
+      "ndvi": 0.336,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-З",
+      "ndvi": 0.312,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-СЗ",
+      "ndvi": 0.22,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-С",
+      "ndvi": 0.234,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-СВ",
+      "ndvi": 0.37,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-В",
+      "ndvi": 0.242,
+      "valid_fraction": 0.998
+     },
+     {
+      "id": "Д-ЮВ",
+      "ndvi": 0.253,
+      "valid_fraction": 0.999
+     },
+     {
+      "id": "Д-Ю",
+      "ndvi": 0.37,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-ЮЗ",
+      "ndvi": 0.504,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-З",
+      "ndvi": 0.388,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-СЗ",
+      "ndvi": 0.318,
+      "valid_fraction": 0.997
+     }
+    ]
+   },
+   {
+    "year": 2021,
+    "status": "measured",
+    "dates": [
+     "2021-06-01",
+     "2021-06-21",
+     "2021-06-26",
+     "2021-07-01",
+     "2021-07-26"
+    ],
+    "window": {
+     "from": "06-01",
+     "to": "08-31",
+     "widened": false
+    },
+    "valid_fraction": 0.997,
+    "plots": [
+     {
+      "id": "Б-С",
+      "ndvi": 0.311,
+      "valid_fraction": 0.986
+     },
+     {
+      "id": "Б-СВ",
+      "ndvi": 0.33,
+      "valid_fraction": 0.997
+     },
+     {
+      "id": "Б-В",
+      "ndvi": 0.403,
+      "valid_fraction": 0.982
+     },
+     {
+      "id": "Б-ЮВ",
+      "ndvi": 0.246,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-Ю",
+      "ndvi": 0.288,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-ЮЗ",
+      "ndvi": 0.369,
+      "valid_fraction": 0.999
+     },
+     {
+      "id": "Б-З",
+      "ndvi": 0.312,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-СЗ",
+      "ndvi": 0.226,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-С",
+      "ndvi": 0.23,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-СВ",
+      "ndvi": 0.388,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-В",
+      "ndvi": 0.247,
+      "valid_fraction": 0.997
+     },
+     {
+      "id": "Д-ЮВ",
+      "ndvi": 0.27,
+      "valid_fraction": 0.996
+     },
+     {
+      "id": "Д-Ю",
+      "ndvi": 0.402,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-ЮЗ",
+      "ndvi": 0.54,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-З",
+      "ndvi": 0.419,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-СЗ",
+      "ndvi": 0.308,
+      "valid_fraction": 0.994
+     }
+    ]
+   },
+   {
+    "year": 2022,
+    "status": "measured",
+    "dates": [
+     "2022-06-11",
+     "2022-06-21",
+     "2022-07-16",
+     "2022-07-21",
+     "2022-07-26",
+     "2022-08-20"
+    ],
+    "window": {
+     "from": "06-01",
+     "to": "08-31",
+     "widened": false
+    },
+    "valid_fraction": 1,
+    "plots": [
+     {
+      "id": "Б-С",
+      "ndvi": 0.346,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-СВ",
+      "ndvi": 0.367,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-В",
+      "ndvi": 0.437,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-ЮВ",
+      "ndvi": 0.32,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-Ю",
+      "ndvi": 0.353,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-ЮЗ",
+      "ndvi": 0.394,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-З",
+      "ndvi": 0.366,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-СЗ",
+      "ndvi": 0.289,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-С",
+      "ndvi": 0.302,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-СВ",
+      "ndvi": 0.45,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-В",
+      "ndvi": 0.271,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-ЮВ",
+      "ndvi": 0.374,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-Ю",
+      "ndvi": 0.511,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-ЮЗ",
+      "ndvi": 0.623,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-З",
+      "ndvi": 0.5,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-СЗ",
+      "ndvi": 0.376,
+      "valid_fraction": 1
+     }
+    ]
+   },
+   {
+    "year": 2023,
+    "status": "measured",
+    "dates": [
+     "2023-06-16",
+     "2023-07-16",
+     "2023-07-26",
+     "2023-08-10",
+     "2023-08-25",
+     "2023-08-30"
+    ],
+    "window": {
+     "from": "06-01",
+     "to": "08-31",
+     "widened": false
+    },
+    "valid_fraction": 0.999,
+    "plots": [
+     {
+      "id": "Б-С",
+      "ndvi": 0.283,
+      "valid_fraction": 0.998
+     },
+     {
+      "id": "Б-СВ",
+      "ndvi": 0.306,
+      "valid_fraction": 0.999
+     },
+     {
+      "id": "Б-В",
+      "ndvi": 0.374,
+      "valid_fraction": 0.988
+     },
+     {
+      "id": "Б-ЮВ",
+      "ndvi": 0.222,
+      "valid_fraction": 0.999
+     },
+     {
+      "id": "Б-Ю",
+      "ndvi": 0.262,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-ЮЗ",
+      "ndvi": 0.316,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-З",
+      "ndvi": 0.28,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-СЗ",
+      "ndvi": 0.219,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-С",
+      "ndvi": 0.216,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-СВ",
+      "ndvi": 0.335,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-В",
+      "ndvi": 0.236,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-ЮВ",
+      "ndvi": 0.263,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-Ю",
+      "ndvi": 0.362,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-ЮЗ",
+      "ndvi": 0.524,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-З",
+      "ndvi": 0.421,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-СЗ",
+      "ndvi": 0.293,
+      "valid_fraction": 0.999
+     }
+    ]
+   },
+   {
+    "year": 2024,
+    "status": "measured",
+    "dates": [
+     "2024-06-05",
+     "2024-06-20",
+     "2024-06-30",
+     "2024-07-20",
+     "2024-07-25",
+     "2024-08-09"
+    ],
+    "window": {
+     "from": "06-01",
+     "to": "08-31",
+     "widened": false
+    },
+    "valid_fraction": 0.999,
+    "plots": [
+     {
+      "id": "Б-С",
+      "ndvi": 0.408,
+      "valid_fraction": 0.999
+     },
+     {
+      "id": "Б-СВ",
+      "ndvi": 0.428,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-В",
+      "ndvi": 0.485,
+      "valid_fraction": 0.996
+     },
+     {
+      "id": "Б-ЮВ",
+      "ndvi": 0.396,
+      "valid_fraction": 0.999
+     },
+     {
+      "id": "Б-Ю",
+      "ndvi": 0.45,
+      "valid_fraction": 0.999
+     },
+     {
+      "id": "Б-ЮЗ",
+      "ndvi": 0.503,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-З",
+      "ndvi": 0.45,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-СЗ",
+      "ndvi": 0.366,
+      "valid_fraction": 0.999
+     },
+     {
+      "id": "Д-С",
+      "ndvi": 0.405,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-СВ",
+      "ndvi": 0.517,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-В",
+      "ndvi": 0.33,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-ЮВ",
+      "ndvi": 0.467,
+      "valid_fraction": 0.999
+     },
+     {
+      "id": "Д-Ю",
+      "ndvi": 0.601,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-ЮЗ",
+      "ndvi": 0.674,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-З",
+      "ndvi": 0.606,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-СЗ",
+      "ndvi": 0.468,
+      "valid_fraction": 1
+     }
+    ]
+   },
+   {
+    "year": 2025,
+    "status": "measured",
+    "dates": [
+     "2025-06-05",
+     "2025-06-25",
+     "2025-06-30",
+     "2025-07-25",
+     "2025-08-19",
+     "2025-08-29"
+    ],
+    "window": {
+     "from": "06-01",
+     "to": "08-31",
+     "widened": false
+    },
+    "valid_fraction": 1,
+    "plots": [
+     {
+      "id": "Б-С",
+      "ndvi": 0.306,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-СВ",
+      "ndvi": 0.334,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-В",
+      "ndvi": 0.408,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-ЮВ",
+      "ndvi": 0.269,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-Ю",
+      "ndvi": 0.297,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-ЮЗ",
+      "ndvi": 0.35,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-З",
+      "ndvi": 0.312,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-СЗ",
+      "ndvi": 0.243,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-С",
+      "ndvi": 0.251,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-СВ",
+      "ndvi": 0.394,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-В",
+      "ndvi": 0.268,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-ЮВ",
+      "ndvi": 0.309,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-Ю",
+      "ndvi": 0.438,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-ЮЗ",
+      "ndvi": 0.568,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-З",
+      "ndvi": 0.443,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-СЗ",
+      "ndvi": 0.321,
+      "valid_fraction": 1
+     }
+    ]
+   },
+   {
+    "year": 2026,
+    "status": "measured",
+    "dates": [
+     "2026-06-27",
+     "2026-07-05",
+     "2026-07-27",
+     "2026-08-09",
+     "2026-08-24",
+     "2026-08-29"
+    ],
+    "window": {
+     "from": "06-01",
+     "to": "08-31",
+     "widened": false
+    },
+    "valid_fraction": 1,
+    "plots": [
+     {
+      "id": "Б-С",
+      "ndvi": 0.281,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-СВ",
+      "ndvi": 0.289,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-В",
+      "ndvi": 0.367,
+      "valid_fraction": 0.998
+     },
+     {
+      "id": "Б-ЮВ",
+      "ndvi": 0.226,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-Ю",
+      "ndvi": 0.254,
+      "valid_fraction": 0.999
+     },
+     {
+      "id": "Б-ЮЗ",
+      "ndvi": 0.318,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-З",
+      "ndvi": 0.269,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Б-СЗ",
+      "ndvi": 0.205,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-С",
+      "ndvi": 0.254,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-СВ",
+      "ndvi": 0.317,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-В",
+      "ndvi": 0.22,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-ЮВ",
+      "ndvi": 0.258,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-Ю",
+      "ndvi": 0.4,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-ЮЗ",
+      "ndvi": 0.551,
+      "valid_fraction": 0.999
+     },
+     {
+      "id": "Д-З",
+      "ndvi": 0.459,
+      "valid_fraction": 1
+     },
+     {
+      "id": "Д-СЗ",
+      "ndvi": 0.362,
+      "valid_fraction": 0.999
+     }
+    ]
+   }
+  ]
  }
 }
