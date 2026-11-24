@@ -1674,7 +1674,8 @@
     const steps = [
       { v: String(st.ndvi.value), u: "NDVI", l: t("cap.s.ndvi"), f: t("cap.f.ndvi", { ha: fmt(st.area.value) }), s: "sat" },
       { v: fmt(st.biomass.value), u: t("cap.u.kgha"), l: t("cap.s.biomass"), f: `(${st.ndvi.value} − ${P.ndvi0}) × ${fmt(P.k_ndvi)}`, s: "model" },
-      { v: fmt(st.forage.value / 1000), u: t("pop.t"), l: t("cap.s.forage"), f: `${fmt(st.area.value)} ${t("common.ha")} × ${fmt(st.biomass.value)} × ${P.util}`, s: "model" },
+      { v: fmt(st.forage.value / 1000), u: t("pop.t"), l: t("cap.s.forage"), s: "model",
+        f: (st.nograze ? `(${fmt(p.pasture_ha_gross)} − ${fmt1(st.nograze.value)}) ${t("common.ha")}` : `${fmt(st.area.value)} ${t("common.ha")}`) + ` × ${fmt(st.biomass.value)} × ${P.util}` },
       { v: fmt1(st.au_season.value), u: t("cap.u.au"), l: t("cap.s.au"), f: t("cap.f.au", { i: P.intake, d: P.season_days }), s: "model" },
       { v: fmt(st.sheep.value), u: t("pop.sheep"), l: t("cap.s.sheep"), f: `${fmt1(st.au_season.value)} × ${per("sheep")}`, s: "model" },
     ];
@@ -1684,6 +1685,7 @@
         <div class="cl">${esc(x.l)} ${src(x.s)}<small>${esc(x.f)}</small></div></li>`).join("")}</ol>
       <ul class="chain-notes">
         <li>${t("cap.n.au", { cattle: per("cattle"), horses: per("horses"), sheep: per("sheep"), goats: per("goats") })}</li>
+        ${st.nograze ? `<li>${t("cap.n.ng", { g: fmt(p.pasture_ha_gross), n: fmt1(st.nograze.value), a: fmt1(st.area.value), b: p.nograze_buffer_m })}</li>` : ""}
         <li>${t("cap.n.season", { d: P.season_days })}</li>
         <li>${t("cap.n.veg", { k: fmt(P.k_ndvi) })}</li>
       </ul>
