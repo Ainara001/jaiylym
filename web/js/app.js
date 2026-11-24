@@ -1901,7 +1901,7 @@
         вычтено_из_пастбищ_га: Math.round(S.plots.reduce((s, p) => s + (p.nograze_ha || 0), 0)), зон: S.D.nograze.counts } : "не посчитано",
       участки: S.plots.map(p => ({ id: p.id, кольцо: p.ring === "near" ? "ближний" : "дальний", км_от_села: p.dist_km, направление: p.dir,
         нельзя_пасти_га_osm: p.nograze_ha != null ? p.nograze_ha : undefined,
-        пастбище_га_спутник: p.pasture_ha, ndvi_спутник: p.ndvi, трава_за_лето_проц: (p.series || []).length >= 2 ? Math.round((p.series[p.series.length - 1].v - p.series[0].v) / p.series[0].v * 100) : null,
+        пастбищный_покров_га_спутник: p.pasture_ha_gross ?? p.pasture_ha, кормовая_площадь_га: p.pasture_ha, ndvi_спутник: p.ndvi, трава_за_лето_проц: (p.series || []).length >= 2 ? Math.round((p.series[p.series.length - 1].v - p.series[0].v) / p.series[0].v * 100) : null,
         качество_снимка: confidence(p), достоверность_корма: M.forageConfidence(p, S.P), статус_данных: capOf(p).status,
         вода: t("ws." + M.waterStatus(p)), закрыт_по_вводу: !!p.forbidden, отдых_выпас_только_дни: p.window ? `${p.window.from}-${p.window.to}` : undefined,
         ёмкость_овец_оценка: capOf(p).known ? Math.round(sheepOf(capOf(p).au_season)) : null,

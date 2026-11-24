@@ -311,9 +311,11 @@ async function askGemini(question, v, herd) {
   ensurePrev(vk);    // если прошлого лета ещё нет — к следующему вопросу будет
   ensureMulti(vk);   // то же для многолетнего ряда
   try {
-    const { pl, cur } = compute(v);
-    ctx.участки = v.data.plots.map(p => ({ id: p.id, кольцо: p.ring === "near" ? "ближний" : "дальний", км: p.dist_km, направление: p.dir,
-      пастбище_га: p.pasture_ha, ndvi: p.ndvi, вода: waterWord(p), нагрузка_сейчас: pct(cur.load[p.id].load), нагрузка_план: pct(pl.load[p.id].load),
+    // участки — те же, что в плане: пастбищный покров за вычетом жилья, сёл и ферм (OpenStreetMap)
+    const { pl, cur, plots: cp } = compute(v);
+    ctx.участки = cp.map(p => ({ id: p.id, кольцо: p.ring === "near" ? "ближний" : "дальний", км: p.dist_km, направление: p.dir,
+      пастбищный_покров_га_спутник: p.pasture_ha_gross ?? p.pasture_ha, нельзя_пасти_га_osm: p.nograze_ha ?? undefined,
+      кормовая_площадь_га: p.pasture_ha, ndvi: p.ndvi, вода: waterWord(p), нагрузка_сейчас: pct(cur.load[p.id].load), нагрузка_план: pct(pl.load[p.id].load),
       как_рассчитано: J.explainCapacity(p).steps.map(s => `${s.key}: ${s.formula} ${s.unit}`).join("; ") }));
     ctx.статус_плана = pl.status; ctx.демо_стад = (v.demo || []).length;
     const prev = prevContext(v);
@@ -339,7 +341,7 @@ async function askGemini(question, v, herd) {
   // поиск в интернете (погода, цены, нормы) — в пределах того же дневного лимита, что у сайта; источники — в конце сообщения
   const search = A.searchAllowed(), lang = kk ? "kk" : "ru";
   const r = await G.ask({ system: search ? system + " " + A.SEARCH_RULE[lang] : system, search, budgetMs: 60000,
-    input: `Данные села (JSON): ${JSON.stringify(ctx)}\n\nВопрос пастуха: ${String(question).slice(0, 1200)}` +
+    input: `Сегодня: ${A.todayText(lang)}.\n\nДанные села (JSON): ${JSON.stringify(ctx)}\n\nВопрос пастуха: ${String(question).slice(0, 1200)}` +
       (search && A.needsWeb(question) ? (kk ? "\n\nІЗДЕУ: сұрақ жаңа сыртқы мәлімет туралы — алдымен интернеттен ізде, табылғанмен жауап бер; ауыл сандары — тек деректерден."
         : "\n\nПОИСК: вопрос о свежих внешних сведениях — сначала выполни поиск в интернете и ответь по найденному; цифры села — только из данных.") : ""),
     maxTokens: kk ? 700 : 500 });
