@@ -273,7 +273,8 @@ for (const name of BROWSERS) {
   test(`${name}: вход по выбору — логин и пароль или Telegram`, { skip, timeout: 60000 }, async () => {
     const b = await pw[name].launch();
     try { const dev = Object.assign({}, pw.devices["iPhone 13"]); if (name !== "webkit") delete dev.defaultBrowserType;
-      await accountFlow(await (await b.newContext(dev)).newPage(), name); } finally { await b.close(); }
+      // service worker сайта сам делает запросы — их Playwright не перехватывает (в WebKit заглушка сервера не срабатывала)
+      await accountFlow(await (await b.newContext(Object.assign(dev, { serviceWorkers: "block" }))).newPage(), name); } finally { await b.close(); }
   });
   test(`${name}: ИИ-чат по прямой ссылке видит село`, { skip, timeout: 60000 }, async () => {
     const b = await pw[name].launch();
