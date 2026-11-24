@@ -63,6 +63,7 @@ const siteApi = require("./api").createApi({
   getState: () => state, save, kv: store.kv, vkey: (lat, lon) => vkey(lat, lon), botUsername: BOT_USERNAME,
   allowedOrigins: (process.env.SITE_ORIGINS || "https://ainara001.github.io,http://localhost:8765,http://127.0.0.1:8765").split(","),
   onFarmSaved: (uid, farm, oldVk) => syncFarmHerd(uid, farm, oldVk),
+  kelisimSecret: process.env.KELISIM_SECRET || process.env.TELEGRAM_TOKEN,     // подпись выгрузки согласования
 });
 
 /** Стадо из профиля хозяйства на сайте = стадо этого же человека в боте (id чата Telegram = id пользователя). */

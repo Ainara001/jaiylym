@@ -18,6 +18,7 @@ const crypto = require("crypto");
 const PL = require("./web/pipeline.js");
 const M = require("./web/model.js");
 const NM = require("./web/norms.js");
+const { createKelisim, createRoutes } = require("./kelisim.js");
 const G = require("./ai.js");   // DeepSeek (DEEPSEEK_API_KEY) или Gemini (GEMINI_API_KEY) — см. ai.js
 const F = require("./ai-facts.js");
 const X = require("./ai-context.js");
@@ -190,7 +191,7 @@ const str = (x, max = 80) => String(x == null ? "" : x).replace(/[\u0000-\u001f<
 const coordOk = (lat, lon) => Number.isFinite(+lat) && Number.isFinite(+lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
 const PLOT_RE = /^[БД]-(С|СВ|В|ЮВ|Ю|ЮЗ|З|СЗ)$/;
 
-function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowedOrigins }) {
+function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowedOrigins, kelisimSecret }) {
   // состояние берём при каждом обращении: бот может заменить объект целиком при загрузке
   const st = () => { const s = getState(); s.users = s.users || {}; s.villagePlans = s.villagePlans || {}; s.logins = s.logins || {}; return s; };
   const origins = new Set(allowedOrigins || []);
@@ -214,10 +215,10 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
     res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
     res.end(JSON.stringify(obj));
   }
-  function body(req) {
+  function body(req, max = MAX_BODY) {
     return new Promise((resolve, reject) => {
       let b = "";
-      req.on("data", c => { b += c; if (b.length > MAX_BODY) { reject(Object.assign(new Error("слишком большой запрос"), { code: 413 })); req.destroy(); } });
+      req.on("data", c => { b += c; if (b.length > max) { reject(Object.assign(new Error("слишком большой запрос"), { code: 413 })); req.destroy(); } });
       req.on("end", () => { try { resolve(b ? JSON.parse(b) : {}); } catch (_) { reject(Object.assign(new Error("неверный JSON"), { code: 400 })); } });
     });
   }
@@ -383,15 +384,20 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
     return true;
   }
 
+  // Келісім: согласование по личным ссылкам, без аккаунта (kelisim.js)
+  const kelisim = createKelisim({ kv, secret: kelisimSecret, known: (lat, lon) => { const v = (getState().villages || {})[vkey(lat, lon)]; return (v && v.data) || null; } });
+  const kelisimRoute = createRoutes(kelisim, { json, body, limited });
+
   // ---------- маршруты ----------
   async function handle(req, res) {
     const url = new URL(req.url, "http://x");
     const p = url.pathname;
     if (!p.startsWith("/auth/") && !p.startsWith("/api/me") && !p.startsWith("/api/scenarios") &&
-        !p.startsWith("/api/history") && !p.startsWith("/api/coord") && p !== "/api/village" && p !== "/api/ai" && p !== "/api/ai/status") return false;
+        !p.startsWith("/api/history") && !p.startsWith("/api/coord") && !p.startsWith("/api/kelisim") && p !== "/api/village" && p !== "/api/ai" && p !== "/api/ai/status") return false;
     cors(req, res);
     if ((p === "/api/village" || p === "/api/ai/status") && !res.getHeader("Access-Control-Allow-Origin")) res.setHeader("Access-Control-Allow-Origin", "*");
     if (req.method === "OPTIONS") { res.writeHead(204).end(); return true; }
+    if (p.startsWith("/api/kelisim")) return kelisimRoute(req, res, p);
     try {
       // --- состояние ИИ: есть ли ключ, какие модели доступны, последние ошибки (без ключа) ---
       if (p === "/api/ai/status" && req.method === "GET") {
@@ -680,7 +686,7 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
     }
   }
 
-  return { handle, confirmLogin, loginInfo, roleOf };
+  return { handle, confirmLogin, loginInfo, roleOf, kelisim };
 }
 
 module.exports = { createApi, aiContextIssues, fixWebLabels, searchAllowed, searchUsed, SEARCH_RULE, needsWeb, todayText };
