@@ -18,6 +18,7 @@ try { process.loadEnvFile(path.join(__dirname, ".env")); } catch (_) {}
 const J = require("./web/engine.js");
 const M = require("./web/model.js");
 const PL = require("./web/pipeline.js");
+const NG = require("./web/nograze.js");
 const { loadPlots, loadHerds } = require("./data");
 
 const SITE = process.env.SITE_URL || "https://ainara001.github.io/jaiylym/";
@@ -25,6 +26,7 @@ const G = require("./ai");
 const AI_ON = () => G.configured();   // ключ DeepSeek или Gemini задан на сервере
 const UA = "Jaiylym-hackathon-bot/1.0 (+https://github.com/Ainara001/jaiylym)";
 PL.setUserAgent(UA);
+NG.setUserAgent(UA);
 
 // ---------- состояние (Render Key Value или файл — см. store.js) ----------
 const store = require("./store").createStore();
@@ -132,7 +134,8 @@ function pointInPoly([x, y], ring) {
 
 // ---------- расчёты ----------
 function compute(v) {
-  const herds = herdsOf(v), plots = v.data.plots;
+  // кормовая площадь без жилья, ферм и промзон (OpenStreetMap), буфер по умолчанию
+  const herds = herdsOf(v), plots = NG.apply(v.data.plots, v.data.nograze);
   return { herds, plots, byId: Object.fromEntries(plots.map(p => [p.id, p])), cur: J.current(plots, herds), pl: J.solve(plots, herds) };
 }
 
