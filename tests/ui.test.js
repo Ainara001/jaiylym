@@ -53,7 +53,7 @@ test("для всех кодов движка и модели есть текс�
     ...["cautious", "base", "optimistic"].map(x => "wi.a." + x),
     ...["optimized", "greedy"].flatMap(x => ["algo." + x, "wi.v.algo." + x]),
     ...["area", "ndvi", "biomass", "forage", "au_days", "au_season", "sheep", "herd_intake", "days"].flatMap(x => ["how.step." + x, "unit." + x]),
-    "how.f.area", "how.f.ndvi",
+    "how.f.area", "how.f.ndvi", "how.step.nograze", "unit.nograze", "src.osm",
     ...["measured", "no_data"].map(x => "meta." + x),
     ...["q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "q9"].map(x => "rs." + x),
   ];

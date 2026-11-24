@@ -80,6 +80,9 @@
     const c = plotCapacity(plot, p);
     const steps = [];
     const r = (x, d = 0) => (x == null ? null : +(+x).toFixed(d));
+    if (plot.pasture_ha_gross != null && plot.nograze_ha > 0)        // где нельзя пасти: жильё, фермы, промзоны (OpenStreetMap)
+      steps.push({ key: "nograze", value: r(plot.nograze_ha, 1), unit: "га", kind: "osm",
+        formula: `${r(plot.pasture_ha_gross, 1)} − ${r(plot.nograze_ha, 1)} = ${r(plot.pasture_ha, 1)}` });
     steps.push({ key: "area", value: r(plot.pasture_ha, 1), unit: "га", kind: "sat", formula: "пастбищный покров ESA WorldCover внутри участка" });
     steps.push({ key: "ndvi", value: plot.ndvi == null ? null : r(plot.ndvi, 3), unit: "NDVI", kind: "sat", formula: "медиана безоблачных снимков Sentinel-2" });
     if (c.known) {

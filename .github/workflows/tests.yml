@@ -46,3 +46,19 @@ jobs:
           node-version: 22
       - name: Реальные снимки Sentinel-2 (Planetary Computer)
         run: npm run test:net
+  nograze-kegen:
+    # где нельзя пасти для Кегена: OSM + WorldCover (нужен интернет) → файл для web/data/plots.js
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/add_nograze.js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kegen-nograze
+          path: |
+            web/data/plots.js
+            web/data/plots.json

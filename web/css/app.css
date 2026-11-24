@@ -633,6 +633,7 @@ main .btn > span { min-width: 0; overflow-wrap: anywhere; }
 .ai-text .src { font-size: 10px; padding: 1px 6px; border-radius: 999px; vertical-align: 1px; }
 .src-web { background: #e3eef0; color: #1d5e66; }
 .src-gen { background: #ecebe6; color: #4a4a44; }
+.src-osm { background: #f6e1da; color: #8a2f17; }
 .ai-text .plot-id { white-space: nowrap; font-weight: 600; }
 
 /* ================= Телефоны и сенсорные экраны: цели нажатия, поля без увеличения на iPhone, карта, вкладки, таблица участков ================= */
