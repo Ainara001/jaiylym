@@ -32,7 +32,7 @@ test("слои параметров: стандартные → откалибр
   const u = M.resolve({ user: { k_ndvi: 3100 } });
   assert.equal(M.fieldValidated(u), false, "пользователь ввёл число — это не полевая калибровка");
   assert.equal(M.dataStatus(plot, u), "estimated");
-  assert.equal(M.MODEL_VERSION, "2.1.0");
+  assert.equal(M.MODEL_VERSION, "2.2.0");
 });
 
 test("качество спутникового измерения и достоверность корма — разные оценки", () => {
