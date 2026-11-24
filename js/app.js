@@ -1914,6 +1914,8 @@
         сено_сверх_нормы_т_если_все_у_села_оценка: Math.round(J.hayTonnes(S.cur.deficit_kg, S.P)), дефицит_сена_т_по_плану_оценка: Math.round(b.deficitT),
         чтобы_корма_хватило_сократить_на_усл_голов: Math.round(b.excessAU), чтобы_корма_хватило_сократить_на_овец: Math.round(sheepOf(b.excessAU)) },
       лучшие_места_для_водопоя: J.wells(S.plots, S.P).slice(0, 3).map(w => ({ участок: w.plot, откроет_корм_овец_оценка: Math.round(w.sheep) })),
+      // почему план такой: проверяемые факты движка по каждому стаду (engine.explainPlan)
+      почему_план: Object.values(J.explainPlan(S.plots, S.herds, S.pl, S.P)),
       погода: S.wx && !S.wx.fail ? { осадки_30_дней_мм: Math.round(S.wx.rain30), прогноз_7_дней: S.wx.next.map(x => `${x.d}: ${Math.round(x.tmin)}..${Math.round(x.tmax)}°C, ${x.p} мм`) } : null,
       параметры_модели: { кг_биомассы_на_ед_ndvi: S.P.k_ndvi, доля_стравливания: S.P.util, кг_корма_на_голову_в_сутки: S.P.intake, цена_сена_тенге_т: S.P.hay_price },
       мои_пастбища: ((C.user && C.user.pastures) || []).map(q => ({ название: q.name, га: q.area_ha, ndvi: q.stats && q.stats.ndvi })),
