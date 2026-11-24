@@ -101,3 +101,20 @@ test("план с нормой: ни один участок не выше пр�
     assert.equal(pl.violations.filter(v => v.type === "overload").length, 0);
   }
 });
+
+test("снимок внутри нормы: слабая трава уменьшает предел, сильная не увеличивает", () => {
+  const J = require("../web/engine.js"), N = require("../web/norms.js"), NG = require("../web/nograze.js"), { loadExamples } = require("../data");
+  const P = J.params(), BES = loadExamples()[0], ps = N.attach(NG.apply(BES.plots, BES.nograze), { region: "SKO" });
+  const ref = N.greenRef(ps);
+  for (const p of ps) {
+    const c = J.plotCapacity(p, P), full = p.pasture_ha / p.norm.au_ha;
+    assert.ok(c.au_season <= full + 1e-9, p.id + ": не больше нормы");
+    assert.equal(c.norm.green < 1, p.ndvi < ref, p.id);
+  }
+  assert.ok(ps.some(p => J.plotCapacity(p, P).norm.green < 0.95), "в Бесколе есть участки слабее обычного");
+  // трава на одном участке стала хуже — его предел меньше, остальные прежние
+  const worse = N.attach(NG.apply(BES.plots, BES.nograze).map(p => (p.id === "Д-Ю" ? Object.assign({}, p, { ndvi: +(p.ndvi * 0.6).toFixed(3) }) : p)), { region: "SKO" });
+  const cap = (list, id) => J.plotCapacity(list.find(p => p.id === id), P).au_season;
+  assert.ok(cap(worse, "Д-Ю") < cap(ps, "Д-Ю") * 0.7);
+  assert.equal(N.greenRef(ps.slice(0, 3)), null, "меньше четырёх участков — сравнивать не с чем");
+});

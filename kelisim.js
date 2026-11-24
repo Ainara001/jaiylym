@@ -58,7 +58,7 @@ function cleanSnapshot(b, known) {
   const ids = new Set();
   const norm = b.norm == null ? null : NM.pick(NM.clean(b.norm));
   if (b.norm != null && !norm) throw bad("норма нагрузки: неизвестная область");
-  const plots = b.plots.map(p => {
+  let plots = b.plots.map(p => {
     if (!p || !PLOT_RE.test(p.id) || ids.has(p.id)) throw bad("участки: неизвестный или повторяется");
     ids.add(p.id);
     const ha = +p.pasture_ha;
@@ -78,9 +78,9 @@ function cleanSnapshot(b, known) {
     for (const key of ["valid_fraction", "samples", "px_ha", "obs_count", "pasture_ha_gross", "nograze_ha"]) if (out[key] == null) delete out[key];
     out.water = M.waterUsable(out);
     if (win && win.to >= win.from) out.window = win;
-    if (norm) out.norm = norm;
     return out;
   });
+  if (norm) plots = NM.withNorm(plots, norm);
   const params = M.validate(b.params || {});
   if (!params.ok) throw bad("параметры модели: " + params.errors.map(e => `${e.key} ${e.reason}`).join("; "));
   const s = b.source || {};
