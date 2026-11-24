@@ -18,12 +18,13 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  const MODEL_VERSION = "2.0.0";
+  const MODEL_VERSION = "2.1.0";
   const FORMULA = {
     biomass: "biomass_kg_ha = max(0, NDVI − ndvi0) × k_ndvi",
     forage: "available_forage_kg = pasture_ha × biomass_kg_ha × util × forage_factor",
     au_days: "capacity_au_days = available_forage_kg / intake",
     au_season: "capacity_au_season = capacity_au_days / season_days",
+    norm: "capacity_au_season = min(capacity_au_season, pasture_ha / norm_ha_per_au)",
     sheep: "capacity_sheep_season = capacity_au_season / au_sheep",
   };
 
@@ -45,7 +46,7 @@
     sheep: { def: 0.2, min: 0.05, max: 0.5, unit: "усл. гол.", source: "справочный коэффициент" },
     goats: { def: 0.2, min: 0.05, max: 0.5, unit: "усл. гол.", source: "справочный коэффициент" },
     cattle: { def: 1, min: 0.5, max: 1.5, unit: "усл. гол.", source: "базовая единица" },
-    horses: { def: 1, min: 0.5, max: 1.5, unit: "усл. гол.", source: "справочный коэффициент" },
+    horses: { def: 1.2, min: 0.5, max: 1.5, unit: "усл. гол.", source: "приказ МСХ № 3-3/332: га на лошадь = 1,2 га на КРС" },
   };
   const VEGETATION = ["unknown", "steppe", "mountain_meadow", "desert_steppe", "shrub"];
   const META_DEFAULTS = { season_start: "05-01", vegetation_type: "unknown", period: "season" };
@@ -298,7 +299,7 @@
       landcover_source: m.landcover_source || "ESA WorldCover 10 м",
       landcover_year: m.landcover_year != null ? +m.landcover_year : null,
       calculated_at: m.calculated_at || null,
-      model_version: m.model_version || MODEL_VERSION,
+      model_version: MODEL_VERSION,                         // формулы применяются сейчас, а не при съёмке
       data_status: m.data_status || (scene_dates.length ? "measured" : "no_data"),
       warnings: Array.isArray(m.warnings) ? m.warnings.map(String) : [],
     };

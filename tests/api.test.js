@@ -118,7 +118,11 @@ test("сценарии: свои видны только владельцу, ч�
   assert.equal(s.data.herds[0].weight, 2, "приоритет хозяйства сохраняется");
   for (const bad of [{ rest: { "X-Y": { spring: 1 } } }, { rest: { "Б-С": { spring: -5 } } }, { rest: { "Б-С": { spring: 1.5 } } }, { herds: [{ name: "A", sheep: 1, weight: 5 }] }])
     assert.equal((await call("POST", "/api/scenarios", { token: farmer, body: Object.assign({ name: "x", village: KEGEN }, bad) })).status, 400, JSON.stringify(bad));
-  assert.equal(s.data.model_version, "2.0.0");
+  assert.equal(s.data.model_version, "2.1.0");
+  assert.equal((await call("POST", "/api/scenarios", { token: farmer, body: { name: "x", village: KEGEN, norm: { region: "XXX" } } })).status, 400, "неизвестная область нормы");
+  const sn = await call("POST", "/api/scenarios", { token: farmer, body: { name: "С нормой", village: KEGEN, norm: { region: "SKO", row: "SKO-05", state: "degraded", x: 1 } } });
+  assert.deepEqual(sn.data.norm, { region: "SKO", state: "degraded", row: "SKO-05" });
+  await call("DELETE", "/api/scenarios/" + sn.data.id, { token: farmer });
   assert.equal((await call("GET", "/api/scenarios", { token: farmer })).data.own.length, 1);
   assert.equal((await call("GET", "/api/scenarios", { token: other })).data.own.length, 0);
   assert.equal((await call("DELETE", "/api/scenarios/" + s.data.id, { token: other })).status, 404);

@@ -19,6 +19,7 @@ const J = require("./web/engine.js");
 const M = require("./web/model.js");
 const PL = require("./web/pipeline.js");
 const NG = require("./web/nograze.js");
+const NM = require("./web/norms.js");
 const TR = require("./web/trend.js");
 const { loadExamples, loadHerds } = require("./data");
 
@@ -94,7 +95,7 @@ const herdsOf = v => (v.demo || []).concat(v.herds || []);                      
 const herdsInPlan = (v, herd) => (herd && herd.demo ? herdsOf(v) : v.herds || []);        // кто делит корм в расчёте
 const fmt = n => Math.round(n).toLocaleString("ru-RU");
 const pct = x => (x == null ? "нет данных" : isFinite(x) ? Math.round(x * 100) + "%" : "∞");
-const sheepCap = c => (c && c.known ? `≈ ${fmt(c.au_season / 0.2)} овец за сезон (оценка модели, не проверена в поле)` : "ёмкость неизвестна (нет NDVI)");
+const sheepCap = c => (c && c.known ? `≈ ${fmt(c.au_season / 0.2)} овец за сезон (${c.limited_by === "norm" ? "предел нормы Минсельхоза для области" : "оценка модели, не проверена в поле"})` : "ёмкость неизвестна (нет NDVI)");
 const WATER_WORD = { confirmed: "водопой подтверждён пользователем", satellite: "водоём на карте WorldCover (пригодность для скота не проверена)",
   assumed: "у села (предположение модели)", modeled: "смоделированный водопой", unknown: "нет информации", absent: "водопоя нет" };
 const waterWord = p => WATER_WORD[M.waterStatus(p)] || p.water_source;
@@ -139,17 +140,26 @@ function pointInPoly([x, y], ring) {
 
 // ---------- расчёты ----------
 function compute(v, herd) {
-  // кормовая площадь без жилья, ферм и промзон (OpenStreetMap), буфер по умолчанию
-  const herds = herdsInPlan(v, herd), plots = NG.apply(v.data.plots, v.data.nograze);
+  // кормовая площадь без жилья, ферм и промзон (OpenStreetMap), буфер по умолчанию; ёмкость — не больше нормы МСХ для области
+  const herds = herdsInPlan(v, herd), plots = NM.attach(NG.apply(v.data.plots, v.data.nograze), normSel(v));
   return { herds, plots, byId: Object.fromEntries(plots.map(p => [p.id, p])), cur: J.current(plots, herds), pl: J.solve(plots, herds) };
 }
 
+const normSel = v => ({ region: NM.regionOf(v.data.village.region) });       // тип пастбища в боте не выбирается — самая мягкая норма области
+// область села (для нормы): у сёл, посчитанных до появления норм, досчитывается в фоне
+function ensureRegion(key) {
+  const v = state.villages[key];
+  if (TEST || !v || !v.data || v.example || v.data.village.region != null) return;
+  v.data.village.region = "";
+  PL.regionAt(v.data.village.lat, v.data.village.lon).then(r => { v.data.village.region = r; save(); }).catch(e => { delete v.data.village.region; console.error("область села:", e.message); });
+}
 async function ensureVillage(name, lat, lon, say) {
   const key = vkey(lat, lon);
-  if (state.villages[key]) { ensurePrev(key); ensureMulti(key); return key; }
+  if (state.villages[key]) { ensureRegion(key); ensurePrev(key); ensureMulti(key); return key; }
   await say(`Считаю пастбища «${name}» по снимкам Sentinel-2… это ~10–20 секунд.`);
-  const res = await PL.buildVillage({ name, lat, lon });
+  const [res, region] = await Promise.all([PL.buildVillage({ name, lat, lon }), PL.regionAt(lat, lon).catch(() => null)]);
   delete res.grid;
+  if (region != null) res.village.region = region;
   state.villages[key] = { data: res, herds: [] };
   save();
   ensurePrev(key);
@@ -160,6 +170,7 @@ async function ensureVillage(name, lat, lon, say) {
 // прошлое лето села (то же окно июнь–август) — в фоне, чтобы ИИ мог сравнить годы; для села по умолчанию уже посчитано
 const prevPending = new Set();
 function ensurePrev(key) {
+  ensureRegion(key);
   const v = state.villages[key];
   if (!v || !v.data || !v.data.source || v.prev || prevPending.has(key)) return;
   const year = v.data.source.year - 1;
@@ -322,6 +333,9 @@ async function askGemini(question, v, herd) {
       пастбищный_покров_га_спутник: p.pasture_ha_gross ?? p.pasture_ha, нельзя_пасти_га_osm: p.nograze_ha ?? undefined,
       кормовая_площадь_га: p.pasture_ha, ndvi: p.ndvi, вода: waterWord(p), нагрузка_сейчас: pct(cur.load[p.id].load), нагрузка_план: pct(pl.load[p.id].load),
       как_рассчитано: J.explainCapacity(p).steps.map(s => `${s.key}: ${s.formula} ${s.unit}`).join("; ") }));
+    const nm = NM.pick(normSel(v));
+    ctx.норма_нагрузки_МСХ = nm ? { источник: NM.SOURCE.title, область: (NM.region(nm.region) || {}).ru, тип_пастбища: "не выбран — самая мягкая норма области", норма_га_на_овцу: +(nm.au_ha * J.params().au.sheep).toFixed(2),
+      участков_ограничено_нормой: cp.filter(p => J.plotCapacity(p).limited_by === "norm").length } : "область не определена — предел по норме не применён";
     ctx.статус_плана = pl.status; ctx.стад_в_расчёте = inPlan.length; ctx.демо_стад = inPlan.filter(h => h.demo).length;
     const prev = prevContext(v);
     if (prev) ctx.прошлый_год = prev;
@@ -462,7 +476,8 @@ function pastureLink(chatId, q) {
 }
 function pastureReport(chatId, q) {
   const s = q.stats || {}, series = s.series || [];
-  const cap = J.plotCapacity({ ndvi: s.ndvi, pasture_ha: s.pasture_ha || 0, series: s.series, valid_fraction: s.valid_fraction });
+  const fv = ((state.users || {})[String(chatId)] || {}).farm, home = fv && fv.village && state.villages[vkey(fv.village.lat, fv.village.lon)];
+  const cap = J.plotCapacity(NM.attach([{ ndvi: s.ndvi, pasture_ha: s.pasture_ha || 0, series: s.series, valid_fraction: s.valid_fraction }], home ? normSel(home) : null)[0]);
   const server = (q.observations || []).filter(o => o.source === "server");
   let text = `Пастбище «${q.name}»: ${ha1(q.area_ha)} га (границы нарисованы вами на сайте).\n` +
     `Трава за лето ${s.year || ""} — NDVI по снимкам Sentinel-2 внутри границ:\n`;

@@ -643,6 +643,13 @@ main .btn > span { min-width: 0; overflow-wrap: anywhere; }
 .src-web { background: #e3eef0; color: #1d5e66; }
 .src-gen { background: #ecebe6; color: #4a4a44; }
 .src-osm { background: #f6e1da; color: #8a2f17; }
+.src-norm { background: #dfeee2; color: #1f5a34; }
+.nmform { grid-template-columns: 1fr; gap: 10px; margin-bottom: 10px; }
+.nmform .span2 { grid-column: auto; }
+.field > .src { align-self: flex-start; }
+/* пояснение с ярлыками или ссылкой внутри — обычный текст, а не колонки */
+.brief > .fine, .srcblock > .fine { display: block; }
+
 .ai-text .plot-id { white-space: nowrap; font-weight: 600; }
 
 /* ================= Телефоны и сенсорные экраны: цели нажатия, поля без увеличения на iPhone, карта, вкладки, таблица участков ================= */

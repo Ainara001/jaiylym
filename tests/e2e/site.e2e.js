@@ -65,6 +65,22 @@ async function newcomer(page, label) {
   await page.waitForFunction(() => window.JaiylymApp.S.D && window.JaiylymApp.S.pl);
   assert.deepEqual(await App(() => { const s = window.JaiylymApp.S; return [s.D.village.name, s.plots.length, s.herds.filter(h => h.demo).length]; }), ["Бесколь", 16, 5]);
   assert.match(page.url(), /demo=1/, label + ": ссылка на пример сохраняет демо-стада");
+  // норма нагрузки: в Бесколе снимок выше нормы СКО; выбор типа и области меняет расчёт и запоминается
+  await App(() => window.JaiylymApp.renderPane("data"));
+  assert.equal(await page.inputValue("#nmRegion"), "SKO");
+  assert.match(await page.textContent("#normBox"), /Норма ограничивает участков: 16 из 16/);
+  const cap = () => App(() => Math.round(window.Jaiylym.totalCapacity(window.JaiylymApp.S.plots, window.JaiylymApp.S.P).au_season));
+  const soft = await cap();
+  await page.selectOption("#nmRow", "SKO-05");
+  const strict = await cap();
+  assert.ok(strict < soft, label + ": выбранный тип пастбища ужесточает предел");
+  await page.selectOption("#nmRegion", "");
+  assert.match(await page.textContent("#normBox"), /Область села не определена/);
+  assert.ok(await cap() > soft * 2, label + ": без нормы ёмкость — по снимку");
+  await page.selectOption("#nmRegion", "SKO");
+  assert.equal(await cap(), soft);
+  await App(() => window.JaiylymApp.renderPane("brief"));
+  assert.match(await page.textContent('.pane[data-pane="brief"]'), /Норма Минсельхоза ограничивает 16 из 16/);
   assert.equal(await page.isVisible(".tabs"), true);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), label + ": без горизонтальной прокрутки");
   // новое село: сразу его имя и «считаем», прежнего села на карте и в панели нет
@@ -112,7 +128,7 @@ async function journey(page, label) {
   assert.match(await page.textContent('.pane[data-pane="brief"]'), /условных демо-стад/);
   // цепочка «NDVI → овцы» на виду: Б-С Кегена 0.289 → 313 овец (367 до вычета жилья и ферм OSM: 320 − 47,1 га), без открытия карточки
   const chain = await page.textContent(".chain");
-  for (const re of [/0\.289/, /756/, /313/, /320 − 47,1/, /OpenStreetMap/, /1 усл\. гол\. = 1 корова/, /150 дней с 1 мая/]) assert.match(chain, re, label + ": цепочка расчёта ёмкости");
+  for (const re of [/0\.289/, /756/, /313/, /320 − 47,1/, /OpenStreetMap/, /корова — 1, лошадь — 1,2, овца — 0,2/, /Предел по норме Минсельхоза/, /0,5 га на овцу/, /150 дней с 1 мая/]) assert.match(chain, re, label + ": цепочка расчёта ёмкости");
   // трава по годам (P3): ряд Кегена посчитан заранее — вывод, график, правило «не деградация»
   await page.evaluate(() => window.JaiylymApp.renderPane("data"));
   const mt = await page.textContent(".mt");

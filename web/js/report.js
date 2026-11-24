@@ -30,7 +30,7 @@
    */
   function build(c) {
     const { t, fmt, fmt1, pct, esc, J, M, S, scheme, loadColor, confidence, summary } = c;
-    const tag = k => `<span style="font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:9px;background:${{ sat: "#dcebf4", input: "#f3e6cf", model: "#e7e2f2" }[k]};color:${{ sat: "#1f5f86", input: "#7a5413", model: "#54407f" }[k]}">${t("src." + k)}</span>`;
+    const tag = k => `<span style="font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:9px;background:${{ sat: "#dcebf4", input: "#f3e6cf", model: "#e7e2f2", norm: "#dfeee2" }[k]};color:${{ sat: "#1f5f86", input: "#7a5413", model: "#54407f", norm: "#1f5a34" }[k]}">${t("src." + k)}</span>`;
     const v = S.D.village, meta = c.meta || M.metaOf(S.D), P = S.P;
     const hc = J.hayTonnes(S.cur.deficit_kg, P), hp = J.hayTonnes(S.pl.deficit_kg, P);
     const tenge = t("rep.tenge");
@@ -66,6 +66,7 @@
         <tr><td ${td}>${t("meta.lc")}</td><td ${td}>${esc(meta.landcover_source)}${meta.landcover_year ? ", " + meta.landcover_year : ""}</td></tr>
         <tr><td ${td}>${t("meta.calc")}</td><td ${td}>${meta.calculated_at ? ds(meta.calculated_at) : t("meta.unknownDate")}</td></tr>
         <tr><td ${td}>${t("meta.status")}</td><td ${td}>${t("meta." + meta.data_status)}</td></tr>
+        ${c.norm ? `<tr><td ${td}>${t("nm.title")}</td><td ${td}>${c.norm} ${tag("norm")}</td></tr>` : ""}
         ${meta.warnings.length ? `<tr><td ${td}>${t("meta.warn")}</td><td ${td}>${meta.warnings.map(esc).join("<br>")}</td></tr>` : ""}
       </tbody></table>
 
@@ -83,7 +84,7 @@
         <th ${th}>${t("plots.quality")}</th><th ${th}>${t("plots.cap")} ${tag("model")}</th><th ${th}>${t("kpi.before")}</th><th ${th}>${t("kpi.after")}</th><th ${th}>${t("plots.water")}</th></tr></thead><tbody>
         ${S.plots.map(p => { const k = cap(p), lc = S.cur.load[p.id], lp = S.pl.load[p.id];
           return `<tr style="page-break-inside:avoid"><td ${td}><b>${esc(p.id)}</b>${p.forbidden ? " (" + t("pop.closedTag") + ")" : ""}</td><td ${tdn}>${fmt(p.pasture_ha)}</td><td ${tdn}>${p.ndvi ?? "—"}</td>
-          <td ${td}>${t("conf." + confidence(p))}</td><td ${tdn}>${sheep(k)}</td>
+          <td ${td}>${t("conf." + confidence(p))}</td><td ${tdn}>${sheep(k)}${k.limited_by === "norm" ? " " + t("src.norm").toLowerCase() : ""}</td>
           <td ${tdn}>${!lc.known ? "?" : lc.used ? pct(lc.load) : "—"}</td><td ${tdn}>${!lp.known ? "?" : lp.used ? pct(lp.load) : "—"}</td>
           <td ${td}>${esc(t("ws." + M.waterStatus(p)))}</td></tr>`; }).join("")}
       </tbody></table>
