@@ -97,6 +97,12 @@ async function newcomer(page, label) {
   await page.goto(base + "#/map?lat=43.02&lon=79.22&name=Кеген");
   await page.waitForFunction(() => window.JaiylymApp.S.D && window.JaiylymApp.S.D.village.name === "Кеген" && window.JaiylymApp.S.pl);
   assert.equal(await App(() => window.JaiylymApp.S.herds.length), 0);
+  // зоны OSM молчат: село открыто сразу, и прямо сказано, что числа пока без вычета
+  await App(() => { const D = JSON.parse(JSON.stringify(window.JAIYLYM_DATA)); delete D.nograze; D.village = { name: "Без зон", lat: 51.2, lon: 71.2, region: "Акмолинская область" };
+    D.png = "data/ndvi.png"; localStorage.setItem("jaiylym:v3:51.200,71.200", JSON.stringify(D)); });
+  await page.goto(base + "#/map?lat=51.2&lon=71.2&name=Без%20зон");
+  await page.waitForFunction(() => window.JaiylymApp.S.D && window.JaiylymApp.S.D.village.name === "Без зон" && window.JaiylymApp.S.pl);
+  assert.match(await page.textContent("#ngNote"), /ещё загружаются из OpenStreetMap/, label + ": пока зон нет — честная пометка");
   // главная: оба примера, первым — Бесколь
   await page.goto(base + "#/home");
   await page.waitForSelector("#exBtns a");

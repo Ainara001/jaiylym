@@ -22,7 +22,7 @@
 
   // публичные серверы Overpass; при тайм-ауте или 429/5xx — следующий
   const MIRRORS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter"];
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
   const BUFFERS = [0, 100, 250, 500];
   const DEFAULT_BUFFER = 100;
   // флаги видов зон в маске
@@ -49,25 +49,45 @@
   }
 
   /** Запрос к Overpass с запасным зеркалом и повтором при 429/5xx. */
-  async function fetchOSM(bbox, { fetchImpl = (typeof fetch !== "undefined" ? fetch : null), timeoutMs = 100000, retryMs = 1500, mirrors = MIRRORS } = {}) {
+  async function fetchOSM(bbox, { fetchImpl = (typeof fetch !== "undefined" ? fetch : null), timeoutMs = 60000, hedgeMs = 5000, retryMs = 1500, mirrors = MIRRORS } = {}) {
     const body = "data=" + encodeURIComponent(overpassQuery(bbox));
-    const tried = [];
-    for (let i = 0; i < mirrors.length + 1; i++) {
-      const url = mirrors[i % mirrors.length], host = url.split("/")[2];
+    const tried = [], running = new Set();
+    const one = async url => {
+      const host = url.split("/")[2], ac = new AbortController();
+      let late = false;
+      const timer = setTimeout(() => { late = true; ac.abort(); }, timeoutMs);
+      running.add(ac);
       try {
-        const r = await fetchImpl(url, { method: "POST", body, signal: AbortSignal.timeout(timeoutMs),
+        const r = await fetchImpl(url, { method: "POST", body, signal: ac.signal,
           headers: Object.assign({ "content-type": "application/x-www-form-urlencoded" }, USER_AGENT ? { "User-Agent": USER_AGENT } : {}) });
-        if (r.ok) {
-          const j = await r.json();
-          // Overpass при нехватке времени отдаёт 200 с пометкой remark и пустым или неполным списком
-          if (j && j.remark && /timed out|runtime error|out of memory/i.test(j.remark)) { tried.push(host + ": " + j.remark.slice(0, 60)); continue; }
-          return j;
-        }
-        tried.push(host + ": HTTP " + r.status);
-      } catch (e) { tried.push(host + ": " + (e && e.name === "TimeoutError" ? "тайм-аут" : String(e && e.message || e).slice(0, 60))); }
-      if (retryMs) await new Promise(res => setTimeout(res, retryMs));
-    }
-    throw new Error("OpenStreetMap (Overpass) не ответил — " + tried.join("; "));
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const j = await r.json();
+        // Overpass при нехватке времени отдаёт 200 с пометкой remark и пустым или неполным списком
+        if (j && j.remark && /timed out|runtime error|out of memory/i.test(j.remark)) throw new Error(j.remark.slice(0, 60));
+        return j;
+      } catch (e) { tried.push(host + ": " + (late ? "тайм-аут" : String(e && e.message || e).slice(0, 60))); throw e; }
+      finally { clearTimeout(timer); running.delete(ac); }
+    };
+    // Один сервер молчит hedgeMs — параллельно спрашиваем следующий; отказал — сразу следующий (после паузы). Первый ответ
+    // отменяет остальные запросы. Когда отказали все, первый сервер спрашиваем ещё раз.
+    return new Promise((resolve, reject) => {
+      let next = 0, live = 0, done = false, hedge = null;
+      const finish = f => { done = true; clearTimeout(hedge); for (const ac of running) ac.abort(); f(); };
+      const start = () => {
+        if (done) return;
+        clearTimeout(hedge);
+        const url = mirrors[next++ % mirrors.length];
+        live++;
+        if (next < mirrors.length) hedge = setTimeout(start, hedgeMs);
+        one(url).then(j => { if (!done) finish(() => resolve(j)); }, () => {
+          live--;
+          if (done) return;
+          if (next < mirrors.length || (next === mirrors.length && !live)) { clearTimeout(hedge); hedge = setTimeout(start, retryMs); }
+          else if (!live) finish(() => reject(new Error("OpenStreetMap (Overpass) не ответил — " + tried.join("; "))));
+        });
+      };
+      start();
+    });
   }
 
   // ---------- геометрия ----------
@@ -192,10 +212,10 @@
 
   /**
    * Полный расчёт для села по уже загруженной сетке. plotIds — id участков по номерам idx.
-   * osm — ответ Overpass (или fetch внутри, если не передан).
+   * osm — ответ Overpass или обещание ответа (запрос внутри, если не передан).
    */
   async function compute({ bbox, size, idx, pxHa, isPasture, plotIds, osm, fetchImpl, buffers = BUFFERS, lat }) {
-    const data = osm || await fetchOSM(bbox, { fetchImpl });
+    const data = osm ? await osm : await fetchOSM(bbox, { fetchImpl });
     const zones = parseZones(data);
     const mask = rasterize(zones, bbox, size);
     const dist = distance(mask, size);
