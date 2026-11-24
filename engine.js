@@ -90,8 +90,10 @@
     const n = plot.norm;
     if (!n || !(n.au_ha > 0)) return null;
     const k = n.days ? Math.min(1, n.days[1] / p.season_days) : 1;
-    const au = +plot.pasture_ha / n.au_ha * k;
-    return { au_season: au, au_days: au * p.season_days, au_ha: n.au_ha, season_factor: k };
+    // норма — для обычной травы этого места. Где трава слабее, чем обычно вокруг села, предел меньше во столько же раз; больше нормы не бывает
+    const g = plot.ndvi_ref > p.ndvi0 && plot.ndvi != null ? Math.min(1, Math.max(0, +plot.ndvi - p.ndvi0) / (plot.ndvi_ref - p.ndvi0)) : 1;
+    const full = +plot.pasture_ha / n.au_ha * k, au = full * g;
+    return { au_season: au, au_days: au * p.season_days, au_ha: n.au_ha, season_factor: k, green: g, full_au_season: full };
   }
 
   /** Пошаговый расчёт для кнопки «Как рассчитано?» — его можно повторить на калькуляторе. */
@@ -117,7 +119,7 @@
       if (c.norm) {
         const ns = c.norm.au_season / p.au.sheep, ss = s.au_season / p.au.sheep;
         steps.push({ key: "norm", value: r(ns), unit: "овец по норме", kind: "norm",
-          formula: `${r(plot.pasture_ha, 1)} / ${r(c.norm.au_ha * p.au.sheep, 2)}${c.norm.season_factor < 1 ? ` × ${plot.norm.days[1]} / ${p.season_days}` : ""} = ${r(ns)}` });
+          formula: `${r(plot.pasture_ha, 1)} / ${r(c.norm.au_ha * p.au.sheep, 2)}${c.norm.season_factor < 1 ? ` × ${plot.norm.days[1]} / ${p.season_days}` : ""}${c.norm.green < 0.995 ? ` × ${r(c.norm.green, 2)} (трава слабее обычной вокруг села)` : ""} = ${r(ns)}` });
         steps.push({ key: "limit", value: r(Math.min(ns, ss)), unit: "овец на сезон", kind: "model", formula: `min(${r(ss)}, ${r(ns)}) = ${r(Math.min(ns, ss))}` });
       }
       if (herd) {
@@ -180,7 +182,6 @@
     const r = q.reasons.slice();
     const allowed = Array.isArray(h.allowed_plots) && h.allowed_plots.length ? h.allowed_plots : null;
     if (allowed && !allowed.includes(q.id)) r.push("not_allowed");
-    if (h.daily_return && q.ring !== "near") r.push("daily_far");
     return r;
   }
   const rightsOf = h => (Array.isArray(h.allowed_plots) && h.allowed_plots.length ? "entered" : "not_specified");
@@ -228,7 +229,7 @@
 
   /**
    * План Jaiylym. Жадное распределение «голово-дней» (эвристика, не гарантирует оптимум):
-   *  - дойные стада (возвращаются в село каждый вечер) — только ближние участки, распределяются первыми;
+   *  - дойные стада (возвращаются в село каждый вечер) — сначала ближние участки, дальние — только если ближних не хватило;
    *  - остальные — от малых к большим, сначала на дальние участки с водой (ближайшие к дому),
    *    ближние — только если дальних не хватило;
    *  - участок используется, только если: есть NDVI, есть пригодный по введённым данным водопой, он не
@@ -260,7 +261,7 @@
       let need = au * p.season_days;
       const homeQ = byId[h.home] || prep[0];
       const home = homeQ ? homeQ.pl : { dir: "С", dist_km: 0 };
-      const farFirst = q => (h.daily_return || q.ring === "far" ? 0 : 1);
+      const farFirst = q => ((q.ring === "far") === !h.daily_return ? 0 : 1);   // дойным — сначала ближние, остальным — дальние
       const allowed = prep.filter(q => herdReasons(h, q).length === 0)
         .sort((a, b) => farFirst(a) - farFirst(b) || dist(home, a.pl) - dist(home, b.pl));
       const maxFor = q => { const w = q.win; return au * (w[1] - w[0] + 1) - (alloc[h.id][q.id] || 0); };
@@ -410,7 +411,6 @@
         const h = herds.find(x => x.id === z.herd); if (!h) continue;
         const r = herdReasons(h, q);
         if (r.includes("not_allowed")) v.push({ type: "not_allowed_used", plot: q.id, herd: h.id });
-        if (r.includes("daily_far")) v.push({ type: "daily_far", plot: q.id, herd: h.id });
       }
       if (l.used < -1e-6) v.push({ type: "negative", plot: q.id });
     }
@@ -440,6 +440,8 @@
     if (low.length) w.push({ type: "low_quality_used", plots: low });
     const water = prep.filter(q => used(q.id) && q.water !== "confirmed").map(q => ({ plot: q.id, status: q.water }));
     if (water.length) w.push({ type: "water_unconfirmed", plots: water });
+    const milk = herds.filter(h => h.daily_return).map(h => ({ herd: h.id, plots: prep.filter(q => q.ring === "far" && res.load[q.id].herds.some(z => z.herd === h.id && z.au_days > EPS)).map(q => q.id) })).filter(x => x.plots.length);
+    if (milk.length) w.push({ type: "daily_far_used", herds: milk.map(x => x.herd), plots: [...new Set(milk.flatMap(x => x.plots))] });
     const rights = herds.filter(h => rightsOf(h) === "not_specified").map(h => h.id);
     if (rights.length) w.push({ type: "rights_not_specified", herds: rights });
     if (herds.some(h => rightsOf(h) === "entered")) w.push({ type: "rights_user_entered" });
@@ -461,7 +463,6 @@
     const rightsBlocked = prep.filter(q => q.cap > EPS && q.reasons.length === 0 && res.load[q.id].used < q.cap - EPS &&
       short.some(h => herdReasons(h, q).includes("not_allowed")));
     if (rightsBlocked.length) out.push({ type: "extend_rights", plots: rightsBlocked.map(q => q.id) });
-    if (short.some(h => h.daily_return)) out.push({ type: "split_daily_herd" });
     out.push({ type: "reduce_herd", au: deficit / p.season_days, sheep: deficit / p.season_days / p.au.sheep });
     out.push({ type: "hay", tonnes: hayTonnes(deficit * p.intake, p) });
     return out;
@@ -469,7 +470,7 @@
 
   /**
    * Точная нижняя граница дефицита (максимальный поток «стада → участки»).
-   * Ограничения те же: права, запреты, вода, данные, ёмкость × max_load, длина окна участка, дойные у села.
+   * Ограничения те же: права, запреты, вода, данные, ёмкость × max_load, длина окна участка.
    * Не учитывает правило «не меньше 2 недель на участке» и порядок по календарю — поэтому это граница,
    * которую жадный план может не достигать. Разница (gap) показывает цену эвристики.
    */
@@ -519,12 +520,13 @@
   //        упёршиеся фиксируем, остальным поднимаем дальше). Множество достижимых x — полиматроид, поэтому
   //        такое распределение одновременно максимизирует общий объём корма (= точной границе max-flow).
   // Шаг 2. При тех же x_h — минимум перегона: поток минимальной стоимости, стоимость пары = км от домашнего
-  //        участка (+ штраф NEAR_PENALTY км, если не дойное стадо занимает ближний участок — их берегут).
+  //        участка (+ штраф NEAR_PENALTY км, если не дойное стадо занимает ближний участок или дойное уходит на дальний).
   //        Решение вершинное: положительных пар не больше H + P − 1, поэтому стада не дробятся по многим участкам.
   // Шаг 3. Календарь — та же раскладка schedule(); что не встало в окна — возвращается в дефицит.
   // Оптимальность доказуема для шагов 1–2 (задача без правила «2 недели» и календаря); календарь проверяется инвариантами.
   // ======================================================================================
-  const NEAR_PENALTY = 10;         // км: «цена» занять ближний участок не дойным стадом (ближние — дойным и на отдых)
+  const MIN_WEEK = 7;              // сутки: меньше недели на участке — не выпас, а перегон
+  const NEAR_PENALTY = 10;         // км: «цена» занять ближний участок не дойным стадом (ближние — дойным и на отдых) или увести дойное на дальний
   const MIN_STAY = 14;             // сут: короче — перегон не оправдан (то же правило, что у жадного плана)
   // Пересчёт при согласовании (opts.keep, opts.prefer): «цена» ухода с прежнего участка и занятия нежелаемого, км. Больше любого
   // перегона (до ~35 км), поэтому сначала держим прежние участки, потом экономим перегон. Крупнее нельзя: точность потока.
@@ -583,7 +585,7 @@
       const home = (byId[x.h.home] || prep[0] || { pl: { dir: "С", dist_km: 0 } }).pl;
       prep.forEach((q, j) => {
         if (q.cap <= 0 || herdReasons(x.h, q).length) return;
-        const km = dist(home, q.pl) + (!x.h.daily_return && q.ring === "near" ? NEAR_PENALTY : 0);
+        const km = dist(home, q.pl) + ((q.ring === "near") === !x.h.daily_return ? NEAR_PENALTY : 0);
         pairs.push({ i, j, cap: x.au * (q.win[1] - q.win[0] + 1), km, realKm: dist(home, q.pl),
           keep: (opts.keep && opts.keep[x.h.id] && opts.keep[x.h.id][q.id]) || 0, pref: !!(opts.prefer && (opts.prefer[x.h.id] || []).includes(q.id)),
           soft: !!(opts.prefer_soft && (opts.prefer_soft[x.h.id] || []).includes(q.id)) });
@@ -843,7 +845,7 @@
     const capIn = plotsIn.reduce((a, j) => a + m.prep[j].cap, 0);
     const windowOut = m.pairs.filter(e => seen[e.i] && !seen[nH + e.j]).reduce((a, e) => a + e.cap, 0);
     const need = herdsIn.reduce((a, i) => a + m.H[i].d, 0);
-    // причина исключения относится к конкретным стадам («далеко для дойного» — только к дойным), а не ко всей группе
+    // причина исключения относится к конкретным стадам (права — только к тем, у кого они ограничены), а не ко всей группе
     const excluded = {}, excludedFor = {};
     for (const i of herdsIn) for (const q of m.prep) if (!plotsIn.includes(m.prep.indexOf(q))) for (const r of herdReasons(m.H[i].h, q)) {
       (excluded[r] = excluded[r] || new Set()).add(q.id);
@@ -899,6 +901,13 @@
     const ids = new Set();
     for (const h of herds) { if (ids.has(h.id)) throw Object.assign(new Error("стадо повторяется: " + h.id), { code: 400 }); ids.add(h.id); }
     const m = flowModel(plots, herds, p, opts);
+    // Участок, где стаду корма меньше чем на неделю, не занимаем, если без таких участков корма всё равно хватает всем: гонять стадо на день-два никто не будет
+    const big = m.pairs.filter(e => m.prep[e.j].cap >= m.H[e.i].au * MIN_WEEK || e.keep > 0 || e.pref || e.soft);
+    if (big.length < m.pairs.length) {
+      const need = m.H.reduce((s, x) => s + x.d, 0), all = m.pairs;
+      m.pairs = big;
+      if (feasibleFlow(m, m.H.map(x => x.d)).flow < need - 1e-9 * (1 + need)) m.pairs = all;
+    }
     // Шаги 1–2б, затем проверка календаря. Если часть объёма не встала в сезонные окна (стаду некуда
     // поставить дни на нескольких закрытых в одно время участках), предел пары уменьшается до реально
     // поставленного и задача решается заново — освободившийся корм достаётся другим стадам. До 4 раз.
@@ -1129,7 +1138,7 @@
         if (!s.plot) return { дни: `${s.from}-${s.to}`, участок: null, почему: s.reason === "no_feed" ? "корма на допустимых участках не хватило" : "участки закрыты в эти дни" };
         const q = byId[s.plot], km = r1(dist(home, q.pl));
         const why = [];
-        why.push(h.daily_return ? "дойное стадо — только ближние участки (возвращается в село)" : q.ring === "far" ? "дальний участок: отары уходят на жайлау, ближние берегут для дойных и отдыха" : "ближний участок: дальних допустимых не хватило");
+        why.push(h.daily_return ? (q.ring === "near" ? "дойное стадо — сначала ближние участки (возвращается в село)" : "дальше 3 км от села: ближних участков дойному стаду не хватило, проверьте, дойдёт ли") : q.ring === "far" ? "дальний участок: отары уходят на жайлау, ближние берегут для дойных и отдыха" : "ближний участок: дальних допустимых не хватило");
         const closer = cand.filter(c => c.km < km - 0.05 && !used.has(c.q.id) && c.q.ring === q.ring);
         if (closer.length) why.push("ближе были " + closer.map(c => `${c.q.id} (${c.km} км)`).join(", ") + (closer.every(c => c.full) ? " — заняты другими стадами до предела ёмкости" : " — взяты другими стадами или не дали целого куска ≥ 14 дней"));
         else why.push("ближайший к дому свободный допустимый участок этого кольца");
