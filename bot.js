@@ -19,6 +19,7 @@ const J = require("./web/engine.js");
 const M = require("./web/model.js");
 const PL = require("./web/pipeline.js");
 const NG = require("./web/nograze.js");
+const TR = require("./web/trend.js");
 const { loadPlots, loadHerds } = require("./data");
 
 const SITE = process.env.SITE_URL || "https://ainara001.github.io/jaiylym/";
@@ -251,6 +252,7 @@ function textWells(v) {
 
 // ---------- ИИ: свободные вопросы ----------
 const F = require("./ai-facts.js");
+const A = require("./api");
 /** Контекст для шаблонного ответа без ИИ — те же поля, что у сайта (ai-facts.templateAnswer). */
 function templateCtx(v, herd) {
   const { plots, herds, cur, pl } = compute(v), P = J.params();
@@ -282,6 +284,9 @@ async function askGemini(question, v, herd) {
     const prev = prevContext(v);
     if (prev) ctx.прошлый_год = prev;
     if (herd) ctx.стадо = { имя: herd.name, демо: !!herd.demo, овцы: herd.sheep, козы: herd.goats, крс: herd.cattle, лошади: herd.horses, маршрут: pl.herdPlans[herd.id], не_хватает_усл_гол_дней: Math.round(pl.unmet[herd.id] || 0) };
+    const my = v.data.multiyear;
+    ctx.многолетний_ряд = my && Array.isArray(my.seasons) && my.seasons.length ? TR.aiFacts(TR.analyze(my.seasons, my.precip))
+      : { статус: "не посчитан для этого села (на сайте — вкладка «Данные», «Трава по годам»)" };
     const { plots, herds } = compute(v);
     ctx.почему_план = Object.values(J.explainPlan(plots, herds, pl)).filter(x => !herd || x.стадо === herd.name);
   } catch (_) {}
@@ -294,10 +299,23 @@ async function askGemini(question, v, herd) {
     "Опирайся только на данные села и общие знания о выпасе. Не выдумывай цифры; числа пиши цифрами, как в данных; ёмкость и нагрузка — оценки модели. " +
     "Если нужного числа нет в данных — так и скажи. Право на участок и водопой никто не проверял — не утверждай обратное. Ты не агроном и не госорган. " +
     "«прошлый_год» — то же окно июнь–август прошлого лета: изменения уже посчитаны; изменение NDVI меньше порога — «без изменений»; NDVI — зелёность, а не урожай; при сравнение_надёжно = false скажи об этом. " +
+    "«многолетний_ряд» — лето каждого года с 2019 и осадки; вывод уже посчитан (Тейл — Сен, Манн — Кендалл, поправка на осадки): " +
+    "decline_unexplained — снижение, не объяснённое осадками, повод проверить на месте; decline_rain — снижение объясняют осадки; " +
+    "no_change — значимого изменения нет; increase — рост; few_years — данных мало. Не называй это деградацией и не делай вывод о тренде по двум годам. " +
     "Пиши обычным текстом без markdown (без звёздочек и решёток) — это сообщение Telegram. " + G.SCOPE;
-  const r = await G.ask({ system, input: `Данные села (JSON): ${JSON.stringify(ctx)}\n\nВопрос пастуха: ${String(question).slice(0, 1200)}`, maxTokens: kk ? 700 : 500 });
+  // поиск в интернете (погода, цены, нормы) — в пределах того же дневного лимита, что у сайта; источники — в конце сообщения
+  const search = A.searchAllowed(), lang = kk ? "kk" : "ru";
+  const r = await G.ask({ system: search ? system + " " + A.SEARCH_RULE[lang] : system, search, budgetMs: 60000,
+    input: `Данные села (JSON): ${JSON.stringify(ctx)}\n\nВопрос пастуха: ${String(question).slice(0, 1200)}`, maxTokens: kk ? 700 : 500 });
+  if (r.ok && r.searches) A.searchUsed(r.searches);
   // Telegram получает обычный текст: убираем остатки markdown (**, __, `, # в начале строки), которые модели иногда добавляют
-  if (r.ok) return r.text.replace(/\*\*|__|`+/g, "").replace(/^#+\s*/gm, "").trim();
+  if (r.ok) {
+    let text = r.text.replace(/\*\*|__|`+/g, "").replace(/^#+\s*/gm, "").trim();
+    const src = (r.sources || []).slice(0, 3);
+    if (src.length) text += "\n\n" + (kk ? "Интернеттегі дереккөздер:" : "Найдено в интернете:") + "\n" + src.map(x => "— " + (x.title ? x.title + ": " : "") + x.url).join("\n");
+    else text = A.fixWebLabels(text);
+    return text;
+  }
   // ИИ не ответил — шаблон из расчёта (те же факты движка), а не «попробуйте позже»
   try { return F.templateAnswer(templateCtx(v, herd), kk ? "kk" : "ru", [], r.error === "overloaded" ? (kk ? "ЖИ серверлері жүктелген" : "серверы ИИ перегружены") : ""); }
   catch (_) { return null; }

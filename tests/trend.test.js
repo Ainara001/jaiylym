@@ -127,3 +127,13 @@ test("16 участков чистого шума: после поправки �
   assert.ok(rawFlagged > 5, "без поправки на 480 участков-шумов есть «значимые»: " + rawFlagged);
   assert.ok(flagged <= 2, "с поправкой — почти нет: " + flagged);
 });
+
+test("факты для ИИ (сайт и бот): ряд Кегена — годы, вывод по селу, все участки с p после поправки", () => {
+  const D = require("../data").loadPlots(), m = D.multiyear;
+  const f = T.aiFacts(T.analyze(m.seasons, m.precip));
+  assert.equal(f.годы.length, m.last - m.first + 1);
+  assert.ok(["decline_unexplained", "decline_rain", "no_change", "increase", "few_years"].includes(f.вывод_по_селу));
+  assert.equal(f.участки.length, D.plots.length);
+  for (const s of f.участки) assert.match(s, /^[^:]+: (decline_unexplained|decline_rain|no_change|increase|few_years)( -?\d\.\d{4}\/год( с учётом осадков)? p=\d\.\d\d)?$/);
+  assert.doesNotMatch(JSON.stringify(f), /деградац/i);
+});
