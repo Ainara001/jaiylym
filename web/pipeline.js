@@ -514,11 +514,18 @@
     return noGrazeFor({ lat, lon, bbox, land });
   }
 
-  async function buildVillage({ name, lat, lon, year, onProgress, nograze = true }) {
+  /**
+   * ngWaitMs — сколько ждать зон OSM после готового расчёта (0 — сколько нужно). Не успели → nograze: null и nograzeLater —
+   * обещание результата: село открывается сразу, зоны вычитаются, когда придут.
+   */
+  async function buildVillage({ name, lat, lon, year, onProgress, nograze = true, ngWaitMs = 0 }) {
     const say = m => onProgress && onProgress(m);
     year = year || summerYear();
     const bbox = bboxFor(lat, lon);
     const N = SIZE * SIZE;
+    // зоны OSM запрашиваем сразу, параллельно со снимками (ошибку разберёт noGrazeFor)
+    const NG = NGmod(), osm = nograze && NG ? NG.fetchOSM(bbox) : null;
+    if (osm) osm.catch(() => {});
 
     say("Ищу безоблачные снимки Sentinel-2…");
     let scenes = await findScenes(bbox, year);
@@ -581,14 +588,20 @@
     if (noData.length) warnings.push("Нет NDVI для участков: " + noData.join(", ") + ".");
     const valid = vN ? vSum / vN : 0;
     // где нельзя пасти: населённые пункты, фермы, промзоны из OpenStreetMap на той же сетке
-    let ng = null;
-    if (nograze) { say("Ищу сёла, фермы и промзоны (OpenStreetMap)…"); ng = await noGrazeFor({ lat, lon, bbox, land }); }
+    let ng = null, nograzeLater = null;
+    if (nograze) {
+      say("Ищу сёла, фермы и промзоны (OpenStreetMap)…");
+      const job = noGrazeFor({ lat, lon, bbox, land, osm });
+      ng = ngWaitMs > 0 ? await Promise.race([job, new Promise(r => setTimeout(() => r(null), ngWaitMs))]) : await job;
+      if (!ng) nograzeLater = job;
+    }
     if (ng && ng.status === "error") warnings.push("Зоны, где нельзя пасти (OpenStreetMap), не загрузились: " + ng.error);
 
     return {
       village: { name, lat, lon },
       bbox,
       nograze: ng,
+      ...(nograzeLater ? { nograzeLater } : {}),
       source: {
         ndvi: "Sentinel-2 L2A (ESA Copernicus), медиана безоблачных снимков лета",
         landcover: "ESA WorldCover 10 м",
