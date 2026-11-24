@@ -7,6 +7,7 @@
   const EXAMPLES = [{ id: "beskol", data: window.JAIYLYM_BESKOL, png: "data/beskol.png" }, { id: "kegen", data: window.JAIYLYM_DATA, png: "data/ndvi.png" }]
     .filter(e => e.data && e.data.village);
   const DEFAULT = EXAMPLES[0].data, DEMO_HERDS = window.JAIYLYM_HERDS;
+  const NM = window.JaiylymNorms;            // предельно допустимая норма нагрузки (приказ МСХ № 3-3/332)
   const NG = window.JaiylymNoGraze;          // где нельзя пасти: жильё, фермы, промзоны (OpenStreetMap)
   const BOT = "JAIYLYM_bot";
   const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -74,6 +75,14 @@
   const fcTag = p => { const f = M.forageConfidence(p, S.P); return `<span class="conf conf-fc-${f}">${t("fc." + f)}</span>`; };
   const capOf = p => J.plotCapacity(p, S.P);
   const sheepCap = c => (c.known ? fmt(c.au_season / S.P.au.sheep) : "—");
+  const fmt2 = n => (+n).toLocaleString("ru-RU", { maximumFractionDigits: 2 });
+  /** Сравнение оценки по снимку с нормой: over — снимок обещает больше нормы, under — травы меньше, чем допускает норма, match — в пределах 15 %. */
+  function normVerdict(c) {
+    if (!c.known || !c.norm || !c.norm.au_season) return null;
+    const q = c.sat.au_season / c.norm.au_season;
+    return q > 1.15 ? { k: "over", x: q } : q < 0.85 ? { k: "under", x: q } : { k: "match", x: q };
+  }
+  const normVerdictText = v => (v.k === "over" ? t("nm.over", { x: fmt1(v.x) }) : v.k === "under" ? t("nm.under") : t("nm.match"));
   const wsLabel = p => t("ws." + M.waterStatus(p));
   const loadOf = (r, id) => r.load[id];
   // алгоритм плана: «optimized» — справедливое распределение + минимум перегона (по умолчанию), «greedy» — прежний быстрый
@@ -314,7 +323,8 @@
   const pastPlot = st => ({ ndvi: st.ndvi, pasture_ha: st.pasture_ha || 0, series: st.series, samples: st.samples, valid_fraction: st.valid_fraction, obs_count: st.obs_count });
   const pastConf = st => M.satelliteQuality(pastPlot(st));
   function pastureRows(st, area, water) {
-    const cap = J.plotCapacity(pastPlot(st), S.P);
+    const cap = J.plotCapacity(NM ? NM.attach([pastPlot(st)], S.normSel)[0] : pastPlot(st), S.P);
+    const toNorm = farmAU() && cap.norm && cap.norm.au_season > 0 ? farmAU() / cap.norm.au_season : null;
     const au = farmAU(), load = au && cap.known && cap.au_days > 0 ? au * S.P.season_days / cap.au_days : null;
     const c = pastConf(st);
     const comp = st.excluded_ha != null ? `<tr><td>${t("past.comp")}</td><td style="white-space:normal">${fmt1(st.pasture_ha)} / ${fmt1(st.excluded_ha)} / ${fmt1(st.uncertain_ha || 0)} ${t("common.ha")} ${src("sat")}</td></tr>` : "";
@@ -325,8 +335,9 @@
       <tr><td>NDVI ${st.year || ""}</td><td>${st.ndvi ?? t("st.no_data")} ${src("sat")} <span class="conf conf-${c}">${t("conf." + c)}</span></td></tr>
       <tr><td>${t("past.cap")}</td><td>${cap.known ? "≈ " + sheepCap(cap) + " " + t("pop.sheep") : t("st.no_data")} ${src("model")} ${fcTag(pastPlot(st))}</td></tr>
       <tr><td>${t("past.myLoad")}</td><td>${load == null ? `<small>${cap.known ? t("past.noFarm") : t("st.no_data")}</small>` : `<b style="color:${loadColor(load)}">${pct(load)}</b> ${src("model")}`}</td></tr>
+      ${cap.norm ? `<tr><td>${t("nm.past")}</td><td style="white-space:normal">≈ ${fmt(cap.norm.au_season / S.P.au.sheep)} ${t("pop.sheep")} ${src("norm")}${toNorm == null ? "" : `<br><b>${t("nm.pastLoad", { p: pct(toNorm) })}</b>`}</td></tr>` : ""}
       <tr><td>${t("pop.water")}</td><td>${water ? t("ws.confirmed") : "—"}${st.water_on_map ? ` (${t("past.waterMap")})` : ""}</td></tr>
-      </tbody></table>${spark(st.series)}${prov}
+      </tbody></table>${toNorm != null && toNorm > 1 ? `<p class="note warn">${t("nm.pastOver")}</p>` : toNorm != null && toNorm < NM.LAW.underuse ? `<p class="note warn">${t("nm.pastUnder", { p: pct(toNorm) })}</p>` : ""}${spark(st.series)}${prov}
       ${st.wc_pasture_share != null ? `<p class="fine" style="margin:6px 0 0">${t("past.wc", { p: Math.round(st.wc_pasture_share * 100) })}</p>` : ""}`;
   }
   const pastLink = id => `https://t.me/${BOT}?start=m_${id}`;
@@ -491,10 +502,11 @@
         S.building = key;
         showBuilding(name, lat, lon);
         if (!opts.keepRoute) history.replaceState(null, "", villageHash({ name, lat, lon }));
-        const res = await PL.buildVillage({ name, lat, lon, onProgress: m => {
+        const [res, region] = await Promise.all([PL.buildVillage({ name, lat, lon, onProgress: m => {
           const k = /снимк.*Sentinel/.test(m) ? "st.scenes" : /Загружаю/.test(m) ? "st.loading" : "st.computing";
           status(t(k), { busy: true });
-        } });
+        } }), PL.regionAt ? PL.regionAt(lat, lon).catch(() => "") : ""]);
+        res.village.region = region;                           // область — для нормы нагрузки
         if (S.loadingKey !== key) return;                      // пока считали, выбрали другое место
         png = ndviPng(res.grid); delete res.grid;
         data = res; S.justBuilt = true;
@@ -520,6 +532,8 @@
     S.rest = Object.assign({}, opts.rest || {});
     S.waterSet = Object.assign({}, opts.water_status || {});
     if (opts.params) { S.userP = Object.assign({}, S.userP, opts.params); paramErr = null; S.P = resolveParams(S.userP, S.calib); if (paramErr) toast(paramErr, true); }
+    S.normSel = NM ? NM.clean(opts.norm) || NM.clean(C.ls.get(normKey(key), null)) || NM.clean({ region: NM.regionOf(data.village.region) }) : null;
+    S.normState = S.normSel ? "ok" : "none";
     rebuildPlots();
     S.herds = opts.herds ? opts.herds.map(h => Object.assign({}, h)) : (ex && opts.demo ? demoHerds() : []);
     addOwnFarm();
@@ -531,6 +545,7 @@
     drawVillage();
     render();
     if (!opts.herds) loadBotData();
+    loadRegion(key, data);
     loadPrev(key, data);
     loadMulti(key, data);
     S.ngState = data.nograze ? data.nograze.status : null;
@@ -543,12 +558,45 @@
     if (opts.draw || S.drawNext) { S.drawNext = false; setTimeout(startDraw, 450); }
   }
 
+  // ---------- норма нагрузки: область села → самая мягкая норма, пока человек не выбрал тип пастбища ----------
+  const normKey = key => key + ":norm";
+  function loadRegion(key, data) {
+    if (!NM || S.normSel || !navigator.onLine || typeof PL.regionAt !== "function") return;
+    S.normState = "loading";
+    PL.regionAt(data.village.lat, data.village.lon).then(txt => {
+      if (S.loadingKey !== key || S.normSel) return;
+      const sel = NM.clean({ region: NM.regionOf(txt) });
+      S.normState = sel ? "ok" : "none";
+      if (sel) {
+        data.village.region = txt; S.normSel = sel;
+        const hit = C.ls.get(key, null); if (hit && hit.village) { hit.village.region = txt; C.ls.set(key, hit); }
+        rebuildPlots();
+      }
+      render();
+    }).catch(() => { if (S.loadingKey === key) { S.normState = "error"; if (S.tab === "data") renderPane("data"); } });
+  }
+  function setNorm(sel) {
+    S.normSel = NM.clean(sel); S.normState = S.normSel ? "ok" : "none";
+    if (S.normSel) C.ls.set(normKey(S.loadingKey), S.normSel); else C.ls.del(normKey(S.loadingKey));
+    rebuildPlots(); render();
+  }
+  const regName = id => { const r = NM && NM.region(id); return r ? (I.lang === "kk" ? r.kk : r.ru) : "—"; };
+  /** Итог по нормам для участков: сколько ограничено нормой, сколько вышло бы по снимкам и сколько можно. */
+  function normTotals(plots) {
+    const o = { n: 0, limited: 0, sat: 0, norm: 0, cap: 0 };
+    for (const p of plots) {
+      const c = capOf(p); if (!c.known || !c.norm) continue;
+      o.n++; if (c.limited_by === "norm") o.limited++;
+      o.sat += c.sat.au_season / S.P.au.sheep; o.norm += c.norm.au_season / S.P.au.sheep; o.cap += c.au_season / S.P.au.sheep;
+    }
+    return o;
+  }
   const syncHash = () => { if (S.D) history.replaceState(null, "", villageHash(S.D.village, S.herds.some(h => h.demo) && !!exampleAt(S.D.village.lat, S.D.village.lon))); };
   // ввод пользователя поверх спутниковых данных: смоделированный водопой, подтверждение/отсутствие воды, закрытый участок
   function rebuildPlots() {
     // кормовая площадь без жилья, ферм и промзон (OSM) с выбранным буфером; исходная — в pasture_ha_gross
     const base = NG && S.D.nograze && S.D.nograze.status === "ok" ? NG.apply(S.D.plots, S.D.nograze, S.ngBuf) : S.D.plots;
-    S.plots = base.map(p => {
+    S.plots = (NM ? NM.attach(base, S.normSel) : base).map(p => {
       const o = Object.assign({}, p);
       if (S.added.has(p.id)) { o.water_status = "modeled"; o.water = true; o.water_source = t("ws.modeled"); }
       else if (S.waterSet[p.id]) { o.water_status = S.waterSet[p.id]; o.water = M.waterUsable(o); }
@@ -773,7 +821,8 @@
       <tr><td>${t("pop.quality")}</td><td>${confTag(p)}</td></tr>
       <tr><td>${t("pop.forageConf")}</td><td>${fcTag(p)}</td></tr>
       <tr><td>${t("pop.forage")}</td><td>${c.known ? fmt(c.forage / 1000) + " " + t("pop.t") : t("st.no_data")} ${src("model")}</td></tr>
-      <tr><td>${t("pop.cap")}</td><td>${c.known ? "≈ " + sheepCap(c) + " " + t("pop.sheep") : t("st.no_data")} ${src("model")}</td></tr>
+      <tr><td>${t("pop.cap")}</td><td>${c.known ? "≈ " + sheepCap(c) + " " + t("pop.sheep") : t("st.no_data")} ${src(c.limited_by === "norm" ? "norm" : "model")}</td></tr>
+      ${c.norm ? `<tr><td>${t("nm.row")}</td><td style="white-space:normal">≈ ${fmt(c.sat.au_season / S.P.au.sheep)} ${src("model")} / ${fmt(c.norm.au_season / S.P.au.sheep)} ${src("norm")}<br>${normVerdictText(normVerdict(c) || { k: "match" })}</td></tr>` : ""}
       <tr><td>${t("pop.load")}</td><td><b>${l.known ? pct(l.load) : t("st.no_data")}</b> (${S.mode === "current" ? t("kpi.before") : t("kpi.after")})</td></tr>
       <tr><td>${t("pop.herds")}</td><td style="white-space:normal">${esc(names.join(", ")) || "—"}</td></tr>
       <tr><td>${t("pop.water")}</td><td style="white-space:normal">${esc(t("ws." + ws))}</td></tr>
@@ -1309,16 +1358,39 @@
         ${S.fromCache ? `<p class="note warn">${t("meta.cached", { d: meta.calculated_at ? dateStr(meta.calculated_at, false) : t("meta.unknownDate") })}</p>` : ""}
         ${days != null && days > 30 ? `<p class="note warn">${t("meta.stale", { n: Math.round(days) })}</p>` : ""}
         <h3>${t("meta.title")}</h3>${metaHtml(meta)}</div>
+      ${normHtml()}
       ${noGrazeHtml()}
       <div class="srcblock s-input"><h3>${src("input")} ${t("data.input.t")}</h3><p>${t("data.input.d")}</p></div>
       <div class="srcblock s-model"><h3>${src("model")} ${t("data.model.t")}</h3><p>${t("data.model.d")}</p></div>
       <div class="srcblock"><h3>${ic("wifioff")} ${t("off.title")}</h3><p>${t("off.d")}</p></div>
       <p><a href="#/data">${t("nav.data")}</a></p>`;
     const mr = $("#multiRun", el); if (mr) mr.onclick = runMulti;
+    const nmR = $("#nmRegion", el), nmT = $("#nmRow", el), nmS = $("#nmState", el);
+    if (nmR) nmR.onchange = () => setNorm({ region: nmR.value, state: (S.normSel || {}).state });
+    if (nmT) nmT.onchange = () => setNorm({ region: S.normSel.region, row: nmT.value || undefined, state: S.normSel.state });
+    if (nmS) nmS.onchange = () => setNorm({ region: S.normSel.region, row: S.normSel.row, state: nmS.value });
     const nb = $("#ngBuf", el);
     if (nb) nb.onchange = () => { S.ngBuf = +nb.value; C.ls.set("jaiylym:ngbuf", S.ngBuf); rebuildPlots(); render(); };
     const nr = $("#ngRetry", el);
     if (nr) nr.onclick = () => { loadNoGraze(cacheKey(S.D.village.lat, S.D.village.lon), S.D, true); renderPane("data"); };
+  }
+  /** Вкладка «Данные»: норма нагрузки — область, тип пастбища, состояние, сравнение со снимком. */
+  function normHtml() {
+    if (!NM) return "";
+    const sel = S.normSel, n = NM.pick(sel), head = `<div class="srcblock s-norm" id="normBox"><h3>${src("norm")} ${t("nm.title")}</h3><p>${t("nm.lead")}</p>`;
+    const regSel = `<label class="field">${t("nm.region")} ${src("input")}<select id="nmRegion"><option value="">${t("nm.regionNone")}</option>${NM.REGIONS.map(r => `<option value="${r.id}" ${sel && sel.region === r.id ? "selected" : ""}>${esc(regName(r.id))}</option>`).join("")}</select></label>`;
+    const foot = `<p class="fine">${t("nm.limits")} <a href="${NM.SOURCE.url}" target="_blank" rel="noopener">${esc(t("nm.source"))}</a></p></div>`;
+    if (!n) return head + `<p class="note warn">${t(S.normState === "loading" ? "nm.loading" : "nm.noRegion")}</p>${regSel}` + foot;
+    const ha = x => fmt2(x * S.P.au.sheep), days = d => (d ? `, ${d[0]}–${d[1]} ${t("nm.days")}` : "");
+    const groups = {};
+    for (const r of NM.rows(sel.region)) (groups[[r.zone, r.subzone].filter(Boolean).join(" · ")] = groups[[r.zone, r.subzone].filter(Boolean).join(" · ")] || []).push(r);
+    const soft = NM.pick({ region: sel.region, state: n.state }), tot = normTotals(S.plots);
+    return head + `<div class="formgrid nmform">${regSel}
+      <label class="field">${t("nm.state")} ${src("input")}<select id="nmState">${NM.STATES.map(s => `<option value="${s}" ${n.state === s ? "selected" : ""}>${t(s === "degraded" ? "nm.degraded" : "nm.restored")}</option>`).join("")}</select></label>
+      <label class="field span2">${t("nm.type")} ${src("input")}<select id="nmRow"><option value="">${esc(t("nm.soft", { n: ha(soft.au_ha) }))}</option>
+        ${Object.entries(groups).map(([g, rs]) => `<optgroup label="${esc(g)}">${rs.map(r => `<option value="${r.key}" ${sel.row === r.key ? "selected" : ""}>${esc(r.type)} — ${ha(r.au_ha[n.state])} ${t("nm.haSheep")}${days(r.days)}</option>`).join("")}</optgroup>`).join("")}</select></label></div>
+      <p><b>${t("nm.sum", { sat: fmt(tot.sat), norm: fmt(tot.norm), cap: fmt(tot.cap) })}</b> ${t("nm.sumK", { k: tot.limited, n: tot.n })}</p>
+      ${n.days && S.P.season_days > n.days[1] ? `<p class="note">${t("nm.season", { a: n.days[1], b: S.P.season_days })}</p>` : ""}` + foot;
   }
   /** Вкладка «Данные»: где нельзя пасти — источник, сколько зон, площадь по участкам, буфер. */
   function noGrazeHtml() {
@@ -1375,6 +1447,7 @@
       <div class="tablewrap"><table class="wi"><thead><tr><th>${t("wi.c.variant")}</th><th class="num">${t("wi.c.deficit")}</th><th class="num">${t("wi.c.over")}</th>
         <th class="num">${t("wi.c.full")}</th><th class="num">${t("wi.c.short")}</th><th class="num">${t("wi.c.minShare")}</th><th>${t("wi.c.viol")}</th></tr></thead><tbody>${tr}</tbody></table></div>
       <p class="note">${t(S.algo === "greedy" ? "wi.noteGreedy" : "wi.noteOpt")}</p>
+      ${normTotals(S.plots).limited ? `<p class="note">${t("nm.whatif", { k: normTotals(S.plots).limited })} ${src("norm")}</p>` : ""}
       <p class="fine">${t("wi.bound", { b: fmt(J.hayTonnes(b.min_deficit_au_days * S.P.intake, S.P)), g: fmt(J.hayTonnes(S.pl.deficit_kg, S.P)), d: fmt(J.hayTonnes(S.pl.gap_au_days * S.P.intake, S.P)) })}</p>
       <h3>${ic("chart")} ${t("wi.sens")}</h3><p>${sens("util", 0.5, 0.4)}</p><p>${sens("k_ndvi", S.P.k_ndvi, Math.round(S.P.k_ndvi * 0.75))}</p>
       <h3>${t("wi.assump")}</h3><div class="tablewrap"><table><thead><tr><th></th><th class="num">${t("wi.c.cap")}</th><th class="num">${t("wi.c.deficit")}</th></tr></thead><tbody>${ass}</tbody></table></div>
@@ -1435,7 +1508,7 @@
       herds: S.herds.filter(h => !h.from_bot).map(h => ({ id: h.id, name: h.name, sheep: h.sheep || 0, goats: h.goats || 0, cattle: h.cattle || 0, horses: h.horses || 0,
         home: h.home, daily_return: !!h.daily_return, allowed_plots: h.allowed_plots || [], demo: !!h.demo, weight: +h.weight || 1 })),
       water: [...S.added], forbidden: [...S.forbidden], water_status: Object.assign({}, S.waterSet), params: Object.assign({}, S.userP),
-      rest: Object.assign({}, S.rest || {}), summary: summary() };
+      rest: Object.assign({}, S.rest || {}), norm: S.normSel || undefined, summary: summary() };
   }
   async function saveScenario(shared) {
     if (!S.D) return;
@@ -1451,7 +1524,7 @@
   function loadScenario(sc) {
     // сценарий применяется при открытии карты (onRoute) — так не бывает двух параллельных загрузок
     S.pending = { key: cacheKey(sc.village.lat, sc.village.lon), opts: { herds: (sc.herds || []).map(h => Object.assign({}, h, { allowed_plots: (h.allowed_plots || []).length ? h.allowed_plots : undefined })),
-      water: sc.water || [], forbidden: sc.forbidden || [], water_status: sc.water_status || {}, rest: sc.rest || {}, params: sc.params || null } };
+      water: sc.water || [], forbidden: sc.forbidden || [], water_status: sc.water_status || {}, rest: sc.rest || {}, norm: sc.norm || null, params: sc.params || null } };
     const h = `#/map?lat=${sc.village.lat}&lon=${sc.village.lon}&name=${encodeURIComponent(sc.village.name)}`;
     if (location.hash === h) onRoute(); else location.hash = h;
   }
@@ -1824,6 +1897,8 @@
     const lines = [];
     const res = resultHtml();
     lines.push(t("brief.cap", { ha: fmt(b.water.reduce((s, p) => s + p.pasture_ha, 0)), sheep: fmt(sheepOf(b.capAU)), au: fmt(b.capAU), myau: fmt(b.au), mysheep: fmt(sheepOf(b.au)) }));
+    const nt = normTotals(b.water);
+    if (nt.limited) lines.push(t("nm.brief", { k: nt.limited, n: nt.n, sat: fmt(nt.sat), cap: fmt(nt.cap) }) + " " + src("norm"));
     lines.push(b.worst ? t("brief.curOver", { n: S.cur.overloaded, id: `<b>${esc(b.worst.id)}</b>`, pct: pct(S.cur.load[b.worst.id].load) }) : t("brief.curOk"));
     if (b.deficitT < 1) lines.push(t("brief.planOk"));
     else {
@@ -1863,21 +1938,29 @@
       { v: fmt(st.forage.value / 1000), u: t("pop.t"), l: t("cap.s.forage"), s: "model",
         f: (st.nograze ? `(${fmt(p.pasture_ha_gross)} − ${fmt1(st.nograze.value)}) ${t("common.ha")}` : `${fmt(st.area.value)} ${t("common.ha")}`) + ` × ${fmt(st.biomass.value)} × ${P.util}` },
       { v: fmt1(st.au_season.value), u: t("cap.u.au"), l: t("cap.s.au"), f: t("cap.f.au", { i: P.intake, d: P.season_days }), s: "model" },
-      { v: fmt(st.sheep.value), u: t("pop.sheep"), l: t("cap.s.sheep"), f: `${fmt1(st.au_season.value)} × ${per("sheep")}`, s: "model" },
+      { v: fmt(st.sheep.value), u: t("pop.sheep"), l: t(st.norm ? "cap.s.sheepSat" : "cap.s.sheep"), f: `${fmt1(st.au_season.value)} × ${per("sheep")}`, s: "model" },
     ];
+    if (st.norm) steps.push(
+      { v: fmt(st.norm.value), u: t("pop.sheep"), l: t("cap.s.norm"), f: t("cap.f.norm", { ha: fmt1(st.area.value), n: fmt2(p.norm.au_ha * au.sheep) }) + (e.capacity.norm.season_factor < 1 ? ` × ${p.norm.days[1]} / ${P.season_days}` : ""), s: "norm" },
+      { v: fmt(st.limit.value), u: t("pop.sheep"), l: t("cap.s.limit"), f: `${t("cap.f.limit", { a: fmt(st.sheep.value), b: fmt(st.norm.value) })} ${normVerdictText(normVerdict(e.capacity) || { k: "match" })}`, s: e.capacity.limited_by === "norm" ? "norm" : "model" });
     return `<section class="chain" aria-labelledby="chainH"><h3 id="chainH">${ic("leaf")} ${t("cap.title")}</h3>
       <label class="field chain-pick">${t("cap.plot")}<select id="chainPlot">${known.map(x => `<option value="${esc(x.id)}" ${x.id === p.id ? "selected" : ""}>${esc(x.id)}</option>`).join("")}</select></label>
       <ol class="chain-steps">${steps.map(x => `<li><div class="cv"><b>${x.v}</b> <span>${esc(x.u)}</span></div>
         <div class="cl">${esc(x.l)} ${src(x.s)}<small>${esc(x.f)}</small></div></li>`).join("")}</ol>
       <ul class="chain-notes">
-        <li>${t("cap.n.au", { cattle: per("cattle"), horses: per("horses"), sheep: per("sheep"), goats: per("goats") })}</li>
+        <li>${st.norm ? normNote(p.norm) : `${t("nm.noRegion")} <button type="button" class="linkbtn" data-goto="data">${t("nm.choose")}</button>`}</li>
+        <li>${t("cap.n.au", { cattle: fmt2(au.cattle), horses: fmt2(au.horses), sheep: fmt2(au.sheep), goats: fmt2(au.goats) })}</li>
         ${st.nograze ? `<li>${t("cap.n.ng", { g: fmt(p.pasture_ha_gross), n: fmt1(st.nograze.value), a: fmt1(st.area.value), b: p.nograze_buffer_m })}</li>` : ""}
         <li>${t("cap.n.season", { d: P.season_days })}</li>
         <li>${t("cap.n.veg", { k: fmt(P.k_ndvi) })}</li>
       </ul>
       <button type="button" class="btn btn-soft btn-sm" data-how="${esc(p.id)}">${ic("info")} ${t("cap.more")}</button></section>`;
   }
-  const briefKey = () => S.D ? JSON.stringify([S.D.village.lat, S.D.village.lon, S.herds.map(h => [h.sheep, h.goats, h.cattle, h.horses, h.home, h.daily_return, h.allowed_plots, h.weight]), [...S.added], [...S.forbidden], S.waterSet, S.rest, S.P.k_ndvi, S.P.util, S.P.season_days, I.lang]) : "";
+  /** Какая норма применена: выбранный тип или самая мягкая по области. */
+  const normNote = n => (n.soft ? t("nm.noteSoft", { r: esc(regName(n.region)), n: fmt2(n.au_ha * S.P.au.sheep) })
+    : t("nm.noteRow", { ty: esc(n.type), n: fmt2(n.au_ha * S.P.au.sheep), s: t(n.state === "degraded" ? "nm.degraded" : "nm.restored") })) +
+    ` <button type="button" class="linkbtn" data-goto="data">${t("nm.choose")}</button>`;
+  const briefKey = () => S.D ? JSON.stringify([S.D.village.lat, S.D.village.lon, S.herds.map(h => [h.sheep, h.goats, h.cattle, h.horses, h.home, h.daily_return, h.allowed_plots, h.weight]), [...S.added], [...S.forbidden], S.waterSet, S.rest, S.normSel, S.P.k_ndvi, S.P.util, S.P.season_days, I.lang]) : "";
 
   // ---------- итог плана простыми словами: возможно ли, почему, что использовано, где дефицит, что изменить, насколько надёжно ----------
   const plotIds = ids => (ids || []).map(esc).join(", ");
@@ -2085,6 +2168,10 @@
         исключённые_участки: S.pl.diagnostics[h.id].excluded, не_хватает_дней: Math.round(S.P.season_days - S.pl.coverage[h.id]) })),
       что_можно_изменить: (S.pl.suggestions || []).map(sgText).map(x => x.replace(/<[^>]+>/g, "")),
       предупреждения: (S.pl.warnings || []).map(wrText).map(x => x.replace(/<[^>]+>/g, "")),
+      норма_нагрузки_МСХ: (n => (n ? { источник: NM.SOURCE.title, область: regName(n.region), тип_пастбища: n.soft ? "не выбран — взята самая мягкая норма области" : n.type,
+        состояние: n.state === "degraded" ? "деградированные" : "восстановленные", норма_га_на_овцу: +(n.au_ha * S.P.au.sheep).toFixed(2),
+        участков_ограничено_нормой: normTotals(S.plots).limited, по_снимкам_овец: Math.round(normTotals(S.plots).sat), по_норме_овец: Math.round(normTotals(S.plots).norm), в_расчёте_овец: Math.round(normTotals(S.plots).cap) }
+        : "область не определена — предел по норме не применён"))(NM && NM.pick(S.normSel)),
       нельзя_пасти: S.D.nograze && S.D.nograze.status === "ok" ? { источник: "OpenStreetMap: жильё, населённые пункты, фермы, промзоны", буфер_м: S.ngBuf,
         вычтено_из_пастбищ_га: Math.round(S.plots.reduce((s, p) => s + (p.nograze_ha || 0), 0)), зон: S.D.nograze.counts } : "не посчитано",
       участки: S.plots.map(p => ({ id: p.id, кольцо: p.ring === "near" ? "ближний" : "дальний", км_от_села: p.dist_km, направление: p.dir,
@@ -2093,6 +2180,7 @@
         качество_снимка: confidence(p), достоверность_корма: M.forageConfidence(p, S.P), статус_данных: capOf(p).status,
         вода: t("ws." + M.waterStatus(p)), закрыт_по_вводу: !!p.forbidden, отдых_выпас_только_дни: p.window ? `${p.window.from}-${p.window.to}` : undefined,
         ёмкость_овец_оценка: capOf(p).known ? Math.round(sheepOf(capOf(p).au_season)) : null,
+        что_ограничивает: capOf(p).limited_by ? (capOf(p).limited_by === "norm" ? "норма МСХ" : "трава по снимку") : undefined,
         как_рассчитано: J.explainCapacity(p, S.P).steps.map(s => `${s.key}: ${s.formula}`).join("; "),
         нагрузка_если_все_у_села_проц: S.cur.load[p.id].known ? Math.round(S.cur.load[p.id].load * 100) : null,
         нагрузка_по_плану_проц: S.pl.load[p.id].known ? Math.round(S.pl.load[p.id].load * 100) : null })),
@@ -2336,6 +2424,8 @@
     let scen = [];
     try { const o = { algorithm: S.algo }; scen = S.herds.length ? J.compareScenarios(S.plots, S.herds, S.P, J.defaultVariants(S.plots, S.herds, S.P, o), o) : []; } catch (_) {}
     return { t, fmt, fmt1, pct, esc, src, J, M, S, scheme, loadColor, confidence, summary: summary(), trend: trendLine(), lang: I.lang,
+      norm: (n => { if (!n) return ""; const tt = normTotals(S.plots), kv = fmt2(n.au_ha * S.P.au.sheep);
+        return `${t("nm.source")}. ${n.soft ? t("nm.noteSoft", { r: esc(regName(n.region)), n: kv }) : t("nm.noteRow", { ty: esc(n.type), n: kv, s: t(n.state === "degraded" ? "nm.degraded" : "nm.restored") })} ${t("nm.sum", { sat: fmt(tt.sat), norm: fmt(tt.norm), cap: fmt(tt.cap) })} ${t("nm.sumK", { k: tt.limited, n: tt.n })}`; })(NM && NM.pick(S.normSel)),
       meta: M.metaOf(S.D), scenarios: scen, variantName, sgText, wrText, whyHerd, dateStr, algoLine, bottleneckHtml };
   }
 
