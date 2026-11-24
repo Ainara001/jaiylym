@@ -110,6 +110,9 @@ async function ask(body, label) {
     else note("ИИ ответил о погоде без источников — поиск не сработал (проверьте лимит AI_SEARCH_DAILY и поддержку поиска у провайдера)");
     if (/\[интернет\]/.test(a5.d.text) && !(a5.d.sources || []).length) ok(false, "метка [интернет] без источников");
   }
+  // что DeepSeek вернул на запрос с поиском (инструмент передан? был ли вызов поиска?) — для разбора, если источников нет
+  try { const st = await (await get(API + "/api/ai/status")).json(); console.log("\n--- поиск: последний запрос с инструментом ---\n" + JSON.stringify({ search_available: st.search_available, last_search: st.last_search, last_answer: st.last_answer, uptime_s: st.uptime_s, rss_mb: st.rss_mb, usage: st.usage_since_start }, null, 1)); }
+  catch (e) { note("/api/ai/status после вопроса о погоде: " + e.message); }
   // другое село (не демо): ИИ должен помогать по любому селу — Нарынкол считается по снимкам здесь же, как в браузере
   try {
     const N = await PL.buildVillage({ name: "Нарынкол", lat: 42.717, lon: 80.183 });
@@ -121,9 +124,7 @@ async function ask(body, label) {
     if ((a6.d.issues || []).some(x => /Село не открыто/.test(x))) ok(false, "данные Нарынкола не дошли до ИИ");
   } catch (e) { note("Нарынкол не посчитался по снимкам (внешний сбой Planetary Computer/OSM?): " + e.message); }
 
-  // что DeepSeek вернул на запрос с поиском (инструмент передан? был ли вызов поиска?) — для разбора, если источников нет
-  try { const st = await (await get(API + "/api/ai/status")).json(); console.log("\n--- поиск: последний запрос с инструментом ---\n" + JSON.stringify({ search_available: st.search_available, last_search: st.last_search, last_answer: st.last_answer, usage: st.usage_since_start }, null, 1)); }
-  catch (e) { note("/api/ai/status после вопроса о погоде: " + e.message); }
+
 
   // 4. бот в Telegram
   try {

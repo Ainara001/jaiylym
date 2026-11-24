@@ -81,3 +81,13 @@ test("в интерфейсе и боте нет цветных смайлико
   const bot = read("bot.js").split("\n").map((l, i) => [i + 1, l]).filter(([, l]) => emoji.test(l) && !/console\.log/.test(l));
   assert.deepEqual(bot, [], "bot.js");
 });
+
+test("предупреждения о данных из model.js переведены на казахский (вкладка «Данные»)", () => {
+  const src = require("fs").readFileSync(require("path").join(__dirname, "..", "web", "js", "app.js"), "utf8");
+  const M = require("../web/model.js");
+  const w = M.metaOf({ source: { year: 2026, dates: ["2026-07-01"] } }).warnings;
+  assert.ok(w.length >= 2);
+  // каждое предупреждение metaOf попадает под шаблон META_WARN
+  const res = [...src.matchAll(/\[\/(\^[^\n]*?)\/, /g)].map(m => new RegExp(m[1]));
+  for (const x of w) assert.ok(res.some(re => re.test(x)), "нет перевода для: " + x);
+});

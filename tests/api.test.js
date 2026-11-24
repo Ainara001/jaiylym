@@ -368,3 +368,25 @@ test("ИИ: сегодняшняя дата по Алматы словами (ru
   assert.equal(todayText("ru", new Date("2026-11-24T20:30:00Z")), "25 ноября 2026, среда", "UTC+5: после 19:00 UTC — уже завтра");
   assert.equal(todayText("kk", new Date("2026-11-24T10:00:00Z")), "2026 жылғы 24 қараша, сейсенбі");
 });
+
+test("ИИ: вопрос о погоде, а модель не искала — один повтор с требованием искать; ответ с поиском берётся", async () => {
+  const orig = G.ask;
+  const seen = [];
+  try {
+    G.ask = async o => { seen.push(o); return seen.length === 1 ? { ok: true, text: "Прогноза в расчёте нет.", model: "t" }
+      : { ok: true, text: "Во вторник до −2 °C [интернет]", model: "t", searches: 2, sources: [{ url: "https://pogoda.example.kz", title: "П" }], cited: ["Во вторник до −2 °C"] }; };
+    const r = await call("POST", "/api/ai", { ip: "10.7.8.5", body: { mode: "chat", lang: "ru", context: {}, messages: [{ role: "user", text: "Какая погода в Кегене на неделе?" }] } });
+    assert.equal(seen.length, 2);
+    assert.match(seen[1].input, /не выполнил поиск/);
+    assert.equal(seen[1].search, true);
+    assert.match(r.data.text, /−2 °C/);
+    assert.equal(r.data.sources.length, 1);
+    const st = await call("GET", "/api/ai/status", { ip: "10.7.8.6" });
+    assert.equal(st.data.last_answer.search_retry, true);
+    assert.ok(st.data.uptime_s >= 0 && st.data.rss_mb > 0, "время работы и память процесса");
+    // вопрос о данных села без поиска — без повтора
+    seen.length = 0; G.ask = async o => { seen.push(o); return { ok: true, text: "ответ", model: "t" }; };
+    await call("POST", "/api/ai", { ip: "10.7.8.7", body: { mode: "chat", lang: "ru", context: {}, messages: [{ role: "user", text: "сколько овец?" }] } });
+    assert.equal(seen.length, 1);
+  } finally { G.ask = orig; }
+});
