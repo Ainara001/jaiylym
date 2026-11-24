@@ -132,6 +132,8 @@ async function journey(page, label) {
   await page.click('.langsw [data-lang="kk"]');
   assert.match(await page.textContent(".tabs"), /Егер былай болса/);
   await page.goto(base + "#/research");
+  // переход по хэшу отрисовывается асинхронно — ждём страницу, а не читаем её сразу (иначе гонка, особенно в WebKit)
+  await page.waitForFunction(() => /Жазылған сұхбаттар/.test((document.querySelector("#rsPage") || {}).textContent || ""), null, { timeout: 10000 });
   assert.match(await page.textContent("#rsPage"), /Жазылған сұхбаттар: 0/);
   for (const route of ["research", "map?lat=43.02&lon=79.22&name=Кеген", "settings", "about", "home"]) {
     await page.goto(base + "#/" + route);
