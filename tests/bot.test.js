@@ -38,3 +38,19 @@ test("неизвестная команда — подсказка, а не мо
   await bot.handle({ message: { chat: { id: 901 }, from: { id: 901 }, text: "/foo" } }, send);
   assert.match(last(), /Не понял/);
 });
+
+test("ИИ не ответил — бот присылает шаблон из расчёта с маршрутом и причиной выбора участка", async () => {
+  const AI = require("../ai.js");
+  const orig = AI.ask, key = process.env.DEEPSEEK_API_KEY;
+  process.env.DEEPSEEK_API_KEY = "test";
+  AI.ask = async () => ({ ok: false, error: "overloaded" });
+  try {
+    const c = bot.getState().chats["901"]; c.village = "43.020,79.220";
+    await bot.handle({ message: { chat: { id: 901 }, from: { id: 901, first_name: "Тест" }, text: "почему моё стадо пасётся именно там?" } }, send);
+    const t = last();
+    assert.match(t, /ИИ сейчас недоступен \(серверы ИИ перегружены\)/);
+    assert.match(t, /Маршруты по плану:/);
+    assert.match(t, /почему: /);
+    assert.doesNotMatch(t, /\*\*/);
+  } finally { AI.ask = orig; if (key === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = key; }
+});
