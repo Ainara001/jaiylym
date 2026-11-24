@@ -110,7 +110,7 @@
     if (/^lat=/.test(h)) return { route: "map", q: new URLSearchParams(h) };          // старые ссылки из бота
     const m = /^\/?([a-z]*)\??(.*)$/.exec(h) || [];
     const r = m[1] === "data" ? "about" : m[1];      // старая ссылка «О данных» ведёт в «Что это»
-    return { route: ["home", "map", "scenarios", "profile", "coord", "about", "ai", "settings", "research"].includes(r) ? r : "home", q: new URLSearchParams(m[2] || "") };
+    return { route: ["home", "map", "scenarios", "profile", "coord", "about", "ai", "settings", "research", "kelisim"].includes(r) ? r : "home", q: new URLSearchParams(m[2] || "") };
   }
   function go(route, q) { location.hash = "#/" + route + (q ? "?" + q : ""); }
   function onRoute() {
@@ -153,6 +153,7 @@
     if (route === "ai") renderAI();
     if (route === "settings") renderSettings();
     if (route === "research") renderResearch();
+    Kel.route(route === "kelisim", q);
     const more = $("#moreDlg"); if (more && more.open) more.close();
     window.scrollTo(0, 0);
   }
@@ -2436,6 +2437,10 @@
       meta: M.metaOf(S.D), scenarios: scen, variantName, sgText, wrText, whyHerd, dateStr, algoLine, bottleneckHtml };
   }
 
-  window.JaiylymApp = { S, openVillage, render, summary, confidence, scheme, reportCtx, pickVillageOnMap, aiContext, briefData, openHow, renderPane, rebuildPlots };   // для отладки и тестов
+  // Келісім — согласование плана между дворами (js/kelisim-ui.js)
+  const Kel = !window.KelisimUI ? { route() {} } : window.KelisimUI({ t, I, S, C, J, M, K: window.JaiylymKelisim, NM, $, $$, esc, ic, src, fmt, fmt1, pct, dateStr, pillStyle, loadColor, scheme, toast, go, errText, openVillage, exampleAt, EXAMPLES, exName, regName, phone });
+  $("#kelBtn").onclick = () => go("kelisim", "new=1");
+
+  window.JaiylymApp = { S, openVillage, render, summary, confidence, scheme, reportCtx, Kel, pickVillageOnMap, aiContext, briefData, openHow, renderPane, rebuildPlots };   // для отладки и тестов
   init();
 })();

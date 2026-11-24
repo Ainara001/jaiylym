@@ -151,15 +151,17 @@
   const TR = { а: "a", ә: "a", б: "b", в: "v", г: "g", ғ: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z", и: "i", й: "y", к: "k", қ: "q", л: "l", м: "m",
     н: "n", ң: "ng", о: "o", ө: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ұ: "u", ү: "u", ф: "f", х: "kh", һ: "h", ц: "ts", ч: "ch", ш: "sh",
     щ: "shch", ъ: "", ы: "y", і: "i", ь: "", э: "e", ю: "yu", я: "ya" };
-  function fileName(village, d) {
+  function fileName(village, d, prefix) {
     const lat = String(village || "village").toLowerCase().split("").map(ch => (ch in TR ? TR[ch] : ch)).join("")
       .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "village";
-    return `jaiylym-${lat}-${d.toISOString().slice(0, 10)}.pdf`;
+    return `jaiylym-${prefix ? prefix + "-" : ""}${lat}-${d.toISOString().slice(0, 10)}.pdf`;
   }
 
   async function exportPdf(c) {
-    const html = build(c);
-    const name = fileName(c.S.D.village.name, new Date());
+    return pdf(build(c), fileName(c.S.D.village.name, new Date()));
+  }
+  /** Готовый html → файл PDF; если библиотека не загрузилась — печать страницы (и ошибка наверх, чтобы сказать об этом). */
+  async function pdf(html, name) {
     try {
       await loadLib();
       const el = document.createElement("div");
@@ -181,5 +183,5 @@
     }
   }
 
-  window.Report = { build, export: exportPdf, fileName };
+  window.Report = { build, export: exportPdf, pdf, fileName };
 })();
