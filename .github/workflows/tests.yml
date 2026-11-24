@@ -56,6 +56,9 @@ jobs:
         with:
           node-version: 22
       - run: node scripts/add_nograze.js
+      - name: Зоны Кегена в журнал (сжатый JSON, для переноса в web/data без доступа к файлам артефактов)
+        run: |
+          node -e 'const z=require("zlib");const D=require("./web/data/plots.json");const b=z.gzipSync(JSON.stringify(D.nograze)).toString("base64");console.log("NOGRAZE-BEGIN");for(let i=0;i<b.length;i+=900)console.log("NG:"+b.slice(i,i+900));console.log("NOGRAZE-END "+require("crypto").createHash("sha256").update(JSON.stringify(D.nograze)).digest("hex"))'
       - uses: actions/upload-artifact@v4
         with:
           name: kegen-nograze
