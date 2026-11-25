@@ -19,7 +19,7 @@ const NM = require("./web/norms.js");
 const Z = require("./web/zone.js");
 
 const TTL = 180 * 24 * 3600;
-const MAX = { households: 60, proposals: 300, log: 600, versions: 40, text: 300, perDay: 200 };
+const MAX = { households: 60, proposals: 600, perHousehold: 20, log: 600, versions: 40, text: 300, perDay: 200 };
 const PLOT_RE = /^[БД]-(С|СВ|В|ЮВ|Ю|ЮЗ|З|СЗ)$/;
 const DIST = { near: 1.8, far: 5.5 };
 const sha = s => crypto.createHash("sha256").update(String(s)).digest("hex");
@@ -426,7 +426,8 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
       // «согласен» снимает своё нерассмотренное возражение; новое возражение заменяет прежнее
       const prev = openProposal(k, h.id);
       const fresh = b.value === "object" ? cleanProposal(b.proposal, k, t) : null;
-      if (fresh && k.proposals.length >= MAX.proposals) throw err(429, "слишком много возражений в этом согласовании");
+      if (fresh && k.proposals.filter(p => p.household === h.id).length >= MAX.perHousehold) throw err(429, `возражений не больше ${MAX.perHousehold}: напишите организатору`, { why: "objections" });
+      if (fresh && k.proposals.length >= MAX.proposals) throw err(429, "слишком много возражений в этом согласовании", { why: "objections" });
       if (prev) prev.status = "withdrawn";
       h.joined = h.joined || at;
       if (!fresh) { h.answer = { value: "agree", version: k.version, at }; log(k, h.id, "agree", { version: k.version }, t); return; }
@@ -496,6 +497,16 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
  * Возвращает true, если запрос обработан.
  */
 function createRoutes(kel, { json, body, limited }) {
+  // тяжёлые расчёты — по одному, между ними сервер отвечает остальным: иначе десяток возражений большого села запирал его на полминуты
+  let tail = Promise.resolve(), waiting = 0;
+  function inLine(fn) {
+    if (waiting >= 60) throw err(429, "сервер считает другие планы, повторите через минуту");
+    waiting++;
+    const p = tail.catch(() => {}).then(() => new Promise(r => setTimeout(r, 5))).then(fn);
+    tail = p;
+    p.catch(() => {}).then(() => { waiting--; });
+    return p;
+  }
   return async function route(req, res, p) {
     const key = (/^Kelisim\s+([A-Za-z0-9_-]{16,64})$/.exec(req.headers.authorization || "") || [])[1] || "";
     const m = /^\/api\/kelisim(?:\/([A-Za-z0-9_-]{6,24}))?(?:\/([a-z]+))?(?:\/([A-Za-z0-9]{1,8}))?(?:\/([a-z]+))?$/.exec(p);
@@ -506,19 +517,20 @@ function createRoutes(kel, { json, body, limited }) {
       if (limited(req, "kel", 120, 60e3)) throw err(429, "слишком много запросов, подождите минуту");
       const heavy = POST && (["preview", "answer", "decide", "start", "rule"].includes(act) || act === "households");
       if (heavy && limited(req, "kelcalc", 60, 60e3)) throw err(429, "слишком много пересчётов, подождите минуту");
-      if (!id && POST) { if (limited(req, "kelnew", 6, 10 * 60e3)) throw err(429, "слишком много новых согласований, подождите 10 минут"); return json(res, 200, await kel.create(await body(req))), true; }
-      if (id === "restore" && POST && !act) { if (limited(req, "kelnew", 6, 10 * 60e3)) throw err(429, "подождите 10 минут"); return json(res, 200, await kel.restore(await body(req, 1.5e6), key)), true; }
+      if (!id && POST) { if (limited(req, "kelnew", 10, 10 * 60e3)) throw err(429, "слишком много новых согласований, подождите 10 минут"); return json(res, 200, await kel.create(await body(req))), true; }
+      if (id === "restore" && POST && !act) { if (limited(req, "kelnew", 10, 10 * 60e3)) throw err(429, "подождите 10 минут"); return json(res, 200, await kel.restore(await body(req, 1.5e6), key)), true; }
       if (id && !act && req.method === "GET") return json(res, 200, await kel.get(id, key)), true;
       if (id && !act && req.method === "DELETE") return json(res, 200, await kel.remove(id, key)), true;
       if (id && act === "protocol" && req.method === "GET") return json(res, 200, await kel.protocol(id, key)), true;
       if (id && act === "export" && req.method === "GET") return json(res, 200, await kel.export(id, key)), true;
       if (id && POST) {
         const b = await body(req);
-        if (act === "households" && !sub) return json(res, 200, await kel.addHousehold(id, key, b)), true;
+        const calc = fn => (heavy ? inLine(fn) : fn());
+        if (act === "households" && !sub) return json(res, 200, await calc(() => kel.addHousehold(id, key, b))), true;
         if (act === "households" && sub && sub2 === "link") return json(res, 200, await kel.reissue(id, key, sub)), true;
-        if (act === "households" && sub && !sub2) return json(res, 200, await kel.editHousehold(id, key, sub, b)), true;
+        if (act === "households" && sub && !sub2) return json(res, 200, await calc(() => kel.editHousehold(id, key, sub, b))), true;
         const f = { me: kel.join, answer: kel.answer, preview: kel.preview, start: kel.start, decide: kel.decide, rule: kel.setRule, settings: kel.setSettings, close: kel.close }[act];
-        if (f && !sub) return json(res, 200, await f(id, key, b)), true;
+        if (f && !sub) return json(res, 200, await calc(() => f(id, key, b))), true;
       }
       return json(res, 404, { error: "нет такого адреса" }), true;
     } catch (e) {

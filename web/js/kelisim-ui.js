@@ -18,13 +18,16 @@
     const tt = (k, v) => t("kel." + k, v);
 
     // ---------- память браузера: какие согласования открывали здесь и какие личные ссылки выпустили ----------
+    let noStore = false;
     const saved = () => C.ls.get(LIST, []).filter(x => x && x.id && x.key);
     const rec = (id, role) => saved().find(x => x.id === id && x.role === role);
     function remember(id, role, key, patch) {
       const old = saved().find(x => x.id === id && x.role === role && x.key === key) || {};
-      C.ls.set(LIST, [Object.assign({}, old, { id, role, key, at: new Date().toISOString() }, patch)].concat(saved().filter(x => !(x.id === id && x.role === role && x.key === key))).slice(0, 30));
+      const ok = C.ls.set(LIST, [Object.assign({}, old, { id, role, key, at: new Date().toISOString() }, patch)].concat(saved().filter(x => !(x.id === id && x.role === role && x.key === key))).slice(0, 30));
+      if (!ok && !noStore) { noStore = true; toast(tt("err.store"), true); }      // ссылки не сохранились — сказать сразу, а не когда они понадобятся
+      return ok;
     }
-    function forget(id, role, key) { C.ls.set(LIST, saved().filter(x => !(x.id === id && x.role === role && x.key === key))); C.ls.del(VIEW + id + ":" + role); }
+    function forget(id, role, key) { delete live[id]; C.ls.set(LIST, saved().filter(x => !(x.id === id && x.role === role && x.key === key))); C.ls.del(VIEW + id + ":" + role); }
     const site = () => location.href.split("#")[0];
     const linkOf = (id, role, key) => `${site()}#/kelisim?id=${id}&${role === "org" ? "o" : "d"}=${key}`;
 
@@ -114,7 +117,7 @@
         busy = false;
         if (cur !== c) return null;                        // человек уже ушёл на другой экран
         seq++; loading = false;
-        if (r.link) { const o = rec(cur.id, "org"); remember(cur.id, "org", cur.key, { links: Object.assign({}, o && o.links, { [r.link.id]: r.link.key }) }); }
+        if (r.link) { (live[cur.id] = live[cur.id] || {})[r.link.id] = r.link.key; const o = rec(cur.id, "org"); remember(cur.id, "org", cur.key, { links: Object.assign({}, o && o.links, { [r.link.id]: r.link.key }) }); }
         if (r.state) setView(r.state);
         if (okText) toast(okText);
         return r;
@@ -252,6 +255,7 @@
         try {
           const r = await C.kel("POST", "", "", { title: n.title, season: n.season, rule: n.rule, deadline: n.deadline || undefined, snapshot: snapshot(),
             households: rows.map(x => Object.assign({ name: x.name, kind: x.kind, owners: x.owners, resp: x.resp, home: x.home, daily_return: x.daily_return, weight: x.weight, allowed: x.allowed }, SP.some(s => x.herd[s]) ? { herd: x.herd } : {})) });
+          live[r.id] = Object.fromEntries(r.links.map(l => [l.id, l.key]));
           remember(r.id, "org", r.organizer_key, { title: r.state.title, village: r.state.village.name, links: Object.fromEntries(r.links.map(l => [l.id, l.key])) });
           N = null;
           location.hash = linkOf(r.id, "org", r.organizer_key).split("#")[1];
@@ -521,7 +525,9 @@
         + obsCard() + (V.plan ? planCard() : "") + settingsCard() + historyCard() + limits());
       bindOrg();
     }
-    const keyOf = hid => { const o = rec(V.id, "org"); return o && o.links && o.links[hid]; };
+    // ключи этого открытия держим и в памяти: личные ссылки доступны, даже если браузер не даёт их сохранить
+    const live = {};
+    const keyOf = hid => { const o = rec(V.id, "org"); return (o && o.links && o.links[hid]) || (live[V.id] || {})[hid]; };
     const yardRow = h => `<div class="kyard" data-hid="${esc(h.id)}"><div class="kyard-t"><b>${esc(h.name)}</b>${ansChip(h)}</div>
       <small>${whoLine(h)}</small><small>${esc(herdLine(h.herd))} · ${tt("hs." + h.herd_status)}${V.status === "collect" ? ` · ${tt(h.joined ? "o.came" : "o.notYet")}` : ""}</small>
       ${(c => (c.length ? `<small class="kwarn">${tt("o.herdChanged", { n: c.length })}: ${esc(herdLine(c[c.length - 1].from))} → ${esc(herdLine(c[c.length - 1].to))}</small>` : ""))(changes(h))}
