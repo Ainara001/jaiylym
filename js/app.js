@@ -185,7 +185,8 @@
   function ensureMap() {
     if (S.map || S.noLeaflet) return;
     if (!window.L) { S.noLeaflet = true; $("#map").hidden = true; $("#schemeMap").hidden = false; return; }
-    S.map = L.map("map", { zoomControl: true, attributionControl: true, maxZoom: 19, zoomSnap: 0.25 }).setView(KZ, phone() ? 4 : 5);   // пока село не выбрано — вся страна
+    S.map = L.map("map", { zoomControl: false, attributionControl: true, maxZoom: 19, zoomSnap: 0.25 }).setView(KZ, phone() ? 4 : 5);   // пока село не выбрано — вся страна
+    L.control.zoom({ position: "topright" }).addTo(S.map);      // +/− справа: слева внизу легенда, она не закрывает кнопки
     // снимки Esri есть до 17 уровня; дальше карта увеличивает их, чтобы можно было точнее ставить точки
     const tiles = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
       maxNativeZoom: 17, maxZoom: 19, attribution: "Esri World Imagery · Sentinel-2 ESA Copernicus · © OpenStreetMap",
@@ -883,7 +884,7 @@
       S.pl = solve(S.plots, S.herds);
     } catch (e) { status(t("err.calc") + ": " + e.message, { err: true }); return; }
     const past = zoneHa();
-    $("#vtitle").innerHTML = `<b>${esc(S.D.village.name)}</b> · Sentinel-2, ${S.D.source.year} · ${fmt(past)} ${t("common.ha")} ${src(S.zone && S.zone.mode !== "all" ? "input" : "sat")}${freshness()}`;
+    $("#vtitle").innerHTML = `<b>${esc(S.D.village.name)}</b><span class="vmeta">${t("map.vmeta", { ha: fmt(past), y: S.D.source.year })}${freshness()}</span>`;
     metric("plan", { status: S.pl.status, before: J.hayTonnes(S.cur.deficit_kg, S.P), after: J.hayTonnes(S.pl.deficit_kg, S.P),
       over: S.cur.overloaded, missing: S.plots.filter(p => p.ndvi == null).length, herds: S.herds.length });
     paintMap();
@@ -895,7 +896,8 @@
     const at = meta.calculated_at, days = at ? (Date.now() - Date.parse(at)) / 864e5 : null;
     const when = at ? dateStr(at, false) : t("meta.unknownDate");
     const stale = days != null && days > 30;
-    return ` · <span class="fresh${stale || S.fromCache ? " stale" : ""}" title="${esc(t("meta.calc"))}">${t("meta.calcShort", { d: when })}${S.fromCache ? " · " + t("meta.fromCache") : ""}</span>`;
+    if (!at && !S.fromCache) return "";                 // дата расчёта неизвестна — не загромождаем строку
+    return ` · <span class="fresh${stale || S.fromCache ? " stale" : ""}" title="${esc(t("meta.calc"))}">${t("meta.calcShort", { d: when.replace(/\.\d{4}$/, "") })}${S.fromCache ? " · " + t("meta.fromCache") : ""}</span>`;
   }
 
   function plotLabel(p) {
@@ -943,10 +945,10 @@
       }
     }
     const lg = $("#legend");
-    if (!lg.dataset.bound) {      // на телефоне легенда свёрнута, раскрывается нажатием
+    if (!lg.dataset.bound) {      // легенда свёрнута (не закрывает карту), раскрывается нажатием; выбор запоминается
       lg.dataset.bound = "1";
-      lg.classList.toggle("collapsed", window.matchMedia("(max-width: 860px)").matches);
-      lg.addEventListener("click", () => lg.classList.toggle("collapsed"));
+      lg.classList.toggle("collapsed", !C.ls.get("jaiylym:legend", false));
+      lg.addEventListener("click", () => { lg.classList.toggle("collapsed"); C.ls.set("jaiylym:legend", !lg.classList.contains("collapsed")); });
       lg.setAttribute("role", "button"); lg.tabIndex = 0;
       lg.addEventListener("keydown", e => { if (e.key === "Enter") lg.classList.toggle("collapsed"); });
     }
@@ -2104,7 +2106,8 @@
     if (b.well) todo.push(t("brief.do.well", { id: esc(b.well.plot) }));
     if (b.deficitT >= 1) todo.push(t("brief.do.reduce"));
     todo.push(t("brief.do.bot"));
-    return `${demoBanner()}${cityNote()}${S.zone && S.zone.mode !== "all" ? "" : zoneCard()}${ngNote()}<div class="brief"><span class="brief-status st-${st[0]}">${t(st[1])}</span>
+    return `${demoBanner()}${cityNote()}${S.zone && S.zone.mode !== "all" ? "" : zoneCard()}${ngNote()}<div class="brief"><div class="brief-top"><span class="brief-status st-${st[0]}">${t(st[1])}</span>
+      <button type="button" class="btn btn-soft btn-sm" id="aiTopBtn" title="${esc(t("brief.aiSimpleT"))}">${ic("spark")} ${t("brief.aiSimple")}</button></div>
       ${lines.map(x => `<p>${x}</p>`).join("")}
       <h3 style="margin:12px 0 2px;font-size:15px">${t("brief.do")}</h3>
       <ul class="todo">${todo.slice(0, 4).map(x => `<li>${ic("check")}<span>${x}</span></li>`).join("")}</ul>
@@ -2297,6 +2300,9 @@
     };
     const add = $("#addDemo", el); if (add) add.onclick = () => { S.herds = demoHerds(); render(); };
     const add0 = $("#addHerd0", el); if (add0) add0.onclick = () => { addHerd(); renderPane("herds"); };
+    // наверху «Главного»: та же сводка ИИ простыми словами — прокрутить к ней и запустить
+    const top = $("#aiTopBtn", el);
+    if (top) top.onclick = () => { const box = $("#aiBox", el), b = $("#aiBriefBtn", el); if (box) box.scrollIntoView({ behavior: "smooth", block: "center" }); if (b && !b.disabled && !(S.aiBrief && S.aiBrief.key === briefKey())) b.click(); };
     const btn = $("#aiBriefBtn", el);
     if (btn) btn.onclick = async () => {
       btn.disabled = true;
