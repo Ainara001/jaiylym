@@ -22,7 +22,7 @@
     const ago = iso => { const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000)); return m < 1 ? tt("justNow") : m < 60 ? tt("minAgo", { n: m }) : m < 1440 ? tt("hAgo", { n: Math.round(m / 60) }) : tt("dAgo", { n: Math.round(m / 1440) }); };
     const verdictChip = v => `<span class="kvd kvd-${esc(v)}">${tt("v." + v)}</span>`;
     function factText(x) {
-      const p = Object.assign({}, x, { names: (x.names || []).map(esc).join(", ") });
+      const p = Object.assign({}, x, { names: (x.names || []).map(esc).join(", ") }, x.d != null ? { d: String(x.d).replace(".", ",") } : {});   // км с запятой, как везде
       return tt("f." + x.k, p);
     }
     const listOf = (arr, cls, sign) => (arr.length ? `<ul class="kpc ${cls}">${arr.map(x => `<li><span aria-hidden="true">${sign}</span> ${factText(x)}</li>`).join("")}</ul>` : "");
