@@ -348,7 +348,29 @@ async function organizer(b, name) {
   assert.deepEqual(errors, [], "ошибки JavaScript");
 }
 
+/** Хранилище браузера забито посчитанными сёлами: ссылки согласования всё равно сохраняются. */
+async function storage(b) {
+  const errors = [], org = await open(b, errors, { viewport: { width: 360, height: 740 } }, "хранилище");
+  await org.goto(base + "/#/kelisim");
+  await org.evaluate(() => { let n = 0; try { for (;;) localStorage.setItem(`jaiylym:v3:${50 + n / 1000},70.000`, "x".repeat(100000) + n++); } catch (_) {} try { for (let i = 0; ; i++) localStorage.setItem(`jaiylym:v3:40.${100 + i},70.000:ng`, "x".repeat(200)); } catch (_) {} });
+  await org.click("#kelDemo");
+  await org.waitForSelector("#kelCreate");
+  await org.click("#kelCreate");
+  await org.waitForSelector("#kStart");
+  await org.reload();
+  await org.waitForSelector(".kyard");
+  await org.click(".kyard:nth-of-type(1) [data-link]");
+  await org.waitForSelector("dialog[open] .kqr svg");
+  await org.goto(base + "/?z=1#/kelisim");
+  await org.waitForSelector(".list .row");
+  assert.deepEqual(errors, [], "ошибки JavaScript");
+}
+
 for (const name of BROWSERS) {
+  test(`${name}: Келісім — хранилище браузера заполнено`, { skip: !pw && "playwright не установлен", timeout: 60000 }, async () => {
+    const b = await pw[name].launch();
+    try { await storage(b); } finally { await b.close(); }
+  });
   test(`${name}: Келісім — организатор на телефоне`, { skip: !pw && "playwright не установлен", timeout: 120000 }, async () => {
     const b = await pw[name].launch();
     try { await organizer(b, name); } finally { await b.close(); }

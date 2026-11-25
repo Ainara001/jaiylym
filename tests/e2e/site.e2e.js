@@ -164,6 +164,13 @@ async function newcomer(page, label) {
   await page.goto(base + "#/map?lat=51.2&lon=71.2&name=Без%20зон");
   await page.waitForFunction(() => window.JaiylymApp.S.D && window.JaiylymApp.S.D.village.name === "Без зон" && window.JaiylymApp.S.pl);
   assert.match(await page.textContent("#ngNote"), /ещё загружаются из OpenStreetMap/, label + ": пока зон нет — честная пометка");
+  // испорченная ссылка — сразу сказано, расчёт не запускается; разметка в сводке сценария не исполняется
+  await page.goto(base + "?bad=1#/map?lat=999&lon=1e308&name=x");
+  await page.waitForFunction(() => /неверными координатами/.test((document.querySelector(".start") || {}).textContent || ""));
+  await page.evaluate(() => { const x = `<img src=x onerror="window.__xss=1">`; window.Client.saveScenario({ name: x, village: { name: x, lat: 50, lon: 70 }, herds: [], water: [], summary: { overloaded_before: x, overloaded_after: x, excess_t: x, deficit_t: x } }); window.Client.addHistory({ kind: x, village: { name: x, lat: 1, lon: 1 }, summary: { overloaded_before: x } }); location.hash = "#/scenarios"; });
+  await page.waitForSelector("#scPage .list .row"); await page.waitForTimeout(300);
+  assert.equal(await page.evaluate(() => window.__xss), undefined, label + ": разметка из сводки не исполняется");
+  await page.evaluate(() => { localStorage.removeItem("jaiylym:guest:scenarios"); localStorage.removeItem("jaiylym:guest:history"); });
   // главная: оба примера, первым — Бесколь
   await page.goto(base + "#/home");
   await page.waitForSelector("#exBtns a");
