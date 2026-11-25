@@ -1065,3 +1065,6 @@ main .kans .btn { min-height: 54px; font-size: 16px; padding-inline: 10px; }
   .kchat-log { height: max(440px, calc(100vh - 380px)); }
 }
 @media (max-width: 700px) { .klsteps { grid-template-columns: 1fr; } }
+/* легенда карты — вверху слева, чтобы её сразу видели (+/− справа, режимы по центру) */
+.legend, .legend.collapsed { top: 10px; bottom: auto !important; }
+@media (max-width: 860px) { .legend, .legend.collapsed { top: 58px; } }   /* на телефоне — под переключателем «У села / План / Трава» */
