@@ -2626,7 +2626,11 @@
     bindSearch($("#mapSearch"), $("#mapQ"));
     $("#pickBtn").onclick = () => { if (S.noLeaflet) { toast(t("map.fallback"), true); return; } endDraw(); setPicking(!S.picking); };
     // числовые поля: при нажатии выделяем значение (чтобы «0» заменялся, а не дописывался), лишние нули убираем
-    document.addEventListener("focusin", e => { if (e.target.matches && e.target.matches('input[type="number"]')) setTimeout(() => { try { e.target.select(); } catch (_) {} }, 0); });
+    document.addEventListener("focusin", e => {
+      const el = e.target, was = el.value;
+      // человек уже перешёл в другое поле или начал печатать — выделение только испортило бы ввод
+      if (el.matches && el.matches('input[type="number"]')) setTimeout(() => { try { if (document.activeElement === el && el.value === was) el.select(); } catch (_) {} }, 0);
+    });
     document.addEventListener("input", e => {
       const el = e.target;
       if (el.matches && el.matches('input[type="number"]') && /^0\d/.test(el.value)) el.value = String(Math.round(+el.value));
