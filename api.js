@@ -9,10 +9,6 @@
  *   3. Сайт опрашивает GET /auth/poll?nonce=… и получает токен сессии (30 дней).
  *      На сервере хранится только хэш токена. Пароли нигде не хранятся.
  *
- * Роли проверяются на сервере при каждом запросе:
- *   farmer      — любой вошедший: свой профиль, свои сценарии и история;
- *   coordinator — Telegram ID указан в переменной окружения COORDINATOR_IDS (через запятую):
- *                 видит хозяйства своих сёл, публикует общий план села.
  */
 const crypto = require("crypto");
 const PL = require("./web/pipeline.js");
@@ -238,8 +234,6 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, onDelet
   const origins = new Set(allowedOrigins || []);
   const hits = new Map();   // простое ограничение частоты запросов по IP
 
-  const coordinatorIds = () => new Set(String(process.env.COORDINATOR_IDS || "").split(",").map(s => s.trim()).filter(Boolean));
-  const roleOf = u => (u && coordinatorIds().has(String(u.uid)) ? "coordinator" : "farmer");
 
   // ---------- HTTP-помощники ----------
   function cors(req, res) {
@@ -312,11 +306,10 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, onDelet
 
   // ---------- представления данных ----------
   const pubUser = u => ({
-    uid: u.uid, name: u.name, username: u.username || null, login: u.login || null, via: u.login ? "password" : "telegram", role: roleOf(u), created: u.created,
-    farm: u.farm || null, pastures: u.pastures || [], villages: roleOf(u) === "coordinator" ? (u.villages || []) : [],
+    uid: u.uid, name: u.name, username: u.username || null, login: u.login || null, via: u.login ? "password" : "telegram", role: "farmer", created: u.created,
+    farm: u.farm || null, pastures: u.pastures || [], villages: [],
   });
   const farmVk = u => (u.farm && u.farm.village ? vkey(u.farm.village.lat, u.farm.village.lon) : null);
-  const canSeeVillage = (u, vk) => farmVk(u) === vk || (roleOf(u) === "coordinator" && (u.villages || []).some(v => v.vk === vk));
 
   function cleanFarm(b) {
     const v = b.village || {};
@@ -682,24 +675,14 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, onDelet
 
       // --- сценарии: свои + общие планы сёл, к которым есть доступ ---
       if (p === "/api/scenarios" && req.method === "GET") {
-        const shared = [];
-        for (const [vk, list] of Object.entries(st().villagePlans)) if (canSeeVillage(u, vk)) shared.push(...list.map(s => Object.assign({ shared: true }, s)));
-        return json(res, 200, { own: u.scenarios || [], shared }), true;
+        return json(res, 200, { own: u.scenarios || [] }), true;
       }
       if (p === "/api/scenarios" && req.method === "POST") {
         const b = await body(req);
         const dup = b && b.request_id && (u.scenarios || []).concat(...Object.values(st().villagePlans)).find(x => x.request_id === b.request_id && x.owner === u.uid);
         if (dup) return json(res, 200, Object.assign({ duplicate: true }, dup)), true;    // повторная отправка того же запроса
         const s = cleanScenario(b, u);
-        if (b.shared) {
-          const vk = vkey(s.village.lat, s.village.lon);
-          if (roleOf(u) !== "coordinator" || !(u.villages || []).some(v => v.vk === vk))
-            return json(res, 403, { error: "общий план села может публиковать только координатор этого села" }), true;
-          s.shared = true;
-          st().villagePlans[vk] = [s].concat(st().villagePlans[vk] || []).slice(0, 10);
-        } else {
-          u.scenarios = [s].concat(u.scenarios || []).slice(0, 30);
-        }
+        u.scenarios = [s].concat(u.scenarios || []).slice(0, 30);
         save();
         return json(res, 200, s), true;
       }
@@ -731,35 +714,6 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, onDelet
         return json(res, 200, e), true;
       }
 
-      // --- координатор ---
-      if (p.startsWith("/api/coord")) {
-        if (roleOf(u) !== "coordinator") return json(res, 403, { error: "раздел доступен только координатору (акимату)" }), true;
-        if (p === "/api/coord/villages" && req.method === "POST") {
-          const v = (await body(req)).village || {};
-          if (!coordOk(v.lat, v.lon)) return json(res, 400, { error: "укажите село" }), true;
-          const vk = vkey(v.lat, v.lon);
-          u.villages = (u.villages || []).filter(x => x.vk !== vk).concat([{ vk, name: str(v.name, 80), lat: +(+v.lat).toFixed(5), lon: +(+v.lon).toFixed(5) }]).slice(0, 30);
-          save();
-          return json(res, 200, pubUser(u)), true;
-        }
-        if (p === "/api/coord/villages" && req.method === "DELETE") {
-          const vk = url.searchParams.get("vk");
-          u.villages = (u.villages || []).filter(x => x.vk !== vk);
-          save();
-          return json(res, 200, pubUser(u)), true;
-        }
-        if (p === "/api/coord/farms" && req.method === "GET") {
-          const vk = url.searchParams.get("vk");
-          if (!(u.villages || []).some(v => v.vk === vk)) return json(res, 403, { error: "это село не в вашем списке" }), true;
-          const farms = Object.values(st().users).filter(x => farmVk(x) === vk).map(x => ({
-            uid: x.uid, owner: x.name, name: x.farm.name, sheep: x.farm.sheep, goats: x.farm.goats, cattle: x.farm.cattle,
-            horses: x.farm.horses, daily_return: x.farm.daily_return, home: x.farm.home, plots: x.farm.plots, updated: x.farm.updated,
-            pastures: (x.pastures || []).map(q => ({ id: q.id, name: q.name, geometry: q.geometry, area_ha: q.area_ha, water: q.water, ndvi: q.stats && q.stats.ndvi,
-              ndvi_provenance: (q.stats && q.stats.provenance) || "client_reported" })),
-          }));
-          return json(res, 200, { vk, farms }), true;
-        }
-      }
       return json(res, 404, { error: "нет такого адреса" }), true;
     } catch (e) {
       const known = Number.isInteger(e.code) && e.code >= 400 && e.code < 600;      // у сбоев сети code — строка, это не ответ человеку
@@ -768,7 +722,7 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, onDelet
     }
   }
 
-  return { handle, confirmLogin, loginInfo, roleOf, kelisim };
+  return { handle, confirmLogin, loginInfo, kelisim };
 }
 
 module.exports = { createApi, aiTake, aiContextIssues, fixWebLabels, searchAllowed, searchUsed, SEARCH_RULE, needsWeb, todayText };
