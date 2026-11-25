@@ -154,6 +154,14 @@ test("чужой участок: корма у соседа столько же,
   assert.deepEqual(K.plotsOf(e.variants.room.plan.routes.b), ["Б-С"], "сосед остался");
 });
 
+test("сезон по умолчанию: текущий, после его конца — следующий; старые согласования — по дате создания", () => {
+  assert.equal(K.defaultSeason(Date.parse("2026-03-01"), {}), 2026);
+  assert.equal(K.defaultSeason(Date.parse("2026-07-01"), {}), 2026);
+  assert.equal(K.defaultSeason(Date.parse("2026-11-25"), {}), 2027);
+  assert.equal(K.seasonOf({ created: "2026-11-25T10:00:00Z", snapshot: { params: null } }), 2027);
+  assert.equal(K.seasonOf({ season: 2028, created: "2026-11-25T10:00:00Z", snapshot: { params: null } }), 2028);
+});
+
 test("60 дворов: последствия считаются за приемлемое время", () => {
   const r = rng(5), D = loadExamples()[0], plots = N.attach(NG.apply(D.plots, D.nograze), { region: "SKO" });
   const k = kel(plots, households(r, plots, 60, 200)), h = busy(k)[0], t = Date.now();

@@ -1,4 +1,4 @@
-/* Jaiylym — экраны Келісім: согласование плана выпаса между дворами.
+/* Jaiylym — экраны Келісім: согласование плана выпаса. Участник (в коде — household, hh, «двор») — хозяйство или общее стадо.
  * Расчёт и последствия — web/kelisim.js (в браузере, без сети), состояние и ответы — сервер (kelisim.js).
  * Адреса: #/kelisim — список и начало; #/kelisim?new=1 — новое; ?id=…&o=… — организатор; ?id=…&d=… — двор по личной ссылке.
  * Ключи ссылок хранятся только в этом браузере; на сервере — их SHA-256. */
@@ -32,15 +32,21 @@
     const plotName = id => `${tt(id.startsWith("Б") ? "near" : "far")}, ${tt("dir." + DIRS.indexOf(dirOf(id)))}`;
     const nw = id => `<span class="nw">${esc(id)}</span>`;                        // код участка не рвётся по дефису
     const plotFull = id => `${plotName(id)} <span class="nw">(${esc(id)})</span>`;
+    const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
     const low = s => (s === s.toUpperCase() ? s : s.toLowerCase());            // «овцы», но «КРС»
     const herdLine = h => { const s = SP.filter(k => h && h[k]).map(k => `${low(t("herds." + k))} ${fmt(h[k])}`); return s.length ? s.join(", ") : tt("noHerd"); };
     const changes = h => h.herd_log.filter(x => SP.some(s => x.from && x.from[s]));   // первый ввод скота — не изменение
     const many = ids => (ids.length > 2 ? ids.map(nw).join(", ") : ids.map(plotFull).join(", ")) || "—";      // длинный список участков — кодами
     const span = s => (s.from === s.to ? day(s.from) : `${day(s.from)} – ${day(s.to)}`);
     const day = n => {
-      const P = J.params(V.snapshot.params || null), [m, d] = String(P.season_start || "05-01").split("-").map(Number), x = new Date(Date.UTC(2027, m - 1, d + n - 1));
+      const P = J.params(V.snapshot.params || null), [m, d] = String(P.season_start || "05-01").split("-").map(Number), x = new Date(Date.UTC(V.season, m - 1, d + n - 1));
       return `${String(x.getUTCDate()).padStart(2, "0")}.${String(x.getUTCMonth() + 1).padStart(2, "0")}`;
     };
+    const tons = x => (x >= 10 ? fmt(x) : fmt1(x));
+    const hay = hid => { const x = V.plan ? K.hayOf(V, V.plan, hid) : 0; return x >= 0.1 ? tt("hayShort", { t: tons(x) }) : ""; };
+    /** Кто это и кто отвечает: «общее стадо, хозяев 30, отвечает пастух». */
+    const whoLine = h => `${tt("kind." + h.kind)}${h.kind === "common" ? `, ${h.owners ? tt("ownersN", { n: h.owners }) : tt("ownersNo")}` : ""}, ${tt("resp." + h.resp)}`;
+    const seasonLine = () => tt("season", { y: V.season, a: day(1), b: day(J.params(V.snapshot.params || null).season_days) });
     const dOnly = s => (s ? s.split("-").reverse().join(".") : "");
     const nameOf = id => { const h = V.households.find(x => x.id === id); return h ? h.name : tt("gone"); };
     const me = () => V.households.find(h => h.id === V.me);
@@ -190,13 +196,13 @@
     }
 
     // ---------- новое согласование ----------
-    const blank = () => ({ name: "", herd: { sheep: 0, goats: 0, cattle: 0, horses: 0 }, home: "Б-С", daily_return: false, weight: 1, allowed: [] });
+    const blank = () => ({ name: "", kind: "farm", owners: null, resp: "owner", herd: { sheep: 0, goats: 0, cattle: 0, horses: 0 }, home: "Б-С", daily_return: false, weight: 1, allowed: [] });
     function draft() {
       const key = S.D.village.lat + "," + S.D.village.lon;
       if (N && N.key === key) return N;
-      const rows = S.herds.filter(h => !h.from_bot).map(h => ({ name: h.name, herd: Object.fromEntries(SP.map(s => [s, +h[s] || 0])), home: h.home, daily_return: !!h.daily_return, weight: +h.weight || 1, allowed: h.allowed_plots || [], demo: !!h.demo }));
+      const rows = S.herds.filter(h => !h.from_bot).map(h => ({ name: h.name, kind: h.kind === "common" ? "common" : "farm", owners: +h.owners || null, resp: h.kind === "common" ? "herder" : "owner", herd: Object.fromEntries(SP.map(s => [s, +h[s] || 0])), home: h.home, daily_return: !!h.daily_return, weight: +h.weight || 1, allowed: h.allowed_plots || [], demo: !!h.demo }));
       while (rows.length < 2) rows.push(blank());
-      return (N = { key, title: tt("defTitle", { v: S.D.village.name }), rows, rule: "share", deadline: "" });
+      return (N = { key, title: tt("defTitle", { v: S.D.village.name }), rows, rule: "share", deadline: "", season: K.defaultSeason(Date.now(), S.P) });
     }
     async function newPage() {
       if (!S.D) {
@@ -215,16 +221,16 @@
         <div class="card"><h2>${tt("yards")}</h2><p>${tt("yardsD")}</p><div id="kelRows">${n.rows.map(newRow).join("")}</div>
           <button type="button" class="btn btn-soft" id="kelAdd">${ic("plus")} ${tt("addYard")}</button></div>
         <div class="card"><h2>${tt("rules")}</h2>${ruleHtml(n.rule, "kelRule")}
-          <div class="formgrid kform"><label class="field span2">${tt("name")}<input id="kelTitle" maxlength="80" value="${esc(n.title)}"></label><label class="field span2">${tt("deadline")}<input type="date" id="kelDeadline" value="${esc(n.deadline)}"></label></div>
+          <div class="formgrid kform"><label class="field span2">${tt("name")}<input id="kelTitle" maxlength="80" value="${esc(n.title)}"></label><label class="field span2">${tt("seasonQ")}<select id="kelSeason">${[0, 1].map(i => K.defaultSeason(Date.now(), S.P) + i).map(y => `<option value="${y}" ${n.season === y ? "selected" : ""}>${y}</option>`).join("")}</select></label><label class="field span2">${tt("deadline")}<input type="date" id="kelDeadline" value="${esc(n.deadline)}"></label></div>
           <p class="fine">${tt("deadlineD")}</p></div>
         <p class="note">${tt("snapNote", { d: S.D.source.dates ? S.D.source.dates.length : 0, y: S.D.source.year })}</p>
         <p class="kerr" id="kelErr" role="alert" hidden></p>
         <button type="button" class="btn btn-primary kbig" id="kelCreate">${tt("create")}</button><p class="fine">${ic("shield")}<span>${tt("noRights")} ${tt("noPhones")}</span></p>`);
       const grab = () => {
-        $$("#kelRows .krow").forEach((r, i) => { const x = n.rows[i]; x.name = $("[data-f=name]", r).value.trim(); readHerd(r, x); });
-        n.title = $("#kelTitle").value.trim(); n.deadline = $("#kelDeadline").value; n.rule = ($("[name=kelRule]:checked") || {}).value || "share";
+        $$("#kelRows .krow").forEach((r, i) => { const x = n.rows[i]; x.name = $("[data-f=name]", r).value.trim(); readHerd(r, x); readWho(r, x); });
+        n.title = $("#kelTitle").value.trim(); n.season = +$("#kelSeason").value; n.deadline = $("#kelDeadline").value; n.rule = ($("[name=kelRule]:checked") || {}).value || "share";
       };
-      el().oninput = () => { if ($("#kelTitle")) grab(); };
+      el().oninput = () => { if (!$("#kelTitle")) return; grab(); $$("#kelRows .krow").forEach((r, i) => { $("summary span", r).innerHTML = rowSum(n.rows[i]); }); };
       $("#kelZDraw").onclick = () => { grab(); X.startZone(); };
       $("#kelZOff").onclick = () => { grab(); X.closedDlg(); };
       $("#kelAdd").onclick = () => { grab(); n.rows.push(blank()); newPage().then(() => { const x = $$("#kelRows [data-f=name]"); x[x.length - 1].focus(); }); };
@@ -238,8 +244,8 @@
         if (busy) return;
         busy = true; b.disabled = true; b.innerHTML = spin(tt("creating"));
         try {
-          const r = await C.kel("POST", "", "", { title: n.title, rule: n.rule, deadline: n.deadline || undefined, snapshot: snapshot(),
-            households: rows.map(x => Object.assign({ name: x.name, home: x.home, daily_return: x.daily_return, weight: x.weight, allowed: x.allowed }, SP.some(s => x.herd[s]) ? { herd: x.herd } : {})) });
+          const r = await C.kel("POST", "", "", { title: n.title, season: n.season, rule: n.rule, deadline: n.deadline || undefined, snapshot: snapshot(),
+            households: rows.map(x => Object.assign({ name: x.name, kind: x.kind, owners: x.owners, resp: x.resp, home: x.home, daily_return: x.daily_return, weight: x.weight, allowed: x.allowed }, SP.some(s => x.herd[s]) ? { herd: x.herd } : {})) });
           remember(r.id, "org", r.organizer_key, { title: r.state.title, village: r.state.village.name, links: Object.fromEntries(r.links.map(l => [l.id, l.key])) });
           N = null;
           location.hash = linkOf(r.id, "org", r.organizer_key).split("#")[1];
@@ -253,7 +259,15 @@
     }
     const newRow = (r, i) => `<div class="krow"><div class="krow-h"><label class="field"><span>${tt("yardName")} ${i + 1}${r.demo ? ` <span class="tag tag-demo">${t("herds.demo")}</span>` : ""}</span><input data-f="name" maxlength="60" value="${esc(r.name)}" placeholder="${esc(tt("yardPh"))}"></label>
       <button type="button" class="btn btn-ghost btn-icon2" data-rmrow="${i}" aria-label="${tt("rmYard")}">${ic("x")}</button></div>
-      <details data-d="r${i}"><summary><span>${tt("herd")}: ${SP.some(s => r.herd[s]) ? esc(herdLine(r.herd)) : tt("selfHerd")}</span></summary>${herdForm(r)}</details></div>`;
+      <details data-d="r${i}"><summary><span>${rowSum(r)}</span></summary>${whoForm(r, "kw" + i)}${herdForm(r)}</details></div>`;
+    const rowSum = r => `${cap(tt("kind." + r.kind))}. ${tt("herd")}: ${SP.some(s => r.herd[s]) ? esc(herdLine(r.herd)) : tt("selfHerd")}`;
+    const whoForm = (x, nm) => `<div class="kwho"><div class="kchips" role="radiogroup" aria-label="${tt("whoQ")}">${K.KINDS.map(k => `<label class="chip"><input type="radio" name="${nm}" data-k="${k}" ${x.kind === k ? "checked" : ""}>${cap(tt("kind." + k))}</label>`).join("")}</div>
+      <div class="kwho-f"><label class="field kowners">${tt("ownersQ")}<input type="number" inputmode="numeric" min="2" max="500" step="1" data-f="owners" value="${x.owners || ""}"></label><label class="field">${tt("respQ")}<select data-f="resp">${K.RESP.map(r => `<option value="${r}" ${x.resp === r ? "selected" : ""}>${tt("respO." + r)}</option>`).join("")}</select></label></div></div>`;
+    function readWho(r, x) {
+      const c = $("[data-k]:checked", r); if (!c) return;
+      x.kind = c.dataset.k; x.resp = $("[data-f=resp]", r).value;
+      const n = Math.round(+$("[data-f=owners]", r).value || 0); x.owners = x.kind === "common" && n > 0 ? Math.min(500, n) : null;
+    }
     const herdForm = x => `<div class="herd-grid">${SP.map(s => `<label class="field">${t("herds." + s)}<input type="number" inputmode="numeric" min="0" max="20000" step="1" data-h="${s}" value="${(x.herd && x.herd[s]) || 0}"></label>`).join("")}</div>
       <label class="field kf">${tt("home")}<select data-f="home">${DIRS.map(d => `<option value="Б-${d}" ${x.home === "Б-" + d ? "selected" : ""}>${tt("dir." + DIRS.indexOf(d))}</option>`).join("")}</select></label>
       <label class="check kcheck"><input type="checkbox" data-f="daily" ${x.daily_return ? "checked" : ""}> <span>${tt("daily")}</span></label>`;
@@ -299,14 +313,14 @@
     const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
 
     // ---------- общее для обоих экранов ----------
-    const head = extra => `<div class="notebar" id="kelBar" role="status" hidden></div><div class="khead"><h1>${esc(V.title)}</h1><p class="fine">${esc(V.village.name)}${V.deadline ? ` · ${tt("until", { d: dOnly(V.deadline) })}` : ""}${extra || ""}</p></div>`;
+    const head = extra => `<div class="notebar" id="kelBar" role="status" hidden></div><div class="khead"><h1>${esc(V.title)}</h1><p class="fine">${esc(V.village.name)} · ${seasonLine()}${V.deadline ? ` · ${tt("until", { d: dOnly(V.deadline) })}` : ""}${extra || ""}</p></div>`;
     const limits = () => `<p class="fine klim">${ic("shield")}<span>${tt("noRights")} ${tt("estimate")}</span></p>`;
     const shareBar = s => `<span class="kbar"><i style="width:${Math.round(Math.min(1, s) * 100)}%" class="${s >= 0.995 ? "ok" : s >= 0.8 ? "mid" : "low"}"></i></span>`;
     function everyone() {
       return `<details data-d="all" class="card kdet"><summary><span>${tt("everyone", { n: V.households.length })}</span></summary><p class="fine">${tt("everyoneD")}</p>
         <ul class="list">${V.households.map(h => `<li class="krowp"><div><b>${esc(h.name)}${h.id === V.me ? ` <span class="tag tag-mine">${tt("you")}</span>` : ""}</b>${ansChip(h)}</div>
-          <small>${esc(herdLine(h.herd))} · ${tt("hs." + h.herd_status)}</small>${changes(h).map(x => `<small class="kwarn">${dateStr(x.at, false)}: ${esc(herdLine(x.from))} → ${esc(herdLine(x.to))}</small>`).join("")}
-          ${V.plan ? `<div class="kshare">${shareBar(V.plan.share[h.id])}<small>${tt("feedShort", { p: pct(V.plan.share[h.id]), d: V.plan.days[h.id], s: V.plan.season_days })}</small></div>` : ""}</li>`).join("")}</ul>
+          <small>${whoLine(h)}</small><small>${esc(herdLine(h.herd))} · ${tt("hs." + h.herd_status)}</small>${changes(h).map(x => `<small class="kwarn">${dateStr(x.at, false)}: ${esc(herdLine(x.from))} → ${esc(herdLine(x.to))}</small>`).join("")}
+          ${V.plan ? `<div class="kshare">${shareBar(V.plan.share[h.id])}<small>${tt("feedShort", { p: pct(V.plan.share[h.id]), d: V.plan.days[h.id], s: V.plan.season_days })}${hay(h.id) ? ` · ${hay(h.id)}` : ""}</small></div>` : ""}</li>`).join("")}</ul>
         ${V.herds.over.map(o => `<p class="note warn">${tt("over", { s: low(t("herds." + o.species)), a: fmt(o.declared), b: fmt(o.official) })}</p>`).join("")}</details>`;
     }
     function routeHtml(hid) {
@@ -366,7 +380,7 @@
     function hhCollect(h) {
       if (V.expired) return `<div class="card"><p class="note warn">${tt("expired", { d: dOnly(V.deadline) })}</p></div>`;
       return `<div class="card">${h.joined ? `<p class="kdone">${ic("check")} ${tt("joined")}</p>` : `<p>${tt("collect")}</p>`}
-        <h2>${tt("yourHerd")}</h2><form id="kelJoin"><label class="field kf">${tt("yardName")}<input data-f="name" maxlength="60" value="${esc(h.name)}"></label><p class="fine">${tt("noPhones")}</p>${herdForm(h)}
+        <h2>${tt("yourHerd")}</h2><form id="kelJoin"><label class="field kf">${tt("nameQ")}<input data-f="name" maxlength="60" value="${esc(h.name)}"></label><p class="fine">${tt("noPhones")}</p>${whoForm(h, "kwMe")}${herdForm(h)}
         <button class="btn btn-primary kbig">${tt(h.joined ? "saveAgain" : "sendHerd")}</button></form><p class="fine">${tt("herdOpen")}</p></div>`;
     }
     function bindCollect(h) {
@@ -374,11 +388,11 @@
       form.oninput = () => { dirty = true; };
       form.onsubmit = async e => {
         e.preventDefault();
-        const x = {}; readHerd(form, x);
+        const x = {}; readHerd(form, x); readWho(form, x);
         const name = $("[data-f=name]", form).value.trim();
         if (!name) { toast(tt("err.name"), true); return; }
         if (!SP.some(s => x.herd[s])) { toast(tt("err.zero"), true); return; }
-        if (await act($("button", form), "/me", { name, herd: x.herd, home: x.home, daily_return: x.daily_return }, tt("savedOk"))) { dirty = false; draw(); scrollTo(0, 0); }
+        if (await act($("button", form), "/me", { name, kind: x.kind, owners: x.owners, resp: x.resp, herd: x.herd, home: x.home, daily_return: x.daily_return }, tt("savedOk"))) { dirty = false; draw(); scrollTo(0, 0); }
       };
     }
     function hhPlan(h) {
@@ -387,8 +401,8 @@
       const changed = V.versions.length > 1 && !closed, v0 = V.versions[V.versions.length - 2], d = v0 && v0.share[h.id] != null ? s - v0.share[h.id] : 0;
       const note = changed ? `<p class="note ${h.answer === "pending" ? "warn" : ""}"><b>${h.answer === "pending" ? tt("changed", { n: V.version }) : h.carried ? tt("carried", { n: V.version }) : tt("newVer", { n: V.version })}</b> ${whyVersion()} ${Math.abs(d) >= 0.01 ? tt("shareWas", { a: pct(v0.share[h.id]), b: pct(s) }) : tt("shareSame")}</p>` : "";
       return `${closed ? `<p class="note"><b>${tt("closedT")}</b> ${tt("out." + outcome())}</p>` : ""}${note}
-        <div class="card"><p class="kfeed ${s >= 0.995 ? "ok" : s >= 0.8 ? "mid" : "low"}"><b>${s >= 0.995 ? tt("feedAll") : tt("feedPart", { d: V.plan.days[h.id], s: D })}</b>${s >= 0.995 ? "" : `<small>${tt("feedPartD", { p: pct(s) })}</small>`}</p>
-          <p class="fine kline">${tt("yourHerd")}: ${esc(herdLine(h.herd))}. ${src("model")}</p>
+        <div class="card"><p class="kfeed ${s >= 0.995 ? "ok" : s >= 0.8 ? "mid" : "low"}"><b>${s >= 0.995 ? tt("feedAll") : tt("feedPart", { d: V.plan.days[h.id], s: D })}</b>${s >= 0.995 ? "" : `<small>${tt("feedPartD", { p: pct(s), t: tons(K.hayOf(V, V.plan, h.id)) })}</small>`}</p>
+          <p class="fine kline">${cap(whoLine(h))}. ${esc(cap(herdLine(h.herd)))}. ${src("model")}</p><p class="fine kline">${tt("yearNote", { y: V.snapshot.source.year, s: V.season })}</p>
           <h2>${tt("where")}</h2>${routeHtml(h.id)}${mapOf(K.plotsOf(V.plan.routes[h.id]))}
           <p class="fine kline">${zoneLine(V.snapshot.zone)}</p><details data-d="fair"><summary><span>${tt("fairQ")}</span></summary><p>${tt("rule." + V.rule + "D")} ${tt("fairD")}</p>${V.plan.bottleneck ? `<p>${tt("bottle", { p: V.plan.bottleneck.plots.map(nw).join(", "), t: fmt(V.plan.bottleneck.shortfall_t) })}</p>` : ""}</details></div>
         ${closed ? `<button type="button" class="btn btn-primary kbig" id="kelPdf">${ic("file")} ${tt("protocol")}</button>` : V.expired ? `<p class="note warn">${tt("expired", { d: dOnly(V.deadline) })}</p>` : answerHtml(h, open, last)}`;
@@ -503,9 +517,9 @@
     }
     const keyOf = hid => { const o = rec(V.id, "org"); return o && o.links && o.links[hid]; };
     const yardRow = h => `<div class="kyard" data-hid="${esc(h.id)}"><div class="kyard-t"><b>${esc(h.name)}</b>${ansChip(h)}</div>
-      <small>${esc(herdLine(h.herd))} · ${tt("hs." + h.herd_status)}${V.status === "collect" ? ` · ${tt(h.joined ? "o.came" : "o.notYet")}` : ""}</small>
+      <small>${whoLine(h)}</small><small>${esc(herdLine(h.herd))} · ${tt("hs." + h.herd_status)}${V.status === "collect" ? ` · ${tt(h.joined ? "o.came" : "o.notYet")}` : ""}</small>
       ${(c => (c.length ? `<small class="kwarn">${tt("o.herdChanged", { n: c.length })}: ${esc(herdLine(c[c.length - 1].from))} → ${esc(herdLine(c[c.length - 1].to))}</small>` : ""))(changes(h))}
-      ${V.plan ? `<div class="kshare">${shareBar(V.plan.share[h.id])}<small>${tt("feedShort", { p: pct(V.plan.share[h.id]), d: V.plan.days[h.id], s: V.plan.season_days })} · ${K.plotsOf(V.plan.routes[h.id]).map(nw).join(", ") || "—"}</small></div>` : ""}
+      ${V.plan ? `<div class="kshare">${shareBar(V.plan.share[h.id])}<small>${tt("feedShort", { p: pct(V.plan.share[h.id]), d: V.plan.days[h.id], s: V.plan.season_days })}${hay(h.id) ? ` · ${hay(h.id)}` : ""} · ${K.plotsOf(V.plan.routes[h.id]).map(nw).join(", ") || "—"}</small></div>` : ""}
       <div class="kyard-b"><button type="button" class="btn btn-sm btn-soft" data-link>${ic("send")} ${tt("o.link")}</button>${V.status === "closed" ? "" : `<button type="button" class="btn btn-sm btn-ghost" data-edit>${ic("pen")} ${tt("o.edit")}</button>`}
       ${V.status !== "closed" && h.herd_status === "declared" ? `<button type="button" class="btn btn-sm btn-ghost" data-conf>${ic("check")} ${tt("o.confirm")}</button>` : ""}</div></div>`;
     const propObs = p => {
@@ -641,18 +655,19 @@
       arm($("#kNewL", d), async b => { if (await act(b, "/households/" + h.id + "/link", {}, tt("o.reissued"))) { d.close(); draw(); linkDlg(h); } });
     }
     function editDlg(h) {
-      const d = dlg(h.name, `<form id="kEd"><label class="field kf">${tt("yardName")}<input data-f="name" maxlength="60" value="${esc(h.name)}"></label>${herdForm(h)}
+      const d = dlg(h.name, `<form id="kEd"><label class="field kf">${tt("nameQ")}<input data-f="name" maxlength="60" value="${esc(h.name)}"></label>${whoForm(h, "kwEd")}${herdForm(h)}
         <label class="field kf">${t("herds.weight")}<select data-f="weight">${K.WEIGHTS.map(w => `<option value="${w}" ${h.weight === w ? "selected" : ""}>${t("herds.w" + String(w).replace(".", ""))}</option>`).join("")}</select></label>
         <details><summary><span>${t("herds.rights")}: ${h.allowed.length ? esc(h.allowed.join(", ")) : t("herds.rightsAll")}</span></summary><div class="chips">${V.snapshot.plots.map(p => `<label class="chip"><input type="checkbox" data-al="${esc(p.id)}" ${h.allowed.includes(p.id) ? "checked" : ""}>${esc(p.id)}</label>`).join("")}</div><p class="fine">${t("herds.rightsNote")}</p></details>
         ${V.version ? `<p class="note warn">${tt("o.editWarn")}</p>` : ""}<button class="btn btn-primary kbig">${t("common.save")}</button></form><button type="button" class="btn btn-ghost kbig" id="kRm">${ic("trash")} ${tt("o.rm")}</button>`);
       const form = $("#kEd", d);
       form.onsubmit = async e => {
         e.preventDefault();
-        const x = {}; readHerd(form, x);
+        const x = {}; readHerd(form, x); readWho(form, x);
         const b = { rev: V.rev }, name = $("[data-f=name]", form).value.trim(), w = +$("[data-f=weight]", form).value, al = $$("[data-al]", form).filter(c => c.checked).map(c => c.dataset.al);
         if (name && name !== h.name) b.name = name;
         if (SP.some(s => x.herd[s] !== (h.herd[s] || 0))) b.herd = x.herd;
         if (x.home !== h.home) b.home = x.home;
+        if (x.kind !== h.kind || x.owners !== h.owners || x.resp !== h.resp) Object.assign(b, { kind: x.kind, owners: x.owners, resp: x.resp });
         if (x.daily_return !== h.daily_return) b.daily_return = x.daily_return;
         if (w !== h.weight) b.weight = w;
         if (al.join() !== h.allowed.join()) b.allowed = al;
@@ -664,20 +679,20 @@
 
     // ---------- протокол ----------
     function protocolHtml(p) {
-      const th = `style="text-align:left;border-bottom:1px solid #999;padding:5px;font-size:10px;color:#444;vertical-align:bottom"`, td = `style="border-bottom:1px solid #ddd;padding:6px 5px;vertical-align:top"`;
+      const th = `style="text-align:left;border-bottom:1px solid #999;padding:5px;font-size:10px;color:#444;vertical-align:bottom;white-space:normal"`, td = `style="border-bottom:1px solid #ddd;padding:6px 5px;vertical-align:top;white-space:normal;overflow-wrap:anywhere"`;
       const tbl = `style="width:100%;border-collapse:collapse;font-size:11px"`, h2 = s => `<h2 style="font-size:14px;margin:16px 0 6px;color:#24543f;page-break-after:avoid">${s}</h2>`;
-      const rt = r => (r || []).map(s => `${s.plot ? esc(s.plot) : tt("gap").toLowerCase()} ${day(s.from)}–${day(s.to)}`).join("<br>") || "—";
+      const rt = r => (r || []).map(s => `${s.plot ? esc(s.plot) : tt("gap").toLowerCase()} ${s.from === s.to ? day(s.from) : `${day(s.from)}–${day(s.to)}`}`).join("<br>") || "—";
       return `<div style="font:11.5px/1.45 Inter,Arial,sans-serif;color:#111;width:720px">
         <div style="border-bottom:3px solid #24543f;padding-bottom:8px"><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#24543f;font-weight:800">Jaiylym · Келісім</div>
-        <h1 style="font-size:20px;margin:2px 0 4px">${tt("pr.title")}: ${esc(p.title)}</h1><div style="color:#444">${esc(p.village.name)} (${p.village.lat}, ${p.village.lon}) · ${tt("pr.created")} ${dateStr(p.created, false)}${p.closed ? ` · ${tt("pr.closed")} ${dateStr(p.closed)}` : ""}</div></div>
+        <h1 style="font-size:20px;margin:2px 0 4px">${tt("pr.title")}: ${esc(p.title)}</h1><div style="color:#444">${esc(p.village.name)} (${p.village.lat}, ${p.village.lon}) · ${tt("pr.created")} ${dateStr(p.created, false)}${p.closed ? ` · ${tt("pr.closed")} ${dateStr(p.closed)}` : ""}</div><div style="color:#24543f;font-weight:700">${cap(seasonLine())}</div></div>
         <p style="background:#f6ead2;border-radius:6px;padding:7px 9px;margin:10px 0"><b>${tt("out." + p.outcome)}</b> ${tt("pr.counts", { n: p.counts.total, a: p.counts.agree, o: p.counts.object, w: p.counts.pending })} ${tt("noRights")}</p>
         <p>${tt("pr.ver", { n: p.version })} ${tt("ruleQ")} <b>${tt("rule." + p.rule)}</b>. ${tt("rule." + p.rule + "D")}</p>
-        ${h2(tt("yards"))}<table ${tbl}><thead><tr><th ${th}>${tt("yardName")}</th><th ${th}>${tt("herd")}</th><th ${th}>${tt("where")}</th><th ${th}>${tt("pr.feed")}</th><th ${th}>${tt("pr.answer")}</th><th ${th}>${tt("pr.sign")}</th></tr></thead><tbody>
-        ${p.households.map(h => `<tr style="page-break-inside:avoid"><td ${td}><b>${esc(h.name)}</b>${h.weight !== 1 ? `<br>${t("herds.weight")}: ${h.weight}` : ""}</td><td ${td}>${esc(herdLine(h.herd))}<br><span style="color:#666">${tt("hs." + h.herd_status)}</span></td><td ${td}>${rt(h.route)}</td><td ${td}>${pct(h.share)}<br>${tt("days", { n: h.days == null ? "—" : h.days })}</td>
-          <td ${td}>${tt("st." + h.answer)}${h.carried ? " " + tt("st.carried") : ""}${h.answered_at ? `<br><span style="color:#666">${dateStr(h.answered_at)}</span>` : ""}</td><td ${td} width="80">&nbsp;</td></tr>`).join("")}</tbody></table>
+        ${h2(tt("yards"))}<table ${tbl}><thead><tr>${[["yardName", 140], ["herd", 125], ["where", 165], ["pr.feed", 105], ["pr.answer", 95], ["pr.sign", 90]].map(([k, w]) => `<th ${th} width="${w}">${tt(k)}</th>`).join("")}</tr></thead><tbody>
+        ${p.households.map(h => `<tr style="page-break-inside:avoid"><td ${td}><b>${esc(h.name)}</b><br><span style="color:#666">${whoLine(h)}</span>${h.weight !== 1 ? `<br>${t("herds.weight")}: ${h.weight}` : ""}</td><td ${td}>${esc(herdLine(h.herd))}<br><span style="color:#666">${tt("hs." + h.herd_status)}</span></td><td ${td}>${rt(h.route)}</td><td ${td}>${pct(h.share)}<br>${tt("days", { n: h.days == null ? "—" : h.days })}${h.hay_t >= 0.1 ? `<br>${tt("hayShort", { t: tons(h.hay_t) })}` : ""}</td>
+          <td ${td}>${tt("st." + h.answer)}${h.carried ? " " + tt("st.carried") : ""}${h.answered_at ? `<br><span style="color:#666">${dateStr(h.answered_at)}</span>` : ""}</td><td ${td}>&nbsp;</td></tr>`).join("")}</tbody></table>
         ${p.decisions.length ? h2(tt("o.decisions")) + `<table ${tbl}><tbody>${p.decisions.map(x => `<tr style="page-break-inside:avoid"><td ${td}><b>${esc(nameOf(x.household))}</b></td><td ${td}>${propText(x)}</td><td ${td}>${tt("pst." + x.status)}. ${choice(x)}${x.status === "accepted" && x.losers.length ? `<br>${tt("ef.lose")}: ${x.losers.map(l => `${esc(nameOf(l.id))} ${ppt(l.delta)} ${tt("pp")}`).join("; ")}` : ""}</td></tr>`).join("")}</tbody></table>` : ""}
         ${Object.keys(p.observations || {}).length ? h2(t("obs.title")) + `<p>${t("obs.note")}</p><table ${tbl}><tbody>${Object.entries(p.observations).map(([id, g]) => `<tr style="page-break-inside:avoid"><td ${td} width="190"><b>${plotFull(id)}</b>${g.verdict === "check" ? `<br>${t("obs.check")}` : ""}</td><td ${td}>${obsItems(g, "font-size:11px;margin:0")}</td></tr>`).join("")}</tbody></table>` : ""}
-        ${h2(tt("pr.data"))}${p.snapshot.zone ? `<p>${zoneLine(p.snapshot.zone)}</p>` : ""}<p>${tt("pr.src", { y: p.snapshot.source.year, d: p.snapshot.source.dates.map(x => dOnly(x)).join(", ") || "—", m: esc(p.snapshot.model_version) })} ${p.snapshot.deficit_t > 0.5 ? tt("o.deficit", { t: fmt(p.snapshot.deficit_t) }) : ""} ${tt("o.check." + (p.snapshot.check.status || "unknown"), { p: (p.snapshot.check.plots || []).map(esc).join(", ") })}</p>
+        ${h2(tt("pr.data"))}${p.snapshot.zone ? `<p>${zoneLine(p.snapshot.zone)}</p>` : ""}<p>${tt("pr.src", { y: p.snapshot.source.year, d: p.snapshot.source.dates.map(x => dOnly(x)).join(", ") || "—", m: esc(p.snapshot.model_version) })} ${tt("yearNote", { y: p.snapshot.source.year, s: p.season })} ${p.snapshot.deficit_t > 0.5 ? tt("o.deficit", { t: fmt(p.snapshot.deficit_t) }) : ""} ${tt("o.check." + (p.snapshot.check.status || "unknown"), { p: (p.snapshot.check.plots || []).map(esc).join(", ") })}</p>
         ${p.herds.over.map(o => `<p>${tt("over", { s: low(t("herds." + o.species)), a: fmt(o.declared), b: fmt(o.official) })}</p>`).join("")}${p.restored && !p.restored.verified ? `<p>${tt("restUn")}</p>` : ""}
         ${p.snapshot.norm ? `<p>${t("nm.source")}: ${esc(regName(p.snapshot.norm.region))}.</p>` : ""}${h2(t("rep.limits"))}<ul style="margin:0;padding-left:18px">${p.limits.map(l => `<li>${tt("lim." + l)}</li>`).join("")}</ul>
         <p style="color:#555;font-size:10px;margin-top:14px">ainara001.github.io/jaiylym · ${dateStr(new Date())}</p></div>`;
