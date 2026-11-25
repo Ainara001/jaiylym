@@ -11,6 +11,7 @@
     const SP = K ? K.SPECIES : ["sheep", "goats", "cattle", "horses"];
     let cur = null, V = null, at = null, offline = false, fail = null, loading = false, busy = false, dirty = false, fresh = false, on = false, timer = null, seq = 0;
     let f = null;                                        // форма ответа двора: { mode, plot, to, reason, text, observed_on, herd, home, daily, effect }
+    const OFFICIAL = false;                               // сверка со сведениями акимата: скрыта в МВП, сервер её понимает
     let N = null;                                        // черновик нового согласования
 
     const el = () => $("#kelPage");
@@ -552,8 +553,8 @@
       const o = V.official || {}, ck = V.snapshot.check || {};
       return `<details data-d="set" class="card kdet"><summary><span>${tt("o.settings")}</span></summary>
         ${V.status === "closed" ? "" : `<form id="kSet"><label class="field kf">${tt("deadline")}<input type="date" name="deadline" value="${esc(V.deadline || "")}"></label>
-        <h3>${tt("o.official")}</h3><p class="fine">${tt("o.officialD")}</p><div class="herd-grid">${SP.map(s => `<label class="field">${t("herds." + s)}<input type="number" inputmode="numeric" min="0" name="of_${s}" value="${o[s] == null ? "" : o[s]}"></label>`).join("")}</div>
-        <label class="field kf">${tt("o.source")}<input name="source" maxlength="80" value="${esc(o.source || "")}"></label><button class="btn btn-soft">${t("common.save")}</button></form>`}
+        ${!OFFICIAL ? "" : `<h3>${tt("o.official")}</h3><p class="fine">${tt("o.officialD")}</p><div class="herd-grid">${SP.map(s => `<label class="field">${t("herds." + s)}<input type="number" inputmode="numeric" min="0" name="of_${s}" value="${o[s] == null ? "" : o[s]}"></label>`).join("")}</div>
+        <label class="field kf">${tt("o.source")}<input name="source" maxlength="80" value="${esc(o.source || "")}"></label>`}<button class="btn btn-soft">${t("common.save")}</button></form>`}
         <p class="fine">${zoneLine(V.snapshot.zone)} ${tt("o.check." + (ck.status || "unknown"), { p: (ck.plots || []).map(esc).join(", ") })} ${V.snapshot.norm ? `${t("nm.source")}: ${esc(regName(V.snapshot.norm.region))}.` : t("nm.noRegion")}</p>
         <div class="startbtns"><button type="button" class="btn btn-ghost" id="kExp">${ic("save")} ${tt("o.export")}</button><button type="button" class="btn btn-ghost" id="kCopyOrg">${tt("copyOrg")}</button><button type="button" class="btn btn-ghost" id="kDel">${ic("trash")} ${tt("o.del")}</button></div><p class="fine">${tt("o.exportD")}</p></details>`;
     }
@@ -602,9 +603,10 @@
         sf.oninput = () => { dirty = true; };
         sf.onsubmit = async e => {
           e.preventDefault();
-          const off = {}; for (const s of SP) if (sf["of_" + s].value !== "") off[s] = Math.max(0, Math.round(+sf["of_" + s].value));
+          const off = {}; if (OFFICIAL) for (const s of SP) if (sf["of_" + s].value !== "") off[s] = Math.max(0, Math.round(+sf["of_" + s].value));
           if (Object.keys(off).length) off.source = sf.source.value.trim();
-          const body = { rev: V.rev, official: Object.keys(off).length ? off : null };
+          const body = { rev: V.rev };
+          if (OFFICIAL) body.official = Object.keys(off).length ? off : null;
           if (sf.deadline.value !== (V.deadline || "")) body.deadline = sf.deadline.value || null;
           if (await act($("button", sf), "/settings", body, tt("savedOk"))) { dirty = false; draw(); }
         };
