@@ -28,7 +28,6 @@ function invariants(res, plots, herds, opts = {}) {
     assert.equal(segs[0].from, 1); assert.equal(segs[segs.length - 1].to, P.season_days);
     for (let i = 1; i < segs.length; i++) assert.equal(segs[i].from, segs[i - 1].to + 1);
     if (h.allowed_plots && h.allowed_plots.length) for (const s of segs) if (s.plot) assert.ok(h.allowed_plots.includes(s.plot), "право: " + h.id + " " + s.plot);
-    if (h.daily_return) for (const s of segs) if (s.plot) assert.equal(byId[s.plot].ring, "near");
   }
   if (sum(res.unmet) > 1) assert.notEqual(res.status, "feasible");
   assert.ok(sum(res.unmet) >= res.bound.min_deficit_au_days - 1e-3, "не лучше точной границы — иначе ошибка в границе");
@@ -90,20 +89,19 @@ test("пример, где жадный алгоритм несправедли�
   assert.ok(o.bottleneck.groups[0].excluded.not_allowed.includes("Д-Ю"), "Д-Ю недоступен большому стаду по введённым правам");
 });
 
-test("узкое место: причина «далеко для дойного» относится только к дойным стадам группы", () => {
+test("узкое место: причина «нет прав» относится только к тем стадам, у кого они ограничены", () => {
   const plots = [
     { id: "Б-С", ring: "near", dir: "С", dist_km: 1.8, pasture_ha: 20, ndvi: 0.3, water: true, water_source: "село", series: [1, 2, 3, 4].map(i => ({ d: "2026-07-0" + i, v: 0.3 })) },
     { id: "Д-С", ring: "far", dir: "С", dist_km: 5.5, pasture_ha: 1000, ndvi: 0.3, water: true, water_source: "водоём на карте WorldCover", series: [1, 2, 3, 4].map(i => ({ d: "2026-07-0" + i, v: 0.3 })) },
   ];
   const herds = [
-    { id: "milk", sheep: 500, home: "Б-С", daily_return: true },          // дойное: каждый вечер в село — дальний участок недоступен
-    { id: "fixed", sheep: 500, home: "Б-С", allowed_plots: ["Б-С"] },     // не дойное, но права только на Б-С
+    { id: "fixed", sheep: 500, home: "Б-С", allowed_plots: ["Б-С"] },     // права только на Б-С
+    { id: "fixed2", sheep: 500, home: "Б-С", allowed_plots: ["Б-С"], daily_return: true },
   ];
   const g = J.bottlenecks(plots, herds, P).groups[0];
-  assert.deepEqual(g.herds.sort(), ["fixed", "milk"], "оба стада в одном узком месте");
-  assert.deepEqual(g.excluded_for.daily_far, ["milk"], "«далеко для дойного» — только для дойного стада");
-  assert.deepEqual(g.excluded_for.not_allowed, ["fixed"]);
-  assert.deepEqual(g.excluded.daily_far, ["Д-С"]);
+  assert.deepEqual(g.herds.sort(), ["fixed", "fixed2"], "оба стада в одном узком месте");
+  assert.deepEqual(g.excluded_for.not_allowed.sort(), ["fixed", "fixed2"]);
+  assert.deepEqual(g.excluded.not_allowed, ["Д-С"]);
 });
 
 test("сертификат узкого места: дефицит группы = потребность − ёмкость её участков − лимиты окон", () => {

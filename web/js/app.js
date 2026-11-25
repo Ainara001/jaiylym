@@ -9,6 +9,7 @@
   const DEFAULT = EXAMPLES[0].data, DEMO_HERDS = window.JAIYLYM_HERDS;
   const NM = window.JaiylymNorms;            // предельно допустимая норма нагрузки (приказ МСХ № 3-3/332)
   const NG = window.JaiylymNoGraze;          // где нельзя пасти: жильё, фермы, промзоны (OpenStreetMap)
+  const Z = window.JaiylymZone;              // где селу можно пасти: контур, гектары по документам или вся трава вокруг
   const BOT = "JAIYLYM_bot";
   const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
   // числа и даты в казахстанском формате для обоих языков: 1 234,5 и 21.11.2026 14:05
@@ -16,7 +17,7 @@
   const fmt1 = n => (+n).toLocaleString("ru-RU", { maximumFractionDigits: 1 });
   const two = n => String(n).padStart(2, "0");
   const dateStr = (s, time = true) => { const d = new Date(s); if (isNaN(d)) return ""; return `${two(d.getDate())}.${two(d.getMonth() + 1)}.${d.getFullYear()}` + (time ? ` ${two(d.getHours())}:${two(d.getMinutes())}` : ""); };
-  const pct = x => (x == null ? "—" : isFinite(x) ? Math.round(x * 100).toLocaleString("ru-RU") + " %" : "∞");
+  const pct = x => (x == null ? "—" : x > 10 ? "> 1 000 %" : Math.round(x * 100).toLocaleString("ru-RU") + " %");   // больше десяти норм — точное число ничего не говорит
   const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const ic = id => `<svg class="ic"><use href="#i-${id}"/></svg>`;
   const src = k => `<span class="src src-${k}">${t("src." + k)}</span>`;
@@ -91,11 +92,11 @@
     ? `p_${coord(S.D.village.lat)}_${coord(S.D.village.lon)}_${PL.plotCode(plotId)}`
     : `v_${coord(S.D.village.lat)}_${coord(S.D.village.lon)}`) : "");
 
-  async function askText(title, value) {
+  async function askText(title, value, num) {
     return new Promise(resolve => {
       const d = document.createElement("dialog");
       d.className = "modal";
-      d.innerHTML = `<form method="dialog"><h2>${esc(title)}</h2><label class="field"><input name="v" maxlength="80" value="${esc(value)}" required></label>
+      d.innerHTML = `<form method="dialog"><h2>${esc(title)}</h2><label class="field"><input name="v" maxlength="80" value="${esc(value)}" ${num ? 'inputmode="numeric"' : ""} required></label>
         <p style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px"><button class="btn btn-ghost" value="cancel" formnovalidate>${t("common.cancel")}</button>
         <button class="btn btn-primary" value="ok">${t("common.save")}</button></p></form>`;
       document.body.appendChild(d);
@@ -204,6 +205,7 @@
     if (S.map) {
       endDraw(); S.map.closePopup(); S.group.clearLayers(); S.pastGroup.clearLayers();
       if (S.ngLayer) { S.ngLayer.remove(); S.ngLayer = null; }
+      if (S.zoneLayer) { S.zoneLayer.remove(); S.zoneLayer = null; }
       if (S.ndviLayer) { S.ndviLayer.remove(); S.ndviLayer = null; }
     }
     const sch = $("#schemeMap"); if (sch) sch.innerHTML = "";
@@ -289,6 +291,7 @@
     S.fitting = true; S.map.invalidateSize(); S.map.fitBounds(b, { padding: [12, 12], animate: false }); S.fitting = false;
     drawPastures();
     drawNoGraze();
+    drawZone();
   }
   /** Зоны «нельзя пасти» на карте: контуры жилья, ферм и промзон из OSM (не перехватывают нажатия на участки). */
   function drawNoGraze() {
@@ -377,19 +380,19 @@
     openPasture(id);
   }
 
-  function startDraw() {
+  function startDraw(what) {
     if (S.noLeaflet || !S.map) { toast(t("past.noMap"), true); return; }
     if (S.draw) return;
     if (!S.D) { S.drawNext = true; toast(t("start.drawFirst"), true); return; }    // контур считается в привязке к селу
     setPicking(false);
     S.map.closePopup();
-    S.draw = { pts: [], line: L.polyline([], { color: "#e3b25c", weight: 3, dashArray: "6 5" }).addTo(S.map), marks: L.layerGroup().addTo(S.map) };
+    S.draw = { zone: what === "zone", pts: [], line: L.polyline([], { color: "#e3b25c", weight: 3, dashArray: "6 5" }).addTo(S.map), marks: L.layerGroup().addTo(S.map) };
     $("#map").classList.add("drawing");
     $("#drawbar").hidden = false;
     updateDrawHint();
   }
   function updateDrawHint() {
-    $("#drawHint").textContent = t("past.drawHint", { n: S.draw ? S.draw.pts.length : 0 });
+    $("#drawHint").textContent = t(S.draw && S.draw.zone ? "zn.drawHint" : "past.drawHint", { n: S.draw ? S.draw.pts.length : 0 });
     $("#drawDone").disabled = !S.draw || S.draw.pts.length < 3;
     $("#drawUndo").disabled = !S.draw || !S.draw.pts.length;
   }
@@ -412,6 +415,15 @@
   async function finishDraw() {
     if (!S.draw || S.draw.pts.length < 3) { toast(t("past.need3"), true); return; }
     const ring = S.draw.pts.map(p => [+p.lng.toFixed(6), +p.lat.toFixed(6)]);
+    if (S.draw.zone) {                         // граница пастбища села: снимки заново не нужны, доли считаются по карте травы
+      endDraw();
+      const old = S.zone && S.zone.mode === "contour" ? S.zone.rings : [];
+      if (old.length >= Z.MAX_RINGS) { toast(t("zn.many"), true); return; }
+      await setZone(Z.clean({ mode: "contour", rings: old.concat([ring]) }));
+      toast(zoneText());
+      const zc = $("#zoneCard"); if (zc && phone()) zc.scrollIntoView({ block: "center" });
+      return;
+    }
     const preview = L.polygon(S.draw.pts, { color: "#e3b25c", weight: 3, fillOpacity: 0.12 }).addTo(S.map);
     endDraw();
     if (!navigator.onLine) { preview.remove(); toast(t("err.offline"), true); return; }
@@ -526,6 +538,10 @@
         return;
       }
     }
+    // граница пастбища — до показа села: иначе на миг показали бы чужую землю
+    const zs = C.ls.get(key + ":zone", null), zone = Z ? Z.clean(opts.zone) || Z.clean(zs && zs.zone) || Z.defaultFor(data.village) : null;
+    const zshare = zone && zone.mode === "contour" ? await zoneShares(data, png, zone.rings) : null;
+    if (S.loadingKey !== key) return;
     status("");
     S.building = null; S.start = null;
     viewMap().classList.remove("no-village");
@@ -533,7 +549,8 @@
     S.t0 = Date.now();
     S.baseWater = Object.fromEntries(data.plots.map(p => [p.id, M.waterUsable(p)]));
     S.added = new Set((opts.water || []).filter(id => S.baseWater[id] === false));
-    S.forbidden = new Set(opts.forbidden || []);
+    S.forbidden = new Set(opts.forbidden || (zs && zs.closed) || []);
+    S.zone = zone; S.zoneShare = zshare;
     S.rest = Object.assign({}, opts.rest || {});
     S.waterSet = Object.assign({}, opts.water_status || {});
     if (opts.params) { S.userP = Object.assign({}, S.userP, opts.params); paramErr = null; S.P = resolveParams(S.userP, S.calib); if (paramErr) toast(paramErr, true); }
@@ -560,6 +577,82 @@
     if (want) setTimeout(() => focusPlot(want), 350);
     if (opts.pasture) setTimeout(() => focusPasture(opts.pasture), 400);
     if (opts.draw || S.drawNext) { S.drawNext = false; setTimeout(startDraw, 450); }
+  }
+
+  // ---------- где селу можно пасти ----------
+  const zoneKey = () => cacheKey(S.D.village.lat, S.D.village.lon) + ":zone";
+  const saveZone = () => C.ls.set(zoneKey(), { zone: S.zone && !S.zone.official ? S.zone : null, closed: [...S.forbidden] });
+  /** Доли участков внутри контура — по пикселям пастбища с карты травы (S.png); картинка не читается — по площади участка. */
+  async function zoneShares(D, png, rings) {
+    let mask = { size: 256, bbox: D.bbox };
+    try {
+      const im = new Image(); im.src = png; await im.decode();
+      const c = document.createElement("canvas"), n = im.naturalWidth; c.width = c.height = n;
+      const x = c.getContext("2d", { willReadFrequently: true }); x.drawImage(im, 0, 0);
+      const a = x.getImageData(0, 0, n, n).data;
+      mask = { size: n, bbox: D.bbox, has: i => a[i * 4 + 3] > 0 };
+    } catch (_) {}
+    return Z.shares(D.village, rings, mask);
+  }
+  async function setZone(z) {
+    const key = S.loadingKey, sh = z.mode === "contour" ? await zoneShares(S.D, S.png, z.rings) : null;
+    if (S.loadingKey !== key) return;
+    S.zone = z; S.zoneShare = sh;
+    saveZone(); rebuildPlots(); drawZone(); render();
+  }
+  function drawZone() {
+    if (!S.map || !S.group) return;
+    if (S.zoneLayer) { S.zoneLayer.remove(); S.zoneLayer = null; }
+    if (!S.D || !S.zone || S.zone.mode !== "contour") return;
+    S.zoneLayer = L.layerGroup().addTo(S.map);
+    for (const r of S.zone.rings) L.polygon(r.map(([x, y]) => [y, x]), { color: "#ffffff", weight: 4, fill: false, interactive: false }).addTo(S.zoneLayer), L.polygon(r.map(([x, y]) => [y, x]), { color: "#1e4634", weight: 2.5, fill: false, interactive: false }).addTo(S.zoneLayer);
+  }
+  const zoneHa = () => S.plots.filter(p => !p.forbidden).reduce((s, p) => s + p.pasture_ha, 0);
+  /** Какую землю учитывает расчёт — одной фразой. */
+  function zoneText() {
+    const ha = fmt(zoneHa()), n = S.forbidden.size ? " " + t("zn.closed", { n: S.forbidden.size }) : "";
+    if (!S.zone || S.zone.mode === "all") return t("zn.all", { ha }) + n;
+    if (S.zone.mode === "contour") return t("zn.contour", { ha }) + n;
+    return t(S.zone.official ? "zn.official" : "zn.ha", { ha: fmt(S.zone.ha) }) + n;
+  }
+  function zoneCard() {
+    if (!Z || !S.D) return "";
+    const m = S.zone ? S.zone.mode : "all", of = S.D.village.official;
+    return `<section class="zone zone-${m}" id="zoneCard"><h3>${ic("pin")} ${t("zn.title")}</h3><p>${zoneText()} ${src(m === "all" ? "sat" : "input")}</p>
+      ${S.zone && S.zone.official && of ? `<p class="fine">${t("zn.src")}: <a href="${esc(of.url)}" target="_blank" rel="noopener">${esc(of.title)}</a>. ${t("zn.noBorders")}</p>` : m === "ha" ? `<p class="fine">${t("zn.noBorders")}</p>` : m === "all" ? `<p class="fine">${t("zn.allD")}</p>` : ""}
+      <div class="zbtns"><button type="button" class="btn btn-sm ${m === "all" ? "btn-primary" : "btn-soft"}" data-zn="draw">${ic("pen")} ${t(m === "contour" ? "zn.more" : "zn.draw")}</button>
+      <button type="button" class="btn btn-sm btn-soft" data-zn="closed">${ic("x")} ${t("zn.mark")}</button>
+      <button type="button" class="btn btn-sm btn-ghost" data-zn="ha">${t("zn.setHa")}</button>
+      ${m !== "all" ? `<button type="button" class="btn btn-sm btn-ghost" data-zn="all">${t("zn.reset")}</button>` : ""}</div></section>`;
+  }
+  function bindZone(el) {
+    $$("[data-zn]", el).forEach(b => b.onclick = () => ({ draw: startZone, closed: closedDlg, ha: haDlg, all: () => { S.forbidden = new Set(); setZone({ mode: "all" }); } })[b.dataset.zn]());
+  }
+  function startZone() {
+    if (S.route !== "map") { go("map", villageHash(S.D.village, S.herds.some(h => h.demo)).split("?")[1]); setTimeout(startZone, 400); return; }
+    startDraw("zone");
+    if (S.draw && phone()) $("#map").scrollIntoView({ block: "center" });
+  }
+  async function haDlg() {
+    const v = await askText(t("zn.haQ"), S.zone && S.zone.mode === "ha" ? String(S.zone.ha) : "", true);
+    if (v == null) return;
+    const z = Z.clean({ mode: "ha", ha: +String(v).replace(/[^0-9.]/g, "") });
+    if (z) setZone(z); else toast(t("zn.haBad"), true);
+  }
+  /** Отметить участки, где селу пасти нельзя: нажать на схему или на код. */
+  function closedDlg() {
+    const d = document.createElement("dialog");
+    d.className = "modal plot-sheet"; d.setAttribute("aria-label", t("zn.mark"));
+    const draw = () => {
+      d.innerHTML = `<form method="dialog" class="modal-x"><button aria-label="${t("common.close")}">${ic("x")}</button></form><h2>${t("zn.mark")}</h2><p>${t("zn.markD")}</p>
+        <div class="kmap">${scheme(S.plots, p => (S.forbidden.has(p.id) ? "#7a6a60" : "#4f8a6b"), p => (S.forbidden.has(p.id) ? "×" : ""), { size: 320, interactive: true })}</div>
+        <p class="fine">${S.forbidden.size ? t("zn.closed", { n: S.forbidden.size }) : t("zn.closed0")}</p><form method="dialog"><button class="btn btn-primary" style="width:100%;min-height:48px">${t("past.done")}</button></form>`;
+      d.querySelectorAll("[data-plot]").forEach(g => { const f = () => { const id = g.dataset.plot; S.forbidden.has(id) ? S.forbidden.delete(id) : S.forbidden.add(id); draw(); const n = d.querySelector(`[data-plot="${id}"]`); if (n) n.focus(); };
+        g.setAttribute("aria-pressed", S.forbidden.has(g.dataset.plot)); g.onclick = f; g.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); f(); } }; });
+    };
+    document.body.appendChild(d);
+    d.addEventListener("close", () => { d.remove(); saveZone(); rebuildPlots(); render(); if (S.route === "kelisim") Kel.refresh(); });
+    draw(); d.showModal();
   }
 
   // ---------- норма нагрузки: область села → самая мягкая норма, пока человек не выбрал тип пастбища ----------
@@ -591,7 +684,7 @@
     for (const p of plots) {
       const c = capOf(p); if (!c.known || !c.norm) continue;
       o.n++; if (c.limited_by === "norm") o.limited++;
-      o.sat += c.sat.au_season / S.P.au.sheep; o.norm += c.norm.au_season / S.P.au.sheep; o.cap += c.au_season / S.P.au.sheep;
+      o.sat += c.sat.au_season / S.P.au.sheep; o.norm += c.norm.full_au_season / S.P.au.sheep; o.cap += c.au_season / S.P.au.sheep;
     }
     return o;
   }
@@ -600,7 +693,8 @@
   function rebuildPlots() {
     // кормовая площадь без жилья, ферм и промзон (OSM) с выбранным буфером; исходная — в pasture_ha_gross
     const base = NG && S.D.nograze && S.D.nograze.status === "ok" ? NG.apply(S.D.plots, S.D.nograze, S.ngBuf) : S.D.plots;
-    S.plots = (NM ? NM.attach(base, S.normSel) : base).map(p => {
+    const zoned = Z ? Z.apply(base, S.zone, S.zoneShare, [...S.forbidden]) : base;
+    S.plots = (NM ? NM.attach(zoned, S.normSel) : zoned).map(p => {
       const o = Object.assign({}, p);
       if (S.added.has(p.id)) { o.water_status = "modeled"; o.water = true; o.water_source = t("ws.modeled"); }
       else if (S.waterSet[p.id]) { o.water_status = S.waterSet[p.id]; o.water = M.waterUsable(o); }
@@ -614,12 +708,13 @@
     });
   }
   // имена демо-стад на языке интерфейса (данные примера по-русски); имя, изменённое пользователем, не трогаем
-  const DEMO_KK = { gulnar: "Гүлнар (сауын)", village: "Ауылдың сиыр табыны", baur: "Бауыржан", asan: "Асан", erlan: "Ерлан" };
+  const DEMO_KK = { gulnar: "Гүлнар (сауын)", village: "Ауылдың сиыр табыны", baur: "Бауыржан", asan: "Асан", erlan: "Ерлан", common: "Ортақ сиыр табыны", milk: "Сүт шаруашылығы", horses: "Жылқы үйірі", flock: "Ортақ отар", farm: "Шаруа қожалығы" };
   const demoName = h => (I.lang === "kk" && DEMO_KK[h.id]) || h.name;
-  const demoHerds = () => DEMO_HERDS.map(h => Object.assign({}, h, { demo: true, name: demoName(h) }));
+  const exHerds = () => { const e = S.D && exampleAt(S.D.village.lat, S.D.village.lon); return (e && e.data.herds) || DEMO_HERDS; };
+  const demoHerds = () => exHerds().map(h => Object.assign({}, h, { demo: true, name: demoName(h) }));
   function renameDemo() {
     for (const h of S.herds || []) {
-      const base = h.demo && DEMO_HERDS.find(d => d.id === h.id);
+      const base = h.demo && exHerds().find(d => d.id === h.id);
       if (base && (h.name === base.name || h.name === DEMO_KK[h.id])) h.name = demoName(base);
     }
   }
@@ -695,7 +790,7 @@
       S.cur = J.current(S.plots, S.herds, S.P);
       S.pl = solve(S.plots, S.herds);
     } catch (e) { status(t("err.calc") + ": " + e.message, { err: true }); return; }
-    const past = S.plots.reduce((s, p) => s + p.pasture_ha, 0);
+    const past = zoneHa();
     $("#vtitle").innerHTML = `<b>${esc(S.D.village.name)}</b> · Sentinel-2, ${S.D.source.year} · ${fmt(past)} ${t("common.ha")} ${src("sat")}${freshness()}`;
     metric("plan", { status: S.pl.status, before: J.hayTonnes(S.cur.deficit_kg, S.P), after: J.hayTonnes(S.pl.deficit_kg, S.P),
       over: S.cur.overloaded, missing: S.plots.filter(p => p.ndvi == null).length, herds: S.herds.length });
@@ -838,15 +933,16 @@
       ${obsHtml(p, c)}
       <table><tbody>
       ${p.nograze_ha > 0 && p.pasture_ha_gross != null
-        ? `<tr><td>${t("pop.pastureNet")}</td><td>${fmt(p.pasture_ha)} ${t("common.ha")} = ${fmt(p.pasture_ha_gross)} ${src("sat")} − ${fmt1(p.nograze_ha)} ${src("osm")}</td></tr>`
+        ? `<tr><td>${t("pop.pastureNet")}</td><td>${fmt(p.zone ? p.zone.before : p.pasture_ha)} ${t("common.ha")} = ${fmt(p.pasture_ha_gross)} ${src("sat")} − ${fmt1(p.nograze_ha)} ${src("osm")}</td></tr>`
         : `<tr><td>${t("pop.pasture")}</td><td>${fmt(p.pasture_ha)} ${t("common.ha")} ${src("sat")}</td></tr>`}
+      ${p.zone ? `<tr><td>${t("zn.row")}</td><td>${pct(p.zone.share)} ${t("zn.of", { a: fmt(p.zone.before) })} ${src("input")}</td></tr>` : ""}
       ${p.nograze_ha != null ? `<tr><td>${t("pop.nograze")}</td><td style="white-space:normal">${fmt1(p.nograze_ha)} ${t("common.ha")} ${t("pop.nograzeOf", { g: fmt(p.pasture_ha_gross), b: p.nograze_buffer_m })} ${src("osm")}</td></tr>` : ""}
       <tr><td>${t("pop.ndvi")}${p.ndvi_base != null ? ` ${S.D.source.base_year} → ${S.D.source.year}` : ""}</td><td>${ndviRow} ${src("sat")}</td></tr>
       <tr><td>${t("pop.quality")}</td><td>${confTag(p)}</td></tr>
       <tr><td>${t("pop.forageConf")}</td><td>${fcTag(p)}</td></tr>
       <tr><td>${t("pop.forage")}</td><td>${c.known ? fmt(c.forage / 1000) + " " + t("pop.t") : t("st.no_data")} ${src("model")}</td></tr>
       <tr><td>${t("pop.cap")}</td><td>${c.known ? "≈ " + sheepCap(c) + " " + t("pop.sheep") : t("st.no_data")} ${src(c.limited_by === "norm" ? "norm" : "model")}</td></tr>
-      ${c.norm ? `<tr><td>${t("nm.row")}</td><td style="white-space:normal">≈ ${fmt(c.sat.au_season / S.P.au.sheep)} ${src("model")} / ${fmt(c.norm.au_season / S.P.au.sheep)} ${src("norm")}<br>${normVerdictText(normVerdict(c) || { k: "match" })}</td></tr>` : ""}
+      ${c.norm ? `<tr><td>${t("nm.row")}</td><td style="white-space:normal">≈ ${fmt(c.sat.au_season / S.P.au.sheep)} ${src("model")} / ${fmt(c.norm.au_season / S.P.au.sheep)} ${src("norm")}<br>${normVerdictText(normVerdict(c) || { k: "match" })}${c.norm.green < 0.995 ? ` ${t("nm.green", { g: pct(c.norm.green), a: String(p.ndvi).replace(".", ","), b: String(p.ndvi_ref).replace(".", ",") })}` : ""}</td></tr>` : ""}
       <tr><td>${t("pop.load")}</td><td><b>${l.known ? pct(l.load) : t("st.no_data")}</b> (${S.mode === "current" ? t("kpi.before") : t("kpi.after")})</td></tr>
       <tr><td>${t("pop.herds")}</td><td style="white-space:normal">${esc(names.join(", ")) || "—"}</td></tr>
       <tr><td>${t("pop.water")}</td><td style="white-space:normal">${esc(t("ws." + ws))}</td></tr>
@@ -875,7 +971,7 @@
     root.querySelectorAll("[data-closed]").forEach(chk => chk.onchange = () => {
       const id = chk.dataset.closed;
       chk.checked ? S.forbidden.add(id) : S.forbidden.delete(id);
-      rebuildPlots(); render(); closePlotCard();
+      saveZone(); rebuildPlots(); render(); closePlotCard();
       toast((chk.checked ? t("pop.closedOn") : t("pop.closedOff")) + ": " + id);
     });
     root.querySelectorAll("[data-rest]").forEach(inp => inp.onchange = () => {
@@ -1576,7 +1672,7 @@
       herds: S.herds.filter(h => !h.from_bot).map(h => ({ id: h.id, name: h.name, sheep: h.sheep || 0, goats: h.goats || 0, cattle: h.cattle || 0, horses: h.horses || 0,
         home: h.home, daily_return: !!h.daily_return, allowed_plots: h.allowed_plots || [], demo: !!h.demo, weight: +h.weight || 1 })),
       water: [...S.added], forbidden: [...S.forbidden], water_status: Object.assign({}, S.waterSet), params: Object.assign({}, S.userP),
-      rest: Object.assign({}, S.rest || {}), norm: S.normSel || undefined, summary: summary() };
+      rest: Object.assign({}, S.rest || {}), norm: S.normSel || undefined, zone: S.zone || undefined, summary: summary() };
   }
   async function saveScenario(shared) {
     if (!S.D) return;
@@ -1592,7 +1688,7 @@
   function loadScenario(sc) {
     // сценарий применяется при открытии карты (onRoute) — так не бывает двух параллельных загрузок
     S.pending = { key: cacheKey(sc.village.lat, sc.village.lon), opts: { herds: (sc.herds || []).map(h => Object.assign({}, h, { allowed_plots: (h.allowed_plots || []).length ? h.allowed_plots : undefined })),
-      water: sc.water || [], forbidden: sc.forbidden || [], water_status: sc.water_status || {}, rest: sc.rest || {}, norm: sc.norm || null, params: sc.params || null } };
+      water: sc.water || [], forbidden: sc.forbidden || [], water_status: sc.water_status || {}, rest: sc.rest || {}, zone: sc.zone || null, norm: sc.norm || null, params: sc.params || null } };
     const h = `#/map?lat=${sc.village.lat}&lon=${sc.village.lon}&name=${encodeURIComponent(sc.village.name)}`;
     if (location.hash === h) onRoute(); else location.hash = h;
   }
@@ -1948,7 +2044,7 @@
     const capAU = water.reduce((s, p) => s + J.plotCapacity(p, S.P).au_season, 0);
     const au = S.herds.reduce((s, h) => s + J.herdAU(h, S.P), 0);
     const ratio = capAU > 0 ? au / capAU : Infinity;
-    const worst = S.plots.filter(p => S.cur.load[p.id].load > 1).sort((a, b) => S.cur.load[b.id].load - S.cur.load[a.id].load)[0];
+    const worst = S.plots.filter(p => S.cur.load[p.id].load > 1 && p.pasture_ha >= 5).sort((a, b) => S.cur.load[b.id].load - S.cur.load[a.id].load)[0];
     const shortHerds = S.herds.filter(h => S.pl.coverage && S.pl.coverage[h.id] < Sd - 0.5);
     const deficitT = J.hayTonnes(S.pl.deficit_kg, S.P);
     const excessAU = Object.values(S.pl.unmet || {}).reduce((s, x) => s + x, 0) / Sd;
@@ -1961,7 +2057,7 @@
   const ngNote = () => (S.D.nograze && ["ok", "empty"].includes(S.D.nograze.status) ? "" : S.ngState === "loading" ? `<p class="note" id="ngNote">${t("ng.wait")}</p>`
     : S.ngState === "error" ? `<p class="note warn" id="ngNote">${t("ng.failNote")} <button type="button" class="linkbtn" data-goto="data">${t("ng.toData")}</button></p>` : "");
   function briefHtml() {
-    if (!S.herds.length) return `${ngNote()}<div class="brief"><p>${t("brief.noherds")}</p>
+    if (!S.herds.length) return `${zoneCard()}${ngNote()}<div class="brief"><p>${t("brief.noherds")}</p>
       <p style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn btn-soft btn-sm" id="addDemo">${ic("plus")} ${t("ov.addDemo")}</button>
       <button class="btn btn-ghost btn-sm" id="addHerd0">${ic("plus")} ${t("herds.add")}</button></p></div>`;
     const b = briefData();
@@ -1988,7 +2084,7 @@
     if (b.deficitT >= 1) todo.push(t("brief.do.reduce"));
     todo.push(t("brief.do.bot"));
     todo.push(t("brief.do.calib"));
-    return `${demoBanner()}${ngNote()}${res}<div class="brief"><span class="brief-status st-${st[0]}">${t(st[1])}</span>
+    return `${demoBanner()}${zoneCard()}${ngNote()}${res}<div class="brief"><span class="brief-status st-${st[0]}">${t(st[1])}</span>
       ${lines.map(x => `<p>${x}</p>`).join("")}
       <h3 style="margin:12px 0 2px;font-size:15px">${t("brief.do")}</h3>
       <ul class="todo">${todo.slice(0, 4).map(x => `<li>${ic("check")}<span>${x}</span></li>`).join("")}</ul>
@@ -2010,12 +2106,12 @@
       { v: String(st.ndvi.value), u: "NDVI", l: t("cap.s.ndvi"), f: t("cap.f.ndvi", { ha: fmt(st.area.value) }), s: "sat" },
       { v: fmt(st.biomass.value), u: t("cap.u.kgha"), l: t("cap.s.biomass"), f: `(${st.ndvi.value} − ${P.ndvi0}) × ${fmt(P.k_ndvi)}`, s: "model" },
       { v: fmt(st.forage.value / 1000), u: t("pop.t"), l: t("cap.s.forage"), s: "model",
-        f: (st.nograze ? `(${fmt(p.pasture_ha_gross)} − ${fmt1(st.nograze.value)}) ${t("common.ha")}` : `${fmt(st.area.value)} ${t("common.ha")}`) + ` × ${fmt(st.biomass.value)} × ${P.util}` },
+        f: (st.nograze && !p.zone ? `(${fmt(p.pasture_ha_gross)} − ${fmt1(st.nograze.value)}) ${t("common.ha")}` : `${fmt(st.area.value)} ${t("common.ha")}`) + ` × ${fmt(st.biomass.value)} × ${P.util}` },
       { v: fmt1(st.au_season.value), u: t("cap.u.au"), l: t("cap.s.au"), f: t("cap.f.au", { i: P.intake, d: P.season_days }), s: "model" },
       { v: fmt(st.sheep.value), u: t("pop.sheep"), l: t(st.norm ? "cap.s.sheepSat" : "cap.s.sheep"), f: `${fmt1(st.au_season.value)} × ${per("sheep")}`, s: "model" },
     ];
     if (st.norm) steps.push(
-      { v: fmt(st.norm.value), u: t("pop.sheep"), l: t("cap.s.norm"), f: t("cap.f.norm", { ha: fmt1(st.area.value), n: fmt2(p.norm.au_ha * au.sheep) }) + (e.capacity.norm.season_factor < 1 ? ` × ${p.norm.days[1]} / ${P.season_days}` : ""), s: "norm" },
+      { v: fmt(st.norm.value), u: t("pop.sheep"), l: t("cap.s.norm"), f: t("cap.f.norm", { ha: fmt1(st.area.value), n: fmt2(p.norm.au_ha * au.sheep) }) + (e.capacity.norm.season_factor < 1 ? ` × ${p.norm.days[1]} / ${P.season_days}` : "") + (e.capacity.norm.green < 0.995 ? ` × ${fmt2(e.capacity.norm.green)}` : ""), s: "norm" },
       { v: fmt(st.limit.value), u: t("pop.sheep"), l: t("cap.s.limit"), f: `${t("cap.f.limit", { a: fmt(st.sheep.value), b: fmt(st.norm.value) })} ${normVerdictText(normVerdict(e.capacity) || { k: "match" })}`, s: e.capacity.limited_by === "norm" ? "norm" : "model" });
     return `<section class="chain" aria-labelledby="chainH"><h3 id="chainH">${ic("leaf")} ${t("cap.title")}</h3>
       <label class="field chain-pick">${t("cap.plot")}<select id="chainPlot">${known.map(x => `<option value="${esc(x.id)}" ${x.id === p.id ? "selected" : ""}>${esc(x.id)}</option>`).join("")}</select></label>
@@ -2023,8 +2119,10 @@
         <div class="cl">${esc(x.l)} ${src(x.s)}<small>${esc(x.f)}</small></div></li>`).join("")}</ol>
       <ul class="chain-notes">
         <li>${st.norm ? normNote(p.norm) : `${t("nm.noRegion")} <button type="button" class="linkbtn" data-goto="data">${t("nm.choose")}</button>`}</li>
+        ${st.norm && e.capacity.norm.green < 0.995 ? `<li>${t("nm.green", { g: pct(e.capacity.norm.green), a: String(p.ndvi).replace(".", ","), b: String(p.ndvi_ref).replace(".", ",") })} ${src("sat")}</li>` : ""}
         <li>${t("cap.n.au", { cattle: fmt2(au.cattle), horses: fmt2(au.horses), sheep: fmt2(au.sheep), goats: fmt2(au.goats) })}</li>
-        ${st.nograze ? `<li>${t("cap.n.ng", { g: fmt(p.pasture_ha_gross), n: fmt1(st.nograze.value), a: fmt1(st.area.value), b: p.nograze_buffer_m })}</li>` : ""}
+        ${p.zone ? `<li>${t("zn.chain", { a: fmt1(p.zone.before), s: pct(p.zone.share), b: fmt1(st.area.value) })}</li>` : ""}
+        ${st.nograze ? `<li>${t("cap.n.ng", { g: fmt(p.pasture_ha_gross), n: fmt1(st.nograze.value), a: fmt1(p.zone ? p.zone.before : st.area.value), b: p.nograze_buffer_m })}</li>` : ""}
         <li>${t("cap.n.season", { d: P.season_days })}</li>
         <li>${t("cap.n.veg", { k: fmt(P.k_ndvi) })}</li>
       </ul>
@@ -2046,7 +2144,6 @@
     if (s.type === "add_water") return t("sg.add_water", { id: esc(s.plot), n: fmt(s.au_days / S.P.season_days / S.P.au.sheep) });
     if (s.type === "check_data") return t("sg.check_data", { ids: plotIds(s.plots) });
     if (s.type === "extend_rights") return t("sg.extend_rights", { ids: plotIds(s.plots) });
-    if (s.type === "split_daily_herd") return t("sg.split_daily_herd");
     if (s.type === "reduce_herd") return t("sg.reduce_herd", { au: fmt(s.au), sheep: fmt(s.sheep) });
     if (s.type === "hay") return t("sg.hay", { t: fmt(s.tonnes) });
     return "";
@@ -2068,6 +2165,7 @@
     if (w.type === "no_data_excluded" || w.type === "low_quality_used") return t("wr." + w.type, { ids: plotIds(w.plots) });
     if (w.type === "water_unconfirmed") return t("wr.water_unconfirmed", { n: w.plots.length });
     if (w.type === "rights_not_specified") return t("wr.rights_not_specified", { n: w.herds.length });
+    if (w.type === "daily_far_used") return t("wr.daily_far_used", { h: w.herds.map(id => esc((S.herds.find(h => h.id === id) || {}).name || id)).join(", "), ids: plotIds(w.plots) });
     return t("wr." + w.type);
   }
   function resultHtml() {
@@ -2160,6 +2258,7 @@
   function paneBrief(el) {
     el.innerHTML = briefHtml() + chainHtml() + movesHtml() + wxHtml() +
       (S.herds.length ? `<details class="more"><summary>${ic("chart")} ${t("brief.details")}</summary><div id="briefDetails"></div></details>` : "");
+    bindZone(el);
     const det = $("#briefDetails", el);
     if (det) paneOverview(det);
     el.querySelectorAll("[data-how]").forEach(b => b.onclick = () => openHow(b.dataset.how));
@@ -2246,6 +2345,7 @@
         состояние: n.state === "degraded" ? "деградированные" : "восстановленные", норма_га_на_овцу: +(n.au_ha * S.P.au.sheep).toFixed(2),
         участков_ограничено_нормой: normTotals(S.plots).limited, по_снимкам_овец: Math.round(normTotals(S.plots).sat), по_норме_овец: Math.round(normTotals(S.plots).norm), в_расчёте_овец: Math.round(normTotals(S.plots).cap) }
         : "область не определена — предел по норме не применён"))(NM && NM.pick(S.normSel)),
+      где_селу_можно_пасти: zoneText().replace(/<[^>]+>/g, ""),
       // сверено с данными за то же время (web/kelisim.js); без имён дворов и без их текста
       наблюдения_людей: Object.entries(obsNow()).flatMap(([id, g]) => g.items.map(i => ({ участок: id, что: { no_grass: "мало травы", weeds: "бурьян, непоедаемая трава", no_water: "нет воды", far: "далеко" }[i.reason],
         когда_видели: i.dates.join(", ") || null, дворов: i.households.length, вывод: { check: "проверить на месте", match: "сходится с данными", other_time: "другое время, не сравнивать", no_date: "без даты, не сравнивать", info: "не сверяется" }[i.verdict],
@@ -2258,6 +2358,7 @@
         качество_снимка: confidence(p), достоверность_корма: M.forageConfidence(p, S.P), статус_данных: capOf(p).status,
         вода: t("ws." + M.waterStatus(p)), закрыт_по_вводу: !!p.forbidden, отдых_выпас_только_дни: p.window ? `${p.window.from}-${p.window.to}` : undefined,
         ёмкость_овец_оценка: capOf(p).known ? Math.round(sheepOf(capOf(p).au_season)) : null,
+        трава_слабее_обычной_норма_уменьшена_до_проц: (n => (n && n.green < 0.995 ? Math.round(n.green * 100) : undefined))(capOf(p).norm),
         что_ограничивает: capOf(p).limited_by ? (capOf(p).limited_by === "norm" ? "норма МСХ" : "трава по снимку") : undefined,
         как_рассчитано: J.explainCapacity(p, S.P).steps.map(s => `${s.key}: ${s.formula}`).join("; "),
         нагрузка_если_все_у_села_проц: S.cur.load[p.id].known ? Math.round(S.cur.load[p.id].load * 100) : null,
@@ -2409,7 +2510,7 @@
   function renderHome() {
     // те же данные, что на карте: пастбище без жилья, ферм и промзон (OSM)
     const plots = (NG && DEFAULT.nograze && DEFAULT.nograze.status === "ok" ? NG.apply(DEFAULT.plots, DEFAULT.nograze, S.ngBuf) : DEFAULT.plots).map(p => Object.assign({}, p));
-    const pl = J.solve(plots, DEMO_HERDS);
+    const pl = J.solve(plots, DEFAULT.herds || DEMO_HERDS);
     // спутниковая карта на главной — только когда видна (на телефоне она ниже первого экрана): тайлы не отнимают канал у страницы
     if (window.L && !heroMap && !heroForce && !heroMapVisible()) { lazyHeroMap(); }
     else if (window.L && !heroMap) {
@@ -2461,7 +2562,7 @@
       const el = e.target;
       if (el.matches && el.matches('input[type="number"]') && /^0\d/.test(el.value)) el.value = String(Math.round(+el.value));
     });
-    $("#drawBtn").onclick = () => (S.draw ? endDraw() : startDraw());
+    $("#drawBtn").onclick = () => (S.draw ? endDraw() : startZone());
     // телефон: итог и план — под картой; кнопка на карте прокручивает к ним
     $("#toResult").onclick = () => { const pnl = $(".panel"); if (pnl) pnl.scrollIntoView({ behavior: "smooth", block: "start" }); };
     $("#drawUndo").onclick = undoDraw;
@@ -2505,13 +2606,13 @@
     return { t, fmt, fmt1, pct, esc, src, J, M, S, scheme, loadColor, confidence, summary: summary(), trend: trendLine(), lang: I.lang,
       norm: (n => { if (!n) return ""; const tt = normTotals(S.plots), kv = fmt2(n.au_ha * S.P.au.sheep);
         return `${t("nm.source")}. ${n.soft ? t("nm.noteSoft", { r: esc(regName(n.region)), n: kv }) : t("nm.noteRow", { ty: esc(n.type), n: kv, s: t(n.state === "degraded" ? "nm.degraded" : "nm.restored") })} ${t("nm.sum", { sat: fmt(tt.sat), norm: fmt(tt.norm), cap: fmt(tt.cap) })} ${t("nm.sumK", { k: tt.limited, n: tt.n })}`; })(NM && NM.pick(S.normSel)),
-      wells: wellRank(), wcText, planSuggestions, meta: M.metaOf(S.D), scenarios: scen, variantName, sgText, wrText, whyHerd, dateStr, algoLine, bottleneckHtml };
+      zone: zoneText(), wells: wellRank(), wcText, planSuggestions, meta: M.metaOf(S.D), scenarios: scen, variantName, sgText, wrText, whyHerd, dateStr, algoLine, bottleneckHtml };
   }
 
   // Келісім — согласование плана между дворами (js/kelisim-ui.js)
-  const Kel = !window.KelisimUI ? { route() {} } : window.KelisimUI({ t, I, S, C, J, M, K: window.JaiylymKelisim, NM, $, $$, esc, ic, src, fmt, fmt1, pct, dateStr, pillStyle, loadColor, scheme, toast, go, errText, openVillage, exampleAt, EXAMPLES, exName, regName, phone });
+  const Kel = !window.KelisimUI ? { route() {} } : window.KelisimUI({ t, I, S, C, J, M, K: window.JaiylymKelisim, NM, $, $$, esc, ic, src, fmt, fmt1, pct, dateStr, pillStyle, loadColor, scheme, toast, go, errText, openVillage, exampleAt, EXAMPLES, exName, regName, phone, zoneText, closedDlg, startZone, zoneHa });
   $("#kelBtn").onclick = () => go("kelisim", "new=1");
 
-  window.JaiylymApp = { S, openVillage, render, summary, confidence, scheme, reportCtx, Kel, pickVillageOnMap, aiContext, briefData, openHow, renderPane, rebuildPlots };   // для отладки и тестов
+  window.JaiylymApp = { S, openVillage, render, summary, confidence, scheme, reportCtx, Kel, pickVillageOnMap, aiContext, briefData, openHow, renderPane, rebuildPlots, setZone };   // для отладки и тестов
   init();
 })();
