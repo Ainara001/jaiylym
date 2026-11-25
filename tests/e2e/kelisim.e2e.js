@@ -393,14 +393,14 @@ async function liveFlow(b, name) {
   await a.waitForFunction(() => /вода есть\?/.test(document.querySelector("#lvLog").textContent), null, { timeout: 15000 });
   await g.click(".kpin");
   await g.click('.kpop [data-v="1"]');
-  await a.waitForFunction(() => /👍 1/.test(document.querySelector("#lvMine").textContent), null, { timeout: 15000 });
+  await a.waitForFunction(() => /согласен: 1/.test(document.querySelector("#lvMine").textContent), null, { timeout: 15000 });
   // Асан подтверждает: «Вы уверены?» с минусами и оценкой
   await a.click("#lvConf");
   await a.waitForSelector("dialog[open] #sureYes");
   assert.match(await a.textContent("dialog[open]"), /Вы уверены/);
   await check(a, name + " Асан: вы уверены");
   await a.click("#sureYes");
-  await a.waitForFunction(() => /место подтверждено/.test(document.querySelector("#lvMine").textContent));
+  await a.waitForFunction(() => /подтверждено/.test(document.querySelector("#lvMine").textContent));
   // организатор видит сводку: место, вывод, подтверждено; кто ещё не отметил
   await o.waitForFunction(() => /Асан/.test((document.querySelector("#lvSum") || {}).textContent || "") && /Ещё не отметили: Гульнар/.test(document.querySelector("#lvSum").textContent), null, { timeout: 15000 });
   for (const [p, l] of [[a, "Асан"], [g, "Гульнар"], [o, "орг"]]) await check(p, name + " карта " + l);

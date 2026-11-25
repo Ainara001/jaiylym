@@ -1,11 +1,11 @@
 /* Jaiylym — Келісім: общая карта и чат. Участник ставит кружок «хочу пасти здесь», все видят кружки друг друга (у каждого свой цвет),
- * обсуждают в чате, голосуют 👍/👎. Плюсы и минусы места считает сервер по расчёту (kelisim.js → web/kelisim.js pinFacts),
+ * обсуждают в чате, голосуют «согласен»/«против». Плюсы и минусы места считает сервер по расчёту (kelisim.js → web/kelisim.js pinFacts),
  * ИИ даёт короткую оценку и совет, а перед подтверждением спрашивает «вы уверены?». Кто в сети — по опросу живого слоя.
  * Данные: GET /api/kelisim/<id>/live?since=<номер сообщения>, POST …/pin, …/chat, …/assess, …/summary. */
 (function () {
   "use strict";
   window.KelisimLive = function (X) {
-    const { t, I, C, $, $$, esc, toast, kErr, getV, getCur, plotFull, reload, poke } = X;
+    const { t, I, C, $, $$, esc, ic, toast, kErr, getV, getCur, plotFull, reload, poke } = X;
     const tt = (k, v) => t("kel.lv." + k, v);
     const POLL = 4000, ONLINE = "online";
     // разные хорошо различимые цвета (как у игроков в викторине); организатор — зелёный сайта
@@ -20,9 +20,9 @@
     const av = (hid, big) => `<span class="kav${big ? " kav-big" : ""}" style="background:${colorOf(hid)}" aria-hidden="true">${esc(initials(hid === "org" ? tt("orgShort") : nameOf(hid)))}</span>`;
     const pinOf = hid => (data && data.pins.find(p => p.hid === hid)) || null;
     const ago = iso => { const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000)); return m < 1 ? tt("justNow") : m < 60 ? tt("minAgo", { n: m }) : m < 1440 ? tt("hAgo", { n: Math.round(m / 60) }) : tt("dAgo", { n: Math.round(m / 1440) }); };
-    const verdictChip = v => `<span class="kv kv-${esc(v)}">${tt("v." + v)}</span>`;
+    const verdictChip = v => `<span class="kvd kvd-${esc(v)}">${tt("v." + v)}</span>`;
     function factText(x) {
-      const p = Object.assign({}, x, { names: (x.names || []).map(esc).join(", ") });
+      const p = Object.assign({}, x, { names: (x.names || []).map(esc).join(", ") }, x.d != null ? { d: String(x.d).replace(".", ",") } : {});   // км с запятой, как везде
       return tt("f." + x.k, p);
     }
     const listOf = (arr, cls, sign) => (arr.length ? `<ul class="kpc ${cls}">${arr.map(x => `<li><span aria-hidden="true">${sign}</span> ${factText(x)}</li>`).join("")}</ul>` : "");
@@ -52,13 +52,13 @@
       root = document.createElement("section");
       root.className = "card klive"; root.id = "klive";
       root.innerHTML = `<div class="klive-h"><h2>${tt("title")}</h2><span class="klive-on" id="lvOn"></span></div>
-        <p class="fine">${tt(V().role === "org" ? "introOrg" : "intro")}</p>
+        <ol class="klsteps"><li><b>${ic("pin")}</b><span>${tt("s1")}</span></li><li><b>${ic("users")}</b><span>${tt("s2")}</span></li><li><b>${ic("check")}</b><span>${tt("s3")}</span></li></ol>
         <div class="kpeople" id="lvPeople" aria-label="${tt("people")}"></div>
         <div class="klive-grid">
           <div class="klive-left"><div class="klive-tools" id="lvTools"></div><div class="klive-map" id="lvMap" role="application" aria-label="${tt("mapLabel")}"></div><div id="lvMine" aria-live="polite"></div></div>
           <aside class="klive-chat" aria-label="${tt("chat")}"><h3>${tt("chat")}</h3><div class="kchat-log" id="lvLog" role="log" aria-live="polite"><p class="fine" id="lvEmpty">${tt("chatEmpty")}</p></div>
             <form class="kchat-f" id="lvForm"><label class="sr-only" for="lvIn">${tt("chatPh")}</label><input id="lvIn" maxlength="300" autocomplete="off" placeholder="${esc(tt("chatPh"))}">
-            <button class="btn btn-primary btn-sm" id="lvSend">${tt("send")}</button></form><p class="fine kchat-note">${tt("chatNote")}</p></aside>
+            <button class="btn btn-primary btn-sm" id="lvSend">${tt("send")}</button></form></aside>
         </div>
         <div id="lvSum"></div>`;
       $("#lvForm", root).onsubmit = async e => {
@@ -160,7 +160,7 @@
       box.innerHTML = ids.map(hid => { const s = stateOf(hid), p = pinOf(hid);
         return `<div class="kperson kp-${s.k}${hid === me() ? " kp-me" : ""}" title="${esc(nameOf(hid))}: ${esc(s.txt)}">${av(hid, true)}<span class="kdot" aria-hidden="true"></span>
           <b>${esc(nameOf(hid))}${hid === me() ? ` <small>(${tt("you")})</small>` : ""}</b><small>${esc(s.txt)}</small>
-          ${hid === "org" ? "" : `<small class="kp-pin">${p ? (p.confirmed ? `✓ ${tt("pinOk")}` : `📍 ${tt("pinYes")}`) : tt("pinNo")}</small>`}</div>`; }).join("");
+          ${hid === "org" ? "" : `<small class="kp-pin">${p ? (p.confirmed ? `✓ ${tt("pinOk")}` : tt("pinYes")) : tt("pinNo")}</small>`}</div>`; }).join("");
       const on = $("#lvOn", root); if (on) on.innerHTML = `<span class="kdot kdot-on" aria-hidden="true"></span> ${tt("onlineN", { n })}`;
     }
 
@@ -189,8 +189,8 @@
       return `<div class="kpop" data-hid="${esc(hid)}"><div class="kpop-h">${av(hid)}<b>${esc(nameOf(hid))}</b>${verdictChip(p.verdict)}</div>
         <p class="fine">${placeLine(p)}${p.confirmed ? ` · ✓ ${tt("pinOk")}` : ""}</p>${listOf(p.pros, "kpc-pro", "＋")}${listOf(p.cons, "kpc-con", "－")}
         ${p.ai && !p.ai_stale ? `<div class="kai kai-sm"><b>${tt("aiT")}</b>${aiHtml(p.ai.text)}</div>` : ""}
-        <div class="kvote">${own ? `<span class="fine">👍 ${vt.up} · 👎 ${vt.down}</span>` : `<button type="button" class="btn btn-sm ${vt.my > 0 ? "btn-green" : "btn-soft"}" data-v="1" aria-pressed="${vt.my > 0}">👍 ${vt.up}</button>
-          <button type="button" class="btn btn-sm ${vt.my < 0 ? "btn-danger" : "btn-ghost"}" data-v="-1" aria-pressed="${vt.my < 0}">👎 ${vt.down}</button>`}
+        <div class="kvote">${own ? `<span class="fine">${tt("yes")}: ${vt.up} · ${tt("no")}: ${vt.down}</span>` : `<button type="button" class="btn btn-sm ${vt.my > 0 ? "btn-green" : "btn-soft"}" data-v="1" aria-pressed="${vt.my > 0}">${ic("check")} ${tt("yes")} · ${vt.up}</button>
+          <button type="button" class="btn btn-sm ${vt.my < 0 ? "btn-danger" : "btn-ghost"}" data-v="-1" aria-pressed="${vt.my < 0}">${ic("x")} ${tt("no")} · ${vt.down}</button>`}
           <button type="button" class="btn btn-sm btn-ghost" data-talk>${tt("discuss")}</button></div></div>`;
     }
     function bindPopup(el) {
@@ -209,7 +209,7 @@
       const has = !!pinOf(me());
       box.innerHTML = placing
         ? `<div class="kplacing" role="status"><b>${tt("tapMap")}</b><button type="button" class="btn btn-sm btn-ghost" id="lvCancel">${tt("cancel")}</button></div>`
-        : `<button type="button" class="btn btn-primary" id="lvPlace">📍 ${tt(has ? "move" : "place")}</button>
+        : `<button type="button" class="btn btn-primary" id="lvPlace">${ic("pin")} ${tt(has ? "move" : "place")}</button>
           <label class="klive-r">${tt("radius")} <select id="lvR">${[250, 500, 1000].map(r => `<option value="${r}" ${r === radius ? "selected" : ""}>${tt("r" + r)}</option>`).join("")}</select></label>`;
       const pl = $("#lvPlace", box); if (pl) pl.onclick = () => { placing = true; renderTools(); $("#lvMap", root).scrollIntoView({ behavior: "smooth", block: "center" }); };
       const cn = $("#lvCancel", box); if (cn) cn.onclick = () => { placing = false; renderTools(); };
@@ -225,7 +225,7 @@
       if (!p) { box.innerHTML = V().status === "closed" ? "" : `<p class="note">${tt("noPin")}</p>`; return; }
       const vt = votes(p);
       box.innerHTML = `<div class="kmine" style="border-color:${colorOf(me())}"><div class="kpop-h">${av(me())}<b>${tt("myPlace")}</b>${verdictChip(p.verdict)}</div>
-        <p class="fine">${placeLine(p)} · 👍 ${vt.up} · 👎 ${vt.down}</p>
+        <p class="fine">${placeLine(p)} · ${tt("yes")}: ${vt.up} · ${tt("no")}: ${vt.down}</p>
         <div class="kpc-2">${listOf(p.pros, "kpc-pro", "＋")}${listOf(p.cons, "kpc-con", "－")}</div>${listOf(p.info, "kpc-info", "•")}
         <div class="kai" id="lvAi"><b>${tt("aiT")}</b>${p.ai && !p.ai_stale ? aiHtml(p.ai.text) : p.ai_fail ? `<p class="fine">${tt("aiNo")}</p>${aiHtml(template(p))}` : `<p class="startload"><span class="spin" aria-hidden="true"></span><span>${tt("aiWait")}</span></p>`}</div>
         <div class="kmine-b">${p.confirmed ? `<span class="kdone">✓ ${tt("pinOk")}</span>` : `<button type="button" class="btn btn-primary" id="lvConf">${tt("confirm")}</button>`}
@@ -283,13 +283,15 @@
       if (key === sumKey) return; sumKey = key;
       const without = V().households.filter(h => !pinOf(h.id));
       const conf = data.pins.filter(p => p.confirmed).length;
-      box.innerHTML = `<div class="ksum"><h3>${tt("sumT")}</h3><p class="fine">${tt("sumD", { n: data.pins.length, a: V().households.length, c: conf })}</p>
-        ${data.pins.length ? `<div class="ksum-list">${data.pins.map(p => { const vt = votes(p); return `<div class="ksum-row">${av(p.hid)}<div class="ksum-main"><b>${esc(nameOf(p.hid))}</b> ${verdictChip(p.verdict)}${p.confirmed ? ` <span class="kv kv-good">✓ ${tt("pinOk")}</span>` : ""}
-          <small>${placeLine(p)} · 👍 ${vt.up} · 👎 ${vt.down}</small>
+      box.innerHTML = `<div class="ksum"><h3>${tt("sumT")} <small class="fine">${tt("sumD", { n: data.pins.length, a: V().households.length, c: conf })}</small></h3>
+        ${data.pins.length ? `<div class="ksum-list">${data.pins.map(p => { const vt = votes(p); return `<div class="ksum-row">${av(p.hid)}<div class="ksum-main"><b>${esc(nameOf(p.hid))}</b> ${verdictChip(p.verdict)}${p.confirmed ? ` <span class="kvd kvd-good">✓ ${tt("pinOk")}</span>` : ""}
+          <small>${placeLine(p)}</small>
+          <div class="kvote">${p.hid === me() ? `<span class="fine">${tt("yes")}: ${vt.up} · ${tt("no")}: ${vt.down}</span>` : `<button type="button" class="btn btn-sm ${vt.my > 0 ? "btn-green" : "btn-soft"}" data-sv="1" data-hid="${esc(p.hid)}" aria-pressed="${vt.my > 0}">${ic("check")} ${tt("yes")} · ${vt.up}</button><button type="button" class="btn btn-sm ${vt.my < 0 ? "btn-danger" : "btn-ghost"}" data-sv="-1" data-hid="${esc(p.hid)}" aria-pressed="${vt.my < 0}">${ic("x")} ${tt("no")} · ${vt.down}</button>`}</div>
           <div class="kpc-2">${listOf(p.pros.slice(0, 2), "kpc-pro", "＋")}${listOf(p.cons.slice(0, 3), "kpc-con", "－")}</div></div></div>`; }).join("")}</div>` : ""}
         ${without.length ? `<p class="fine">${tt("noPinYet", { n: without.map(h => esc(h.name)).join(", ") })}</p>` : ""}
         ${data.pins.length ? `<div class="kai" id="lvSumAi"><b>${tt("sumAiT")}</b>${data.summary ? aiHtml(data.summary.text) + `<p class="fine">${tt("sumAt", { t: ago(data.summary.at), n: data.summary.pins })}</p>` : `<p class="fine">${tt("sumAiD")}</p>`}
           <button type="button" class="btn btn-soft btn-sm" id="lvSumGo">${tt(data.summary ? "sumAgain" : "sumGo")}</button></div>` : ""}</div>`;
+      $$("[data-sv]", box).forEach(b => b.onclick = async () => { const p = pinOf(b.dataset.hid), v = +b.dataset.sv; if (!p) return; await pinAct({ op: "vote", target: p.hid, v: votes(p).my === v ? 0 : v }, b); sumKey = ""; renderSum(); });
       const go = $("#lvSumGo", box); if (go) go.onclick = async () => {
         go.disabled = true; go.innerHTML = `<span class="spin" aria-hidden="true"></span> ${tt("aiWait")}`;
         try { const r = await C.kel("POST", `/${getCur().id}/summary`, getCur().key, { lang: I.lang }); if (r.summary) { data.summary = r.summary; sumKey = ""; renderSum(); } else { toast(tt("aiNo"), true); go.disabled = false; go.textContent = tt("sumGo"); } }
