@@ -202,7 +202,7 @@ async function journey(page, label) {
   assert.match(await page.textContent('.pane[data-pane="brief"]'), /условных демо-стад/);
   // цепочка «NDVI → овцы» на виду: Б-С Кегена 0.289 → 313 овец (367 до вычета жилья и ферм OSM: 320 − 47,1 га), без открытия карточки
   const chain = await page.textContent(".chain");
-  for (const re of [/0\.289/, /756/, /313/, /320 − 47,1/, /OpenStreetMap/, /корова — 1, лошадь — 1,2, овца — 0,2/, /Предел по норме Минсельхоза/, /0,5 га на овцу/, /150 дней с 1 мая/]) assert.match(chain, re, label + ": цепочка расчёта ёмкости");
+  for (const re of [/0\.289/, /756/, /313/, /320 − 47,1/, /OpenStreetMap/, /корова — 1, лошадь — 1,2, овца — 0,2/, /Предел по норме Минсельхоза/, /0,5 га на овцу/, /150 дней с 01.05/]) assert.match(chain, re, label + ": цепочка расчёта ёмкости");
   // трава по годам (P3): ряд Кегена посчитан заранее — вывод, график, правило «не деградация»
   await page.evaluate(() => window.JaiylymApp.renderPane("data"));
   const mt = await page.textContent(".mt");
