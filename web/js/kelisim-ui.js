@@ -215,6 +215,8 @@
       const n = draft();
       put(`<p><a class="linkbtn" href="#/map">${tt("backMap")}</a></p><h1>${tt("newTitle")}</h1><p class="lead">${tt("newLead", { v: esc(S.D.village.name) })}</p>
         ${n.rows.some(r => r.demo) ? `<p class="note warn">${tt("demoNote")}</p>` : ""}${!S.normSel ? `<p class="note warn">${t("nm.noRegion")}</p>` : ""}
+        <div class="card zone-${S.zone ? S.zone.mode : "all"}"><h2>${t("zn.title")}</h2><p>${X.zoneText()}</p>${!S.zone || S.zone.mode === "all" ? `<p class="note warn">${t("zn.kel")}</p>` : ""}
+          <div class="startbtns"><button type="button" class="btn btn-soft" id="kelZDraw">${ic("pen")} ${t("zn.draw")}</button><button type="button" class="btn btn-soft" id="kelZOff">${ic("x")} ${t("zn.mark")}</button></div></div>
         <div class="card"><h2>${tt("yards")}</h2><p>${tt("yardsD")}</p><div id="kelRows">${n.rows.map(newRow).join("")}</div>
           <button type="button" class="btn btn-soft" id="kelAdd">${ic("plus")} ${tt("addYard")}</button></div>
         <div class="card"><h2>${tt("rules")}</h2>${ruleHtml(n.rule, "kelRule")}
@@ -228,6 +230,8 @@
         n.title = $("#kelTitle").value.trim(); n.deadline = $("#kelDeadline").value; n.rule = ($("[name=kelRule]:checked") || {}).value || "share";
       };
       el().oninput = () => { if ($("#kelTitle")) grab(); };
+      $("#kelZDraw").onclick = () => { grab(); X.startZone(); };
+      $("#kelZOff").onclick = () => { grab(); X.closedDlg(); };
       $("#kelAdd").onclick = () => { grab(); n.rows.push(blank()); newPage().then(() => { const x = $$("#kelRows [data-f=name]"); x[x.length - 1].focus(); }); };
       $$("[data-rmrow]").forEach(b => b.onclick = () => { grab(); n.rows.splice(+b.dataset.rmrow, 1); newPage(); });
       $("#kelCreate").onclick = async e => {
@@ -249,7 +253,7 @@
       };
     }
     function snapshot() {
-      return { village: { name: S.D.village.name, lat: S.D.village.lat, lon: S.D.village.lon }, plots: S.plots.map(({ geometry, ...p }) => p), params: Object.assign({}, S.P), norm: S.normSel || undefined,
+      return { village: { name: S.D.village.name, lat: S.D.village.lat, lon: S.D.village.lon }, plots: S.plots.map(({ geometry, ...p }) => p), params: Object.assign({}, S.P), norm: S.normSel || undefined, zone: S.zone || undefined,
         source: { year: S.D.source.year, dates: S.D.source.dates, nograze: (S.D.nograze && S.D.nograze.status) || "none" } };
     }
     const newRow = (r, i) => `<div class="krow"><div class="krow-h"><label class="field"><span>${tt("yardName")} ${i + 1}${r.demo ? ` <span class="tag tag-demo">${t("herds.demo")}</span>` : ""}</span><input data-f="name" maxlength="60" value="${esc(r.name)}" placeholder="${esc(tt("yardPh"))}"></label>
@@ -328,6 +332,8 @@
       return w.type === "proposal" ? tt(w.household === V.me ? "wv.mine" : "wv.proposal", { n: esc(nameOf(w.household)) }) : w.type === "start" ? "" : tt("wv." + w.type, { n: esc(nameOf(w.household)) });
     };
 
+    const zoneLine = z => (z ? t("zn.k." + z.mode + (z.official ? "O" : ""), { ha: fmt(z.ha) }) : "");
+
     // ---------- последствия ----------
     const names = list => list.map(x => esc(x.name || nameOf(x.id || x))).join(", ");
     const ppt = x => (x > 0 ? "+" : "−") + fmt1(Math.abs(x) * 100);
@@ -389,7 +395,7 @@
         <div class="card"><p class="kfeed ${s >= 0.995 ? "ok" : s >= 0.8 ? "mid" : "low"}"><b>${s >= 0.995 ? tt("feedAll") : tt("feedPart", { d: V.plan.days[h.id], s: D })}</b>${s >= 0.995 ? "" : `<small>${tt("feedPartD", { p: pct(s) })}</small>`}</p>
           <p class="fine kline">${tt("yourHerd")}: ${esc(herdLine(h.herd))}. ${src("model")}</p>
           <h2>${tt("where")}</h2>${routeHtml(h.id)}${mapOf(K.plotsOf(V.plan.routes[h.id]))}
-          <details data-d="fair"><summary><span>${tt("fairQ")}</span></summary><p>${tt("rule." + V.rule + "D")} ${tt("fairD")}</p>${V.plan.bottleneck ? `<p>${tt("bottle", { p: V.plan.bottleneck.plots.map(nw).join(", "), t: fmt(V.plan.bottleneck.shortfall_t) })}</p>` : ""}</details></div>
+          <p class="fine kline">${zoneLine(V.snapshot.zone)}</p><details data-d="fair"><summary><span>${tt("fairQ")}</span></summary><p>${tt("rule." + V.rule + "D")} ${tt("fairD")}</p>${V.plan.bottleneck ? `<p>${tt("bottle", { p: V.plan.bottleneck.plots.map(nw).join(", "), t: fmt(V.plan.bottleneck.shortfall_t) })}</p>` : ""}</details></div>
         ${closed ? `<button type="button" class="btn btn-primary kbig" id="kelPdf">${ic("file")} ${tt("protocol")}</button>` : V.expired ? `<p class="note warn">${tt("expired", { d: dOnly(V.deadline) })}</p>` : answerHtml(h, open, last)}`;
     }
     function answerHtml(h, open, last) {
@@ -539,7 +545,7 @@
         ${V.status === "closed" ? "" : `<form id="kSet"><label class="field kf">${tt("deadline")}<input type="date" name="deadline" value="${esc(V.deadline || "")}"></label>
         <h3>${tt("o.official")}</h3><p class="fine">${tt("o.officialD")}</p><div class="herd-grid">${SP.map(s => `<label class="field">${t("herds." + s)}<input type="number" inputmode="numeric" min="0" name="of_${s}" value="${o[s] == null ? "" : o[s]}"></label>`).join("")}</div>
         <label class="field kf">${tt("o.source")}<input name="source" maxlength="80" value="${esc(o.source || "")}"></label><button class="btn btn-soft">${t("common.save")}</button></form>`}
-        <p class="fine">${tt("o.check." + (ck.status || "unknown"), { p: (ck.plots || []).map(esc).join(", ") })} ${V.snapshot.norm ? `${t("nm.source")}: ${esc(regName(V.snapshot.norm.region))}.` : t("nm.noRegion")}</p>
+        <p class="fine">${zoneLine(V.snapshot.zone)} ${tt("o.check." + (ck.status || "unknown"), { p: (ck.plots || []).map(esc).join(", ") })} ${V.snapshot.norm ? `${t("nm.source")}: ${esc(regName(V.snapshot.norm.region))}.` : t("nm.noRegion")}</p>
         <div class="startbtns"><button type="button" class="btn btn-ghost" id="kExp">${ic("save")} ${tt("o.export")}</button><button type="button" class="btn btn-ghost" id="kCopyOrg">${tt("copyOrg")}</button><button type="button" class="btn btn-ghost" id="kDel">${ic("trash")} ${tt("o.del")}</button></div><p class="fine">${tt("o.exportD")}</p></details>`;
     }
     /** Кто понёс потерю — только если выбор был: без потерь у соседей вариант ничего не значит. */
@@ -676,7 +682,7 @@
           <td ${td}>${tt("st." + h.answer)}${h.carried ? " " + tt("st.carried") : ""}${h.answered_at ? `<br><span style="color:#666">${dateStr(h.answered_at)}</span>` : ""}</td><td ${td} width="80">&nbsp;</td></tr>`).join("")}</tbody></table>
         ${p.decisions.length ? h2(tt("o.decisions")) + `<table ${tbl}><tbody>${p.decisions.map(x => `<tr style="page-break-inside:avoid"><td ${td}><b>${esc(nameOf(x.household))}</b></td><td ${td}>${propText(x)}</td><td ${td}>${tt("pst." + x.status)}. ${choice(x)}${x.status === "accepted" && x.losers.length ? `<br>${tt("ef.lose")}: ${x.losers.map(l => `${esc(nameOf(l.id))} ${ppt(l.delta)} ${tt("pp")}`).join("; ")}` : ""}</td></tr>`).join("")}</tbody></table>` : ""}
         ${Object.keys(p.observations || {}).length ? h2(t("obs.title")) + `<p>${t("obs.note")}</p><table ${tbl}><tbody>${Object.entries(p.observations).map(([id, g]) => `<tr style="page-break-inside:avoid"><td ${td} width="190"><b>${plotFull(id)}</b>${g.verdict === "check" ? `<br>${t("obs.check")}` : ""}</td><td ${td}>${obsItems(g, "font-size:11px;margin:0")}</td></tr>`).join("")}</tbody></table>` : ""}
-        ${h2(tt("pr.data"))}<p>${tt("pr.src", { y: p.snapshot.source.year, d: p.snapshot.source.dates.map(x => dOnly(x)).join(", ") || "—", m: esc(p.snapshot.model_version) })} ${p.snapshot.deficit_t > 0.5 ? tt("o.deficit", { t: fmt(p.snapshot.deficit_t) }) : ""} ${tt("o.check." + (p.snapshot.check.status || "unknown"), { p: (p.snapshot.check.plots || []).map(esc).join(", ") })}</p>
+        ${h2(tt("pr.data"))}${p.snapshot.zone ? `<p>${zoneLine(p.snapshot.zone)}</p>` : ""}<p>${tt("pr.src", { y: p.snapshot.source.year, d: p.snapshot.source.dates.map(x => dOnly(x)).join(", ") || "—", m: esc(p.snapshot.model_version) })} ${p.snapshot.deficit_t > 0.5 ? tt("o.deficit", { t: fmt(p.snapshot.deficit_t) }) : ""} ${tt("o.check." + (p.snapshot.check.status || "unknown"), { p: (p.snapshot.check.plots || []).map(esc).join(", ") })}</p>
         ${p.herds.over.map(o => `<p>${tt("over", { s: low(t("herds." + o.species)), a: fmt(o.declared), b: fmt(o.official) })}</p>`).join("")}${p.restored && !p.restored.verified ? `<p>${tt("restUn")}</p>` : ""}
         ${p.snapshot.norm ? `<p>${t("nm.source")}: ${esc(regName(p.snapshot.norm.region))}.</p>` : ""}${h2(t("rep.limits"))}<ul style="margin:0;padding-left:18px">${p.limits.map(l => `<li>${tt("lim." + l)}</li>`).join("")}</ul>
         <p style="color:#555;font-size:10px;margin-top:14px">ainara001.github.io/jaiylym · ${dateStr(new Date())}</p></div>`;
@@ -692,6 +698,6 @@
 
     document.addEventListener("visibilitychange", () => { if (!document.hidden && on && cur && !busy) load(true); });
     window.addEventListener("online", () => { if (on && cur) load(offline && !f && !dirty ? false : true); });
-    return { route, observations, obsItems, obsWhy, get state() { return { cur, V, f, offline, fail }; }, protocolHtml };
+    return { route, refresh: () => { if (on && !cur && $("#kelTitle")) newPage(); }, observations, obsItems, obsWhy, get state() { return { cur, V, f, offline, fail }; }, protocolHtml };
   };
 })();
