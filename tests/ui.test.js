@@ -42,6 +42,8 @@ test("все ключи, которые использует интерфейс,
   for (const x of ["other_time", "no_date", "info"]) used.add("obs.v." + x);
   for (const x of ["sat_green", "sat_sparse", "sat_blind", "water_listed", "water_unknown"]) used.add("obs.w." + x);
   for (const x of ["no_herds", "no_deficit", "no_help"]) used.add("water.st." + x);
+  for (const x of K.KINDS) used.add("kel.kind." + x);
+  for (const x of K.RESP) { used.add("kel.resp." + x); used.add("kel.respO." + x); }
   for (const x of ["none", "ok", "no"]) used.add("wc.right." + x);
   for (const x of ["none", "well", "borehole", "river", "pipe"]) used.add("wc.source." + x);
   for (const x of ["open", "accepted", "declined", "withdrawn"]) used.add("kel.pst." + x);
