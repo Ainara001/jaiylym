@@ -452,7 +452,13 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, onDelet
   }
 
   // Келісім: согласование по личным ссылкам, без аккаунта (kelisim.js)
-  const kelisim = createKelisim({ kv, secret: kelisimSecret, known: (lat, lon) => { const v = (getState().villages || {})[vkey(lat, lon)]; return (v && v.data) || null; } });
+  // ИИ для оценки мест на общей карте Келісім — в счёт того же дневного лимита, без поиска в интернете
+  const kelAi = async o => {
+    if (!G.configured()) return { ok: false, error: "no_key" };
+    if (!aiTake()) return { ok: false, error: "quota" };
+    return G.ask(Object.assign({ budgetMs: 40000, timeoutMs: 25000 }, o));
+  };
+  const kelisim = createKelisim({ kv, secret: kelisimSecret, ai: kelAi, known: (lat, lon) => { const v = (getState().villages || {})[vkey(lat, lon)]; return (v && v.data) || null; } });
   const kelisimRoute = createRoutes(kelisim, { json, body, limited });
 
   // ---------- маршруты ----------

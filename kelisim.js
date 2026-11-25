@@ -232,7 +232,72 @@ function view(k, who, now) {
  * @param known      (lat, lon) → данные села, посчитанные сервером, или null — для сверки снимка
  * @param secret     строка для подписи выгрузки
  */
-function createKelisim({ kv, known, secret, now = () => Date.now() }) {
+
+// ---------- общая карта и чат ----------
+const ONLINE_MS = 25e3, CHAT_MAX = 300;
+const presence = new Map();                         // id согласования → { участник: время последнего запроса }
+const clip = s => String(s || "").replace(/\*\*|__|`+/g, "").replace(/^#+\s*/gm, "").trim().slice(0, 1500);
+const lang = b => (b && b.lang === "kk" ? "kk" : "ru");
+/** Что видно всем: места с фактами (плюсы и минусы считаются заново при каждом запросе — они зависят от чужих мест и плана). */
+function liveView(k, L, t, since) {
+  const pres = presence.get(k.id) || {}, pins = Object.values(L.pins);
+  return {
+    rev: k.rev, version: k.version, seq: L.seq, now: new Date(t).toISOString(),
+    online: Object.keys(pres).filter(x => t - pres[x] < ONLINE_MS), seen: L.seen,
+    pins: pins.map(p => Object.assign({ hid: p.hid, lat: p.lat, lon: p.lon, r: p.r, at: p.at, confirmed: p.confirmed, votes: p.votes,
+      ai: p.ai ? { text: p.ai.text, verdict: p.ai.verdict, at: p.ai.at, lang: p.ai.lang } : null }, (r => ({ facts: r.facts, pros: r.pros, cons: r.cons, info: r.info, verdict: r.verdict,
+      ai_stale: !!(p.ai && p.ai.basis !== basisOf(r)) }))(K.pinFacts(k, p.hid, p, pins)))),
+    chat: L.chat.filter(m => m.seq > since).slice(-200), summary: L.summary,
+  };
+}
+/** Отпечаток фактов: оценка ИИ устарела, если изменились вывод, плюсы или минусы. */
+const basisOf = r => crypto.createHash("sha1").update(JSON.stringify([r.verdict, r.pros.map(x => x.k), r.cons.map(x => x.k), r.facts.plot])).digest("hex").slice(0, 12);
+function say(L, m, t) {
+  L.chat.push(Object.assign({ seq: ++L.seq, by: "sys", at: new Date(t).toISOString() }, m));
+  if (L.chat.length > CHAT_MAX) L.chat.splice(0, L.chat.length - CHAT_MAX);
+}
+const nameIn = (k, hid) => { const h = k.households.find(x => x.id === hid); return h ? h.name : "?"; };
+function factsJson(k, hid, p, r) {
+  return { участник: nameIn(k, hid), участок: r.facts.plot, км_от_села: r.facts.dist_km, вывод_расчёта: r.verdict, подтверждено: !!p.confirmed,
+    голосов_за: Object.values(p.votes || {}).filter(v => v > 0).length, голосов_против: Object.values(p.votes || {}).filter(v => v < 0).length,
+    ndvi_участка: r.facts.ndvi, ndvi_медиана_села: r.facts.ndvi_village, ёмкость_овец_за_сезон_оценка: r.facts.cap_sheep, стадо_в_овцах: r.facts.my_sheep,
+    вода: r.facts.water, нагрузка_по_плану: r.facts.plan_load, здесь_же_отметили: r.facts.others,
+    плюсы: r.pros.map(x => x.k), минусы: r.cons.map(x => x.k), где_ещё_свободно: r.facts.alternatives };
+}
+function pinInput(k, hid, p, r) {
+  return "МЕСТО (JSON):\n" + JSON.stringify(factsJson(k, hid, p, r)) +
+    "\n\nКОДЫ: grassHi — трава гуще средней по селу, grassLo — реже, noNdvi — нет снимков, fits — ёмкости хватает стаду, small — не хватает на сезон, " +
+    "crowd — вместе с другими перегруз, planOver — по плану участок уже перегружен, planRoom/planFree — по плану есть запас/свободен, " +
+    "waterOk — водопой подтверждён, waterSat — водоём на снимке (не проверен), waterNo — вода не подтверждена, near — близко к селу, " +
+    "dairyFar — далеко для дойного стада, forbidden — участок исключён, notAllowed — участок не из разрешённых участнику, village — это само село, outside — за пределами расчёта.";
+}
+const AI_RULES_K = "Используй только факты из блока МЕСТО/МЕСТА; не выдумывай чисел. Ёмкость и нагрузка — оценки модели, NDVI — зелёность по снимку, а не урожай. " +
+  "Право на участок и водопой никто не проверял. Пиши простыми словами для пастуха, без markdown.";
+const AI_PIN = {
+  ru: "Ты — помощник согласования выпаса Jaiylym. Участник отметил на общей карте место, где хочет пасти скот. Оцени это место по фактам. " +
+    "Формат: первая строка — вывод (хорошее место / есть минусы / много минусов / не подходит); затем 2–3 строки с «— »: главные плюсы и минусы с числами из фактов; " +
+    "последняя строка начинается с «Совет:» — стоит ли подтверждать это место или лучше рассмотреть другое (назови участок из «где_ещё_свободно», если он есть) и что проверить на месте. " +
+    "Отвечай по-русски. " + AI_RULES_K,
+  kk: "Сен — Jaiylym жайылым келісімінің көмекшісісің. Қатысушы ортақ картада малын бағатын жерді белгіледі. Бұл жерді фактілер бойынша бағала. " +
+    "Пішімі: бірінші жол — қорытынды (жақсы жер / кемшіліктері бар / кемшілігі көп / жарамайды); содан кейін «— » бар 2–3 жол: фактілердегі сандармен басты артықшылықтар мен кемшіліктер; " +
+    "соңғы жол «Кеңес:» деп басталады — осы жерді растау керек пе, әлде басқасын қарастырған жөн бе (бар болса «где_ещё_свободно» ішінен учаскені ата) және орнында не тексеру керек. " +
+    "Жауапты ТЕК қазақ тілінде жаз. " + AI_RULES_K,
+};
+const AI_SUM = {
+  ru: "Ты — помощник согласования выпаса Jaiylym. Участники отметили на общей карте, где хотят пасти. Дай общую сводку по всем местам. " +
+    "Формат: первая строка — общий вывод; затем до 5 строк с «— »: где несколько участников на одном участке и будет перегруз, у кого места с серьёзными минусами " +
+    "(вода, далеко для дойных, трава реже средней), что вызывает споры (голоса против); последняя строка «Совет:» — кому стоит пересмотреть место и куда (из «где_ещё_свободно»). " +
+    "Называй участников по именам из данных. Отвечай по-русски. " + AI_RULES_K,
+  kk: "Сен — Jaiylym жайылым келісімінің көмекшісісің. Қатысушылар ортақ картада қай жерде бағатынын белгіледі. Барлық жерлер бойынша жалпы шолу бер. " +
+    "Пішімі: бірінші жол — жалпы қорытынды; содан кейін «— » бар 5 жолға дейін: бір учаскеде бірнеше қатысушы болып, жүктеме асатын жерлер, елеулі кемшіліктері бар жерлер " +
+    "(су, сауын малға алыс, шөп орташадан сирек), дау тудыратындар (қарсы дауыстар); соңғы жол «Кеңес:» — кімге жерін қайта қарау керек және қайда («где_ещё_свободно» ішінен). " +
+    "Қатысушыларды деректегі аттарымен ата. Жауапты ТЕК қазақ тілінде жаз. " + AI_RULES_K,
+};
+
+/**
+ * @param ai   ({ system, input, maxTokens }) → { ok, text } — ИИ для оценки мест (необязательно: без него — шаблон на сайте)
+ */
+function createKelisim({ kv, known, secret, ai, now = () => Date.now() }) {
   const locks = new Map();
   /** Записи одного согласования — строго по очереди (сервер один, хранилище без транзакций). */
   function locked(id, fn) {
@@ -271,6 +336,21 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
       await store(k);
       return Object.assign({ state: view(k, w, t) }, extra || {});
     });
+  }
+  // ---------- живой слой: своя запись и своя очередь записи ----------
+  const liveLoad = async id => Object.assign({ pins: {}, chat: [], seq: 0, seen: {}, summary: null }, await kv.get("kellive:" + id));
+  const liveChange = (id, fn) => locked("live:" + id, async () => { const L = await liveLoad(id); await fn(L); await kv.set("kellive:" + id, L, TTL); return L; });
+  /** Действие на карте или в чате: права по ссылке, запись живого слоя, ответ — свежий вид. */
+  function liveAct(id, key, fn) {
+    return (async () => {
+      const k = await load(id), w = who(k, key), t = now();
+      let joinedNow = false;
+      const L = await liveChange(id, async X => { const before = (k.households.find(h => w.id && h.id === w.id) || {}).joined; await fn(k, w, X, t); joinedNow = !before && !!(k.households.find(h => w.id && h.id === w.id) || {}).joined; });
+      // первое действие участника на карте — отметка «зашёл» в самом согласовании
+      if (joinedNow) await locked(id, async () => { const k2 = await load(id), h2 = k2.households.find(h => h.id === w.id); if (h2 && !h2.joined) { h2.joined = new Date(t).toISOString(); await store(k2); } });
+      const pres = presence.get(id) || {}; pres[w.role === "org" ? "org" : w.id] = t; presence.set(id, pres);
+      return { live: liveView(k, L, t, 0) };
+    })();
   }
   const addKey = h => { const key = rnd(18); h.key_hash = sha(key); h.link_issued = new Date(now()).toISOString(); return key; };
   function addTo(k, b) {
@@ -391,7 +471,7 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
       log(k, "org", "close", K.protocol(k).counts, t);
       return { protocol: K.protocol(k) };
     }),
-    async remove(id, key) { return locked(id, async () => { const k = await load(id); onlyOrg(who(k, key)); await kv.del("kel:" + id); return { ok: true }; }); },
+    async remove(id, key) { return locked(id, async () => { const k = await load(id); onlyOrg(who(k, key)); await kv.del("kel:" + id); await kv.del("kellive:" + id); presence.delete(id); return { ok: true }; }); },
 
     // ---------- двор ----------
     /** Двор вносит себя: имя, скот, домашний участок. До начала — свободно; после начала скот меняется только предложением. */
@@ -463,6 +543,92 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
         return { id: k.id, verified: ok, state: view(k, { role: "org" }, t) };
       });
     },
+
+    // ---------- общая карта и чат: места «хочу пасти здесь», обсуждение, кто в сети, оценка ИИ ----------
+    // Отдельная запись kellive:<id> (тот же срок): сообщения и кружки не меняют rev плана, поэтому не мешают организатору
+    // и ответам. Кто в сети — в памяти сервера (последний запрос живого слоя за ONLINE_MS).
+    live: async (id, key, b) => {
+      const k = await load(id), w = who(k, key), t = now(), me = w.role === "org" ? "org" : w.id;
+      const pres = presence.get(id) || {}; pres[me] = t; presence.set(id, pres);
+      let L = await liveLoad(id);
+      // «когда заходил» пишем не чаще раза в 5 минут — чтобы опрос не превращался в запись
+      if (!L.seen[me] || t - Date.parse(L.seen[me]) > 5 * 60e3) L = await liveChange(id, X => { X.seen[me] = new Date(t).toISOString(); });
+      const since = Math.max(0, Math.floor(+(b && b.since) || 0));
+      return liveView(k, L, t, since);
+    },
+    pin: (id, key, b) => liveAct(id, key, async (k, w, L, t) => {
+      const op = b && b.op;
+      if (op === "vote") {
+        const target = L.pins[b.target];
+        if (!target) throw err(404, "такого места нет");
+        const me = w.role === "org" ? "org" : w.id;
+        if (me === target.hid) throw bad("за своё место голосовать нельзя");
+        if (![1, -1, 0].includes(+b.v)) throw bad("голос: 1, -1 или 0");
+        if (+b.v) target.votes[me] = +b.v; else delete target.votes[me];
+        return;
+      }
+      if (w.role !== "household") throw err(403, "место отмечает участник по своей ссылке");
+      if (k.status === "closed") throw err(409, "согласование закрыто", { why: "closed" });
+      const mine = L.pins[w.id], h = find(k, w.id);
+      if (op === "remove") { if (!mine) return; delete L.pins[w.id]; say(L, { kind: "unpin", hid: w.id }, t); return; }
+      if (op === "confirm") {
+        if (!mine) throw bad("сначала отметьте место на карте");
+        mine.confirmed = new Date(t).toISOString();
+        say(L, { kind: "confirm", hid: w.id, plot: K.pinPlace(k.village, mine.lat, mine.lon).plot }, t);
+        return;
+      }
+      if (op !== "set") throw bad("неизвестное действие");
+      const lat = +b.lat, lon = +b.lon, r = +b.r || 500;
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) throw bad("неверная точка");
+      if (!K.PIN_R.includes(r)) throw bad("радиус: 250, 500 или 1000 м");
+      const place = K.pinPlace(k.village, lat, lon);
+      if (place.dist_km > 12) throw bad("точка слишком далеко от села (больше 12 км)", "far_pin");
+      if (Object.keys(L.pins).length >= MAX.households && !mine) throw bad("мест слишком много");
+      const moved = !mine || mine.lat !== lat || mine.lon !== lon;
+      L.pins[w.id] = { hid: w.id, lat: +lat.toFixed(5), lon: +lon.toFixed(5), r, at: new Date(t).toISOString(), confirmed: null, votes: moved ? {} : (mine.votes || {}), ai: moved ? null : mine.ai };
+      say(L, { kind: "pin", hid: w.id, plot: place.plot }, t);
+      h.joined = h.joined || new Date(t).toISOString();
+    }),
+    chat: (id, key, b) => liveAct(id, key, async (k, w, L, t) => {
+      const me = w.role === "org" ? "org" : w.id, last = L.chat.filter(m => m.by === me).slice(-1)[0];
+      if (last && t - Date.parse(last.at) < 1500) throw err(429, "не так быстро");
+      const msg = text(b && b.text, MAX.text, "сообщение");
+      if (!msg) throw bad("пустое сообщение");
+      const about = b && b.about && L.pins[b.about] ? b.about : undefined;
+      L.chat.push({ seq: ++L.seq, by: me, text: msg, about, at: new Date(t).toISOString() });
+      if (L.chat.length > CHAT_MAX) L.chat.splice(0, L.chat.length - CHAT_MAX);
+    }),
+    /** Оценка места ИИ: факты расчёта → короткий вывод и совет («уверены?»). Без ключа или при сбое — ai: null, на сайте шаблон. */
+    assess: async (id, key, b) => {
+      const k = await load(id), w = who(k, key), L0 = await liveLoad(id), t = now();
+      const hid = w.role === "household" ? w.id : String((b && b.target) || "");
+      const pin = L0.pins[hid];
+      if (!pin) throw err(404, "у участника нет места на карте");
+      const r = K.pinFacts(k, hid, pin, Object.values(L0.pins)), basis = basisOf(r);
+      if (pin.ai && pin.ai.basis === basis && pin.ai.lang === lang(b)) return { ai: pin.ai, facts: r };
+      if (pin.ai_at && t - Date.parse(pin.ai_at) < 15e3) throw err(429, "оценка уже готовится, подождите");
+      await liveChange(id, X => { if (X.pins[hid]) X.pins[hid].ai_at = new Date(t).toISOString(); });
+      const res = ai ? await ai({ system: AI_PIN[lang(b)], input: pinInput(k, hid, pin, r), maxTokens: 400 }).catch(() => ({ ok: false })) : { ok: false };
+      if (!res.ok) return { ai: null, facts: r, error: res.error || "no_ai" };
+      const out = { text: clip(res.text), verdict: r.verdict, basis, lang: lang(b), at: new Date(now()).toISOString() };
+      await liveChange(id, X => { if (X.pins[hid] && X.pins[hid].lat === pin.lat && X.pins[hid].lon === pin.lon) X.pins[hid].ai = out; });
+      return { ai: out, facts: r };
+    },
+    /** Общая сводка ИИ по всем местам: где перегруз и споры, кому стоит пересмотреть место. Не чаще раза в минуту. */
+    summary: async (id, key, b) => {
+      const k = await load(id); who(k, key);
+      const L0 = await liveLoad(id), t = now(), pins = Object.values(L0.pins);
+      if (!pins.length) throw bad("на карте ещё нет мест");
+      if (L0.summary && L0.summary.lang === lang(b) && t - Date.parse(L0.summary.at) < 60e3) return { summary: L0.summary };
+      const rows = pins.map(p => ({ p, r: K.pinFacts(k, p.hid, p, pins) }));
+      const input = "МЕСТА (JSON):\n" + JSON.stringify(rows.map(({ p, r }) => factsJson(k, p.hid, p, r))) +
+        `\n\nУЧАСТНИКОВ ВСЕГО: ${K.active(k).length}, ОТМЕТИЛИ МЕСТО: ${pins.length}, ПОДТВЕРДИЛИ: ${pins.filter(p => p.confirmed).length}`;
+      const res = ai ? await ai({ system: AI_SUM[lang(b)], input, maxTokens: 600 }).catch(() => ({ ok: false })) : { ok: false };
+      if (!res.ok) return { summary: null, error: res.error || "no_ai" };
+      const out = { text: clip(res.text), lang: lang(b), at: new Date(now()).toISOString(), pins: pins.length };
+      await liveChange(id, X => { X.summary = out; });
+      return { summary: out };
+    },
     _locked: locked,
   };
   /**
@@ -523,6 +689,12 @@ function createRoutes(kel, { json, body, limited }) {
       if (id && !act && req.method === "DELETE") return json(res, 200, await kel.remove(id, key)), true;
       if (id && act === "protocol" && req.method === "GET") return json(res, 200, await kel.protocol(id, key)), true;
       if (id && act === "export" && req.method === "GET") return json(res, 200, await kel.export(id, key)), true;
+      if (id && act === "live" && req.method === "GET") return json(res, 200, await kel.live(id, key, { since: new URL(req.url, "http://x").searchParams.get("since") })), true;
+      if (id && POST && ["pin", "chat", "assess", "summary"].includes(act) && !sub) {
+        if (["assess", "summary"].includes(act) && limited(req, "kelai", 12, 60e3)) throw err(429, "слишком много запросов к ИИ, подождите минуту");
+        if (limited(req, "kellive", 40, 60e3)) throw err(429, "слишком часто, подождите немного");
+        return json(res, 200, await kel[act](id, key, await body(req))), true;
+      }
       if (id && POST) {
         const b = await body(req);
         const calc = fn => (heavy ? inLine(fn) : fn());
