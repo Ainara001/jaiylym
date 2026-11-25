@@ -82,7 +82,7 @@ test("готовые примеры: Кеген Б-С по-прежнему 313,
   const [B, K] = loadExamples().map(D => N.attach(NG.apply(D.plots, D.nograze), { region: N.regionOf(D.village.region) }));
   const c = J.plotCapacity(K.find(p => p.id === "Б-С"), P);
   assert.equal(Math.round(c.au_season / P.au.sheep), 313); assert.equal(c.limited_by, "satellite");
-  const bc = B.map(p => J.plotCapacity(p, P));
+  const bc = B.filter(p => p.pasture_ha > 0).map(p => J.plotCapacity(p, P));
   assert.ok(bc.every(x => x.limited_by === "norm"), "в Бесколе оценка по снимку выше нормы СКО на каждом участке");
   const sum = f => bc.reduce((s, x) => s + f(x), 0);
   assert.ok(sum(x => x.sat.au_season) / sum(x => x.au_season) > 2.5, "снимок завышал больше чем в 2,5 раза");

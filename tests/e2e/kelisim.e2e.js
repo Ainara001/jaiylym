@@ -210,7 +210,7 @@ async function flow(b, name) {
   await d3.click("#kelAgree");
   await d3.waitForSelector("#kelAns .kdone");
   await d1.reload();
-  await d1.waitForSelector("#kelAns");
+  await d1.waitForSelector("#kelAns", { state: "attached" });
   if (await d1.$("#kelAgree")) { await d1.click("#kelAgree"); await d1.waitForSelector("#kelAns .kdone"); }
   // 10. потерянная ссылка: новая выпущена, старая не действует
   await org.reload();

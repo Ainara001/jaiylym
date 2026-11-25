@@ -1,10 +1,10 @@
 /*
- * Jaiylym — где нельзя пасти: города, сёла, фермы, промзоны (OpenStreetMap) с буфером вокруг.
+ * Jaiylym — где нельзя пасти: города, сёла, фермы, промзоны (OpenStreetMap) с буфером вокруг; сады, дачи, парки и поля — без буфера.
  * Работает в браузере и в Node (бот, скрипты, тесты), без ключей.
  *
  *  1. Запрос к Overpass API по рамке села: жилые кварталы и населённые пункты (landuse=residential, place=*),
  *     фермы и скотные дворы (landuse=farmyard, building=farm|barn|cowshed|stable|sty|farm_auxiliary),
- *     промзоны и стройки, кладбища, военные объекты.
+ *     промзоны и стройки, кладбища, военные объекты; сады, виноградники, дачи, теплицы, парки и обрабатываемые поля (kind garden).
  *  2. Многоугольники → сетка пастбищ (та же, что у ESA WorldCover в pipeline.js, ~50 м): пиксель в зоне, если его центр
  *     внутри многоугольника или в нём лежит вершина (так не теряются мелкие фермы). Населённый пункт, у которого в OSM
  *     есть только точка, — круг с радиусом по типу места (оценка, помечается).
@@ -26,11 +26,16 @@
   const BUFFERS = [0, 100, 250, 500];
   const DEFAULT_BUFFER = 100;
   // флаги видов зон в маске
-  const KIND = { settlement: 1, farm: 2, industrial: 4, other: 8 };
+  const VERSION = 2;                 // виды зон изменились — сохранённые раньше зоны запрашиваются заново
+  const KIND = { settlement: 1, farm: 2, industrial: 4, other: 8, garden: 16 };
   const KIND_NAMES = Object.keys(KIND);
   const LANDUSE_KIND = { residential: "settlement", commercial: "settlement", retail: "settlement", garages: "settlement",
     farmyard: "farm", industrial: "industrial", construction: "industrial", railway: "industrial", quarry: "industrial", landfill: "industrial",
-    cemetery: "other", military: "other" };
+    cemetery: "other", military: "other",
+    allotments: "garden", orchard: "garden", vineyard: "garden", greenhouse_horticulture: "garden", plant_nursery: "garden", farmland: "garden",
+    recreation_ground: "garden", village_green: "garden", institutional: "settlement", education: "settlement" };
+  // парки и спортивные площадки; школы, больницы и вузы; аэропорты
+  const LEISURE = ["park", "garden", "golf_course", "stadium", "sports_centre"], AMENITY = ["school", "university", "college", "hospital", "grave_yard"];
   const FARM_BUILDINGS = ["farm", "barn", "cowshed", "stable", "sty", "farm_auxiliary"];
   // радиус круга, если населённый пункт в OSM есть только точкой (м) — грубая оценка по типу места
   const PLACE_RADIUS_M = { city: 2500, town: 1200, village: 500, suburb: 600, hamlet: 200, neighbourhood: 250, isolated_dwelling: 60, farm: 80 };
@@ -45,6 +50,8 @@
       `way["landuse"~"^(${lu})$"]${b};relation["landuse"~"^(${lu})$"]${b};` +
       `way["place"~"^(${pl})$"]${b};relation["place"~"^(${pl})$"]${b};node["place"~"^(${pl})$"]${b};` +
       `way["building"~"^(${fb})$"]${b};` +
+      `way["leisure"~"^(${LEISURE.join("|")})$"]${b};relation["leisure"~"^(${LEISURE.join("|")})$"]${b};` +
+      `way["amenity"~"^(${AMENITY.join("|")})$"]${b};way["aeroway"="aerodrome"]${b};relation["aeroway"="aerodrome"]${b};` +
       `);out geom;`;
   }
 
@@ -106,6 +113,9 @@
       if (!tags) return null;
       if (tags.landuse && LANDUSE_KIND[tags.landuse]) return { kind: LANDUSE_KIND[tags.landuse], tag: "landuse=" + tags.landuse };
       if (tags.building && FARM_BUILDINGS.includes(tags.building)) return { kind: "farm", tag: "building=" + tags.building };
+      if (LEISURE.includes(tags.leisure)) return { kind: "garden", tag: "leisure=" + tags.leisure };
+      if (AMENITY.includes(tags.amenity)) return { kind: tags.amenity === "grave_yard" ? "other" : "settlement", tag: "amenity=" + tags.amenity };
+      if (tags.aeroway === "aerodrome") return { kind: "other", tag: "aeroway=aerodrome" };
       if (tags.place && PLACE_RADIUS_M[tags.place] != null) return { kind: tags.place === "farm" ? "farm" : "settlement", tag: "place=" + tags.place };
       return null;
     };
@@ -180,13 +190,13 @@
   /**
    * Площади по участкам для каждого буфера. idx — номер участка пикселя (−1 вне участков), isPasture(i) — пастбищный покров,
    * pxHa — площадь пикселя (га), pxM — сторона пикселя (м).
-   * → { [buffer]: [{ total_ha, pasture_ha, by_kind: { settlement, farm, industrial, other, buffer } }] по участкам }
+   * → { [buffer]: [{ total_ha, pasture_ha, by_kind: { settlement, farm, industrial, other, garden, buffer } }] по участкам }
    */
   function perPlot({ mask, dist, idx, isPasture, pxHa, pxM, nPlots, buffers = BUFFERS }) {
     const out = {};
     for (const b of buffers) {
       const rPx = b / pxM;
-      const acc = Array.from({ length: nPlots }, () => ({ total: 0, pasture: 0, k: { settlement: 0, farm: 0, industrial: 0, other: 0, buffer: 0 } }));
+      const acc = Array.from({ length: nPlots }, () => ({ total: 0, pasture: 0, k: { settlement: 0, farm: 0, industrial: 0, other: 0, garden: 0, buffer: 0 } }));
       for (let i = 0; i < idx.length; i++) {
         const p = idx[i]; if (p < 0) continue;
         if (!(mask[i] || dist[i] <= rPx + 1e-9)) continue;
@@ -203,8 +213,22 @@
     return out;
   }
 
-  /** Контуры зон для карты: координаты с точностью ~1 м, не больше maxZones (самые крупные). */
+  /** Буфер — вокруг жилья, ферм, промзон и кладбищ; садам, паркам и полям он не нужен. */
+  const buffered = mask => mask.map(v => (v & ~KIND.garden ? 1 : 0));
+  /** Непастбище для рисования на карте: зоны ng с буфером на сетке size×size. 1 — не закрашивать. */
+  function blockMask(ng, bbox, size, buffer = DEFAULT_BUFFER) {
+    const mask = rasterize((ng && ng.zones) || [], bbox, size), d = distance(buffered(mask), size);
+    const rPx = buffer / ((bbox[2] - bbox[0]) * kmPerDeg((bbox[1] + bbox[3]) / 2)[0] * 1000 / size);
+    return mask.map((v, i) => (v || d[i] <= rPx + 1e-9 ? 1 : 0));
+  }
+
+  /** Контуры зон для карты: координаты с точностью ~1 м, без точек ближе 10 м, не больше maxZones зон каждой группы (самые крупные). */
   function simplifyForMap(zones, maxZones = 400) {
+    const g = z => z.kind === "garden", thin = r => { const [kx, ky] = kmPerDeg(r[0][1]), o = [r[0]]; for (const p of r) { const q = o[o.length - 1]; if (Math.hypot((p[0] - q[0]) * kx, (p[1] - q[1]) * ky) >= 0.01) o.push(p); } return o.length >= 3 ? o : r; };
+    const pick = (list, n) => biggest(list, n).map(z => Object.assign({}, z, { ring: thin(z.ring) }));
+    return pick(zones.filter(z => !g(z)), maxZones).concat(pick(zones.filter(g), maxZones / 2));
+  }
+  function biggest(zones, maxZones) {
     const area = r => { let a = 0; for (let i = 0, j = r.length - 1; i < r.length; j = i++) a += r[j][0] * r[i][1] - r[i][0] * r[j][1]; return Math.abs(a / 2); };
     return zones.filter(z => z.ring.length >= 3).map(z => ({ z, a: area(z.ring) })).sort((x, y) => y.a - x.a).slice(0, maxZones)
       .map(({ z }) => ({ kind: z.kind, name: z.name || undefined, point: z.point || undefined, ring: z.ring.map(([x, y]) => [+x.toFixed(5), +y.toFixed(5)]) }));
@@ -218,7 +242,7 @@
     const data = osm ? await osm : await fetchOSM(bbox, { fetchImpl });
     const zones = parseZones(data);
     const mask = rasterize(zones, bbox, size);
-    const dist = distance(mask, size);
+    const dist = distance(buffered(mask), size);
     const [kx] = kmPerDeg(lat != null ? lat : (bbox[1] + bbox[3]) / 2);
     const pxM = (bbox[2] - bbox[0]) * kx * 1000 / size;
     const res = perPlot({ mask, dist, idx, isPasture, pxHa, pxM, nPlots: plotIds.length, buffers });
@@ -227,11 +251,11 @@
       source: "OpenStreetMap (Overpass API), © участники OpenStreetMap, ODbL", fetched_at: new Date().toISOString(),
       osm_timestamp: (data && data.osm3s && data.osm3s.timestamp_osm_base) || null,
       buffers, default_buffer: DEFAULT_BUFFER, px_m: +pxM.toFixed(1),
-      counts: { settlement: count("settlement"), farm: count("farm"), industrial: count("industrial"), other: count("other"),
+      counts: { settlement: count("settlement"), farm: count("farm"), industrial: count("industrial"), other: count("other"), garden: count("garden"),
         points: zones.filter(z => z.point).length },
       by_buffer: Object.fromEntries(Object.entries(res).map(([b, arr]) => [b, Object.fromEntries(arr.map((v, k) => [plotIds[k], v]))])),
       zones: simplifyForMap(zones),
-      status: zones.length ? "ok" : "empty",
+      status: zones.length ? "ok" : "empty", version: VERSION,
     };
   }
 
@@ -252,6 +276,6 @@
     });
   }
 
-  return { BUFFERS, DEFAULT_BUFFER, KIND, PLACE_RADIUS_M, FARM_BUILDINGS, LANDUSE_KIND, setUserAgent, overpassQuery, fetchOSM,
+  return { VERSION, blockMask, BUFFERS, DEFAULT_BUFFER, KIND, PLACE_RADIUS_M, FARM_BUILDINGS, LANDUSE_KIND, setUserAgent, overpassQuery, fetchOSM,
     parseZones, rasterize, distance, perPlot, simplifyForMap, compute, apply, circle };
 });
