@@ -20,6 +20,7 @@ const M = require("./web/model.js");
 const NM = require("./web/norms.js");
 const Z = require("./web/zone.js");
 const { createKelisim, createRoutes } = require("./kelisim.js");
+const { clientIp } = require("./clientip.js");
 const G = require("./ai.js");   // DeepSeek (DEEPSEEK_API_KEY) или Gemini (GEMINI_API_KEY) — см. ai.js
 const F = require("./ai-facts.js");
 const X = require("./ai-context.js");
@@ -72,6 +73,14 @@ const WEB_TASK = {
 // ---------- ИИ: инструкции модели ----------
 const AI_DAILY = +process.env.AI_DAILY_LIMIT || 1500;
 const aiDay = { day: "", n: 0 };
+/** Одно обращение к ИИ в счёт дневного лимита (общий для сайта и бота). false — на сегодня всё. */
+function aiTake(now = new Date()) {
+  const day = now.toISOString().slice(0, 10);
+  if (aiDay.day !== day) { aiDay.day = day; aiDay.n = 0; }
+  if (aiDay.n >= AI_DAILY) return false;
+  aiDay.n++;
+  return true;
+}
 const AI_RULES = "Используй только данные из блока ДАННЫЕ и общие знания о выпасе. Различай: спутниковые измерения (NDVI Sentinel-2, площади), " +
   "ввод пользователя (поголовье, водопои) и модельные оценки (ёмкость, нагрузка, тонны сена, стоимость) — оценки называй оценками. " +
   "Не выдумывай чисел, которых нет в данных. Не обещай доходов и экономии. 1 условная голова = 1 корова = 5 овец или коз; лошадь = 1,2 условной головы. " +
@@ -142,21 +151,40 @@ function normLogin(x) {
   if (/^[a-z][a-z0-9_.]{2,31}$/.test(s)) return s;                                  // имя латиницей
   return null;
 }
-function hashPassword(pw, salt = crypto.randomBytes(16)) {
-  const hash = crypto.scryptSync(String(pw), salt, SCRYPT.keylen, { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p });
+// Асинхронно, в пуле потоков: сервер не замирает, пока считается хэш. Больше 8 в очереди — просим повторить (иначе перегрузка).
+let pwBusy = 0;
+async function scrypt(pw, salt, len, N) {
+  if (pwBusy >= 8) throw Object.assign(new Error("сервер занят, повторите через несколько секунд"), { code: 503 });
+  pwBusy++;
+  try { return await new Promise((ok, no) => crypto.scrypt(String(pw), salt, len, { N, r: SCRYPT.r, p: SCRYPT.p }, (e, k) => (e ? no(e) : ok(k)))); }
+  finally { pwBusy--; }
+}
+async function hashPassword(pw, salt = crypto.randomBytes(16)) {
+  const hash = await scrypt(pw, salt, SCRYPT.keylen, SCRYPT.N);
   return { alg: "scrypt", N: SCRYPT.N, salt: salt.toString("base64"), hash: hash.toString("base64") };
 }
-function checkPassword(pw, rec) {
+async function checkPassword(pw, rec) {
   if (!rec || rec.alg !== "scrypt") return false;
   const want = Buffer.from(rec.hash, "base64");
-  const got = crypto.scryptSync(String(pw), Buffer.from(rec.salt, "base64"), want.length, { N: rec.N || SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p });
+  const got = await scrypt(pw, Buffer.from(rec.salt, "base64"), want.length, rec.N || SCRYPT.N);
   return got.length === want.length && crypto.timingSafeEqual(got, want);
 }
 // хэш-«пустышка»: на неизвестный логин тратим то же время, что на проверку пароля (не выдаём, есть ли такой логин)
-const DUMMY_PW = hashPassword("jaiylym-dummy-password");
+const DUMMY_PW = { alg: "scrypt", N: SCRYPT.N, salt: crypto.randomBytes(16).toString("base64"), hash: crypto.randomBytes(SCRYPT.keylen).toString("base64") };
 
 const num = (x, max = 1e6) => { const v = Math.round(+x); return Number.isFinite(v) ? Math.min(Math.max(v, 0), max) : 0; };
 const bad = msg => Object.assign(new Error(msg), { code: 400 });
+/** Сводка расчёта от сайта: только известные поля и числа (её потом показывают на странице). */
+function cleanSummary(s) {
+  if (!s || typeof s !== "object" || Array.isArray(s)) return null;
+  const out = {}, ids = x => (Array.isArray(x) ? x : []).filter(p => PLOT_RE.test(p)).slice(0, 16);
+  for (const k of ["overloaded_before", "overloaded_after", "excess_t", "deficit_t", "herds", "herds_short", "au", "missing"]) if (Number.isFinite(+s[k]) && s[k] !== null && s[k] !== "") out[k] = +s[k];
+  if (["feasible", "partially_feasible", "infeasible", "no_demand"].includes(s.status)) out.status = s.status;
+  if (s.demo != null) out.demo = !!s.demo;
+  if (/^\d+\.\d+\.\d+$/.test(s.model_version || "")) out.model_version = s.model_version;
+  out.water_added = ids(s.water_added); out.forbidden = ids(s.forbidden);
+  return out;
+}
 /** Поголовье: пусто → 0; отрицательное, дробное, нечисловое или больше лимита — ошибка 400 (а не тихое обнуление). */
 function count(x, name, max = 1e6) {
   if (x == null || x === "") return 0;
@@ -199,9 +227,11 @@ const str = (x, max = 80) => String(x == null ? "" : x).replace(/[\u0000-\u001f<
 const coordOk = (lat, lon) => Number.isFinite(+lat) && Number.isFinite(+lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
 const PLOT_RE = /^[БД]-(С|СВ|В|ЮВ|Ю|ЮЗ|З|СЗ)$/;
 
-function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowedOrigins, kelisimSecret }) {
+function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, onDeleted, allowedOrigins, kelisimSecret }) {
   // состояние берём при каждом обращении: бот может заменить объект целиком при загрузке
-  const st = () => { const s = getState(); s.users = s.users || {}; s.villagePlans = s.villagePlans || {}; s.logins = s.logins || {}; return s; };
+  const st = () => { const s = getState(); s.users = s.users || {}; s.villagePlans = s.villagePlans || {}; return s; };
+  // логин — поле самого пользователя: отдельный список логинов раньше не сохранялся, и после перезапуска войти было нельзя
+  const byLogin = login => Object.values(st().users).filter(u => u.login === login).sort((a, b) => (a.created < b.created ? -1 : 1));
   const origins = new Set(allowedOrigins || []);
   const hits = new Map();   // простое ограничение частоты запросов по IP
 
@@ -225,25 +255,56 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
   }
   function body(req, max = MAX_BODY) {
     return new Promise((resolve, reject) => {
-      let b = "";
-      req.on("data", c => { b += c; if (b.length > max) { reject(Object.assign(new Error("слишком большой запрос"), { code: 413 })); req.destroy(); } });
-      req.on("end", () => { try { resolve(b ? JSON.parse(b) : {}); } catch (_) { reject(Object.assign(new Error("неверный JSON"), { code: 400 })); } });
+      // байты склеиваем целиком: буква на границе двух пакетов иначе превращается в «�»
+      const parts = []; let n = 0, over = false;
+      req.on("data", c => {
+        n += c.length;
+        if (n > max) { if (!over) { over = true; parts.length = 0; reject(Object.assign(new Error("слишком большой запрос"), { code: 413 })); } if (n > max * 8) req.destroy(); return; }
+        parts.push(c);
+      });
+      req.on("end", () => {
+        if (over) return;
+        try { const s = Buffer.concat(parts).toString("utf8"), v = s ? JSON.parse(s) : {}; if (!v || typeof v !== "object" || Array.isArray(v)) throw 0; resolve(v); }
+        catch (_) { reject(bad("неверный JSON")); }
+      });
+      req.on("aborted", () => reject(bad("запрос прерван")));
+      req.on("error", () => reject(bad("запрос прерван")));
     });
   }
   function limited(req, key, max, perMs) {
-    const ip = (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim();
-    const k = key + ":" + ip, now = Date.now();
-    const arr = (hits.get(k) || []).filter(t => now - t < perMs);
-    arr.push(now); hits.set(k, arr);
-    if (hits.size > 5000) hits.clear();
-    return arr.length > max;
+    return over(key + ":" + clientIp(req), max, perMs);
+  }
+  /** Больше max событий за perMs. Отказы не копятся; при переполнении забываются самые старые ключи, а не все сразу. */
+  function over(k, max, perMs) {
+    const now = Date.now(), arr = (hits.get(k) || []).filter(t => now - t < perMs);
+    hits.delete(k); hits.set(k, arr);
+    if (hits.size > 20000) for (const old of hits.keys()) { hits.delete(old); if (hits.size <= 15000) break; }
+    if (arr.length >= max) return true;
+    arr.push(now);
+    return false;
   }
   async function auth(req) {
     const m = /^Bearer\s+([A-Za-z0-9_-]{20,})$/.exec(req.headers.authorization || "");
     if (!m) return null;
-    const uid = await kv.get("sess:" + sha(m[1]));
+    const s = await kv.get("sess:" + sha(m[1])), uid = s && typeof s === "object" ? s.uid : s;
     const u = uid != null && st().users[uid];
+    // аккаунт удалили и создали заново — сессии прежнего не действуют
+    if (u && s && s.at && s.at < Date.parse(u.created)) return null;
     return u ? { user: u, tokenHash: sha(m[1]) } : null;
+  }
+
+  async function newSession(uid) {
+    const token = rnd(32);
+    await kv.set("sess:" + sha(token), { uid, at: Date.now() }, SESSION_TTL);
+    return token;
+  }
+  // попытки входа по одному логину — по очереди: иначе параллельные запросы проходят мимо счётчика
+  const pwQueue = new Map();
+  function inTurn(key, fn) {
+    const p = (pwQueue.get(key) || Promise.resolve()).catch(() => {}).then(fn);
+    pwQueue.set(key, p);
+    p.catch(() => {}).then(() => { if (pwQueue.get(key) === p) pwQueue.delete(key); });
+    return p;
   }
 
   // ---------- представления данных ----------
@@ -265,7 +326,7 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
     return {
       name: str(b.name, 60) || "Хозяйство",
       village: { name: str(v.name, 80) || "Село", lat: +(+v.lat).toFixed(5), lon: +(+v.lon).toFixed(5) },
-      sheep: count(b.sheep, SPECIES_RU.sheep), goats: count(b.goats, SPECIES_RU.goats), cattle: count(b.cattle, SPECIES_RU.cattle), horses: count(b.horses, SPECIES_RU.horses),
+      sheep: count(b.sheep, SPECIES_RU.sheep, 20000), goats: count(b.goats, SPECIES_RU.goats, 20000), cattle: count(b.cattle, SPECIES_RU.cattle, 20000), horses: count(b.horses, SPECIES_RU.horses, 20000),
       daily_return: !!b.daily_return,
       home: b.home || "Б-С",
       // участки, которыми хозяйство пользуется по своим словам; это НЕ проверка по госреестру
@@ -369,7 +430,7 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
       zone: Z.clean(b.zone) || undefined,
       model_version: M.MODEL_VERSION,
       request_id: /^[A-Za-z0-9_-]{8,64}$/.test(b.request_id || "") ? b.request_id : null,
-      summary: b.summary && typeof b.summary === "object" ? JSON.parse(JSON.stringify(b.summary).slice(0, 2000)) : null,
+      summary: cleanSummary(b.summary),
       created: new Date().toISOString(),
     };
   }
@@ -417,10 +478,8 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
       }
       // --- ИИ-помощник (DeepSeek или Gemini, ai.js): сводка по селу и чат. Доступен и гостю, с ограничением частоты ---
       if (p === "/api/ai" && req.method === "POST") {
-        if (limited(req, "ai", 12, 60e3)) return json(res, 429, { error: "слишком много вопросов подряд, подождите минуту" }), true;
-        const day = new Date().toISOString().slice(0, 10);
-        if (aiDay.day !== day) { aiDay.day = day; aiDay.n = 0; }
-        if (++aiDay.n > AI_DAILY) return json(res, 429, { error: "дневной лимит ИИ исчерпан, попробуйте завтра" }), true;
+        if (limited(req, "ai", 20, 60e3)) return json(res, 429, { error: "слишком много вопросов подряд, подождите минуту" }), true;
+        if (!aiTake()) return json(res, 429, { error: "дневной лимит ИИ исчерпан, попробуйте завтра" }), true;
         const b = await body(req);
         const lang = b.lang === "kk" ? "kk" : "ru";
         const issues = aiContextIssues(b.context);
@@ -499,7 +558,7 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
       }
       // регистрация и вход по логину и паролю — по выбору, вход через Telegram остаётся
       if (p === "/auth/register" && req.method === "POST") {
-        if (limited(req, "register", 5, 10 * 60e3)) return json(res, 429, { error: "слишком много регистраций, подождите 10 минут" }), true;
+        if (limited(req, "register", 20, 10 * 60e3) || over("register*", 200, 3600e3)) return json(res, 429, { error: "слишком много регистраций, подождите 10 минут" }), true;
         const b = await body(req);
         const login = normLogin(b.login);
         if (!login) return json(res, 400, { error: "логин: телефон +7…, e-mail или имя латиницей (3–32 знака)", field: "login" }), true;
@@ -509,30 +568,37 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
           return json(res, 400, { error: "слишком простой пароль", field: "password" }), true;
         const name = str(b.name, 80).trim();
         if (!name) return json(res, 400, { error: "укажите имя", field: "name" }), true;
-        if (st().logins[login]) return json(res, 409, { error: "такой логин уже зарегистрирован — войдите", field: "login" }), true;
+        const taken = () => byLogin(login).length > 0, busy = () => (json(res, 409, { error: "такой логин уже зарегистрирован — войдите", field: "login" }), true);
+        if (taken()) return busy();
+        const hash = await hashPassword(pw);
+        if (taken()) return busy();                          // пока считали хэш, логин заняли
         const uid = "a" + rnd(9);
-        st().users[uid] = { uid, created: new Date().toISOString(), scenarios: [], history: [], name, login, pw: hashPassword(pw), lastLogin: new Date().toISOString() };
-        st().logins[login] = uid;
+        st().users[uid] = { uid, created: new Date().toISOString(), scenarios: [], history: [], name, login, pw: hash, lastLogin: new Date().toISOString() };
         save();
-        const token = rnd(32);
-        await kv.set("sess:" + sha(token), uid, SESSION_TTL);
+        const token = await newSession(uid);
         return json(res, 200, { status: "ok", token, user: pubUser(st().users[uid]) }), true;
       }
       if (p === "/auth/login" && req.method === "POST") {
-        if (limited(req, "pwlogin", 10, 60e3)) return json(res, 429, { error: "слишком много попыток, подождите минуту" }), true;
+        if (limited(req, "pwlogin", 30, 60e3)) return json(res, 429, { error: "слишком много попыток, подождите минуту" }), true;
         const b = await body(req);
         const login = normLogin(b.login), pw = String(b.password == null ? "" : b.password).slice(0, 128);
-        // попытки на один логин (с любых адресов): не больше 10 за 15 минут
-        const lk = "pwfail:" + sha(login || "-"), fails = (await kv.get(lk)) || 0;
-        if (fails >= 10) return json(res, 429, { error: "слишком много неверных попыток для этого логина, подождите 15 минут" }), true;
-        const uid = login && st().logins[login], u = uid && st().users[uid];
-        const ok = checkPassword(pw, u ? u.pw : DUMMY_PW) && !!u;
-        if (!ok) { await kv.set(lk, fails + 1, 15 * 60); return json(res, 401, { error: "неверный логин или пароль" }), true; }
-        await kv.del(lk);
-        u.lastLogin = new Date().toISOString(); save();
-        const token = rnd(32);
-        await kv.set("sess:" + sha(token), uid, SESSION_TTL);
-        return json(res, 200, { status: "ok", token, user: pubUser(u) }), true;
+        // неверные попытки на один логин: 10 за 15 минут с одного адреса и 50 со всех — чужой адрес не запрёт хозяина
+        const lh = sha(login || "-"), mineK = "pwfail:" + lh + ":" + sha(clientIp(req)).slice(0, 16), allK = "pwfail:" + lh;
+        const r = await inTurn(lh, async () => {
+          const mine = (await kv.get(mineK)) || 0, all = (await kv.get(allK)) || 0;
+          if (mine >= 10 || all >= 50) return "wait";
+          // после старой ошибки у одного логина могло появиться несколько аккаунтов: подходит тот, чей пароль верен
+          let u = null;
+          for (const x of login ? byLogin(login).slice(0, 3) : []) if (await checkPassword(pw, x.pw)) { u = x; break; }
+          if (!u && !(login && byLogin(login).length)) await checkPassword(pw, DUMMY_PW);
+          if (u) { await kv.del(mineK); return u; }
+          await kv.set(mineK, mine + 1, 15 * 60); await kv.set(allK, all + 1, 15 * 60);
+          return null;
+        });
+        if (r === "wait") return json(res, 429, { error: "слишком много неверных попыток для этого логина, подождите 15 минут" }), true;
+        if (!r) return json(res, 401, { error: "неверный логин или пароль" }), true;
+        r.lastLogin = new Date().toISOString(); save();
+        return json(res, 200, { status: "ok", token: await newSession(r.uid), user: pubUser(r) }), true;
       }
       if (p === "/auth/poll" && req.method === "GET") {
         if (limited(req, "poll", 120, 60e3)) return json(res, 429, { error: "слишком часто" }), true;
@@ -543,9 +609,7 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         if (rec.status === "pending") return json(res, 200, { status: "pending" }), true;
         await kv.del(key);                                  // одноразовый
         if (rec.status !== "ok" || !st().users[rec.uid]) return json(res, 200, { status: "denied" }), true;
-        const token = rnd(32);
-        await kv.set("sess:" + sha(token), rec.uid, SESSION_TTL);
-        return json(res, 200, { status: "ok", token, user: pubUser(st().users[rec.uid]) }), true;
+        return json(res, 200, { status: "ok", token: await newSession(rec.uid), user: pubUser(st().users[rec.uid]) }), true;
       }
 
       // --- публично: стада села из Telegram (чужие — без имён) и число подписок на участки ---
@@ -558,10 +622,11 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
           const [kv, id] = k.split("|"); if (kv === vk) subs[id] = (subs[id] || 0) + 1;
         }
         let n = 0;
-        const herds = (v && v.herds || []).map(h => {
+        const lim = x => Math.min(20000, Math.max(0, Math.round(+x) || 0));
+        const herds = (v && v.herds || []).slice(0, 100).map(h => {
           const mine = !!me && h.id === "tg" + me.user.uid;
           return { id: mine ? "mine" : "tg" + (++n), name: mine ? h.name : null, mine, from_bot: true,
-            sheep: h.sheep || 0, goats: h.goats || 0, cattle: h.cattle || 0, horses: h.horses || 0, home: h.home, daily_return: !!h.daily_return };
+            sheep: lim(h.sheep), goats: lim(h.goats), cattle: lim(h.cattle), horses: lim(h.horses), home: h.home, daily_return: !!h.daily_return };
         });
         return json(res, 200, { herds, subs }), true;
       }
@@ -577,9 +642,9 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
       if (p === "/api/me" && req.method === "DELETE") {      // удалить аккаунт и все свои данные
         const vk = farmVk(u);
         delete st().users[u.uid];
-        if (u.login && st().logins[u.login] === u.uid) delete st().logins[u.login];
         for (const vk2 of Object.keys(st().villagePlans)) st().villagePlans[vk2] = st().villagePlans[vk2].filter(s => s.owner !== u.uid);
         if (onFarmSaved) onFarmSaved(u.uid, null, vk);
+        if (onDeleted) onDeleted(u.uid);
         await kv.del("sess:" + a.tokenHash);
         save();
         return json(res, 200, { ok: true }), true;
@@ -654,7 +719,7 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
         if (!coordOk(v.lat, v.lon)) return json(res, 400, { error: "нет села" }), true;
         const e = { at: new Date().toISOString(), kind: str(b.kind, 20) || "расчёт",
           village: { name: str(v.name, 80), lat: +(+v.lat).toFixed(5), lon: +(+v.lon).toFixed(5) },
-          summary: b.summary && typeof b.summary === "object" ? JSON.parse(JSON.stringify(b.summary).slice(0, 1000)) : null };
+          summary: cleanSummary(b.summary) };
         u.history = [e].concat(u.history || []).slice(0, 50);
         save();
         return json(res, 200, e), true;
@@ -691,11 +756,13 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
       }
       return json(res, 404, { error: "нет такого адреса" }), true;
     } catch (e) {
-      return json(res, e.code || 500, { error: e.code ? e.message : "внутренняя ошибка" }), true;
+      const known = Number.isInteger(e.code) && e.code >= 400 && e.code < 600;      // у сбоев сети code — строка, это не ответ человеку
+      if (!known) console.error("api", p, e);
+      return json(res, known ? e.code : 500, { error: known ? e.message : "внутренняя ошибка" }), true;
     }
   }
 
   return { handle, confirmLogin, loginInfo, roleOf, kelisim };
 }
 
-module.exports = { createApi, aiContextIssues, fixWebLabels, searchAllowed, searchUsed, SEARCH_RULE, needsWeb, todayText };
+module.exports = { createApi, aiTake, aiContextIssues, fixWebLabels, searchAllowed, searchUsed, SEARCH_RULE, needsWeb, todayText };

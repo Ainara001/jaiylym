@@ -35,17 +35,27 @@ NG.setUserAgent(UA);
 const store = require("./store").createStore();
 let TEST = false;
 let state = { chats: {}, villages: {} };
-let saveTimer = null;
+// Запись: пауза 0,3 с после последнего изменения, но не дольше 3 с; не сохранилось — повтор через 5 с.
+// Пока состояние не прочитано из хранилища, ничего не пишем: иначе пустое состояние стёрло бы сохранённое.
+let saveTimer = null, dirtySince = 0, loaded = false;
 const save = () => {
-  if (TEST) return;
+  if (TEST || !loaded) return;
+  dirtySince = dirtySince || Date.now();
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => store.save(persistable()).catch(e => console.error("Не сохранилось:", e.message)), 300);
+  saveTimer = setTimeout(flush, Math.max(0, Math.min(300, dirtySince + 3000 - Date.now())));
 };
-// Данные и демо-стада готовых примеров не храним — они всегда берутся из web/data
+async function flush() {
+  clearTimeout(saveTimer);
+  if (TEST || !loaded || !dirtySince) return;
+  dirtySince = 0;
+  try { await store.save(persistable()); }
+  catch (e) { console.error("Не сохранилось, повтор через 5 с:", e.message); dirtySince = Date.now(); clearTimeout(saveTimer); saveTimer = setTimeout(flush, 5000); }
+}
+// Сохраняется всё состояние, кроме данных и демо-стад готовых примеров: они всегда берутся из web/data
 function persistable() {
   const villages = {};
   for (const [k, v] of Object.entries(state.villages)) villages[k] = v.example ? { herds: v.herds || [] } : v;
-  return { chats: state.chats, villages, users: state.users || {}, villagePlans: state.villagePlans || {} };
+  return Object.assign({}, state, { villages });
 }
 
 const EXAMPLES = loadExamples();
@@ -64,30 +74,54 @@ const siteApi = require("./api").createApi({
   getState: () => state, save, kv: store.kv, vkey: (lat, lon) => vkey(lat, lon), botUsername: BOT_USERNAME,
   allowedOrigins: (process.env.SITE_ORIGINS || "https://ainara001.github.io,http://localhost:8765,http://127.0.0.1:8765").split(","),
   onFarmSaved: (uid, farm, oldVk) => syncFarmHerd(uid, farm, oldVk),
+  onDeleted: uid => forgetPerson(uid),
   kelisimSecret: process.env.KELISIM_SECRET || process.env.TELEGRAM_TOKEN,     // подпись выгрузки согласования
 });
 
+/** Аккаунт удалён: стадо этого человека во всех сёлах, его чат с ботом, подписки и напоминания. */
+function forgetPerson(uid) {
+  const id = "tg" + uid;
+  for (const v of Object.values(state.villages)) if ((v.herds || []).some(h => h.id === id)) v.herds = v.herds.filter(h => h.id !== id);
+  delete state.chats[String(uid)];
+  save();
+}
 /** Стадо из профиля хозяйства на сайте = стадо этого же человека в боте (id чата Telegram = id пользователя). */
 function syncFarmHerd(uid, farm, oldVk) {
   const id = "tg" + uid;
-  if (oldVk && state.villages[oldVk]) state.villages[oldVk].herds = (state.villages[oldVk].herds || []).filter(h => h.id !== id);
+  for (const v of Object.values(state.villages)) if ((v.herds || []).some(h => h.id === id)) v.herds = v.herds.filter(h => h.id !== id);
   if (!farm) { save(); return; }
   const vk = vkey(farm.village.lat, farm.village.lon);
   const add = () => {
     const v = state.villages[vk]; if (!v) return;
     v.herds = (v.herds || []).filter(h => h.id !== id).concat([{ id, name: farm.name, sheep: farm.sheep, goats: farm.goats,
       cattle: farm.cattle, horses: farm.horses, home: farm.home, daily_return: farm.daily_return }]);
-    const c = chatOf(uid); c.village = vk; c.herd = id;
+    if (/^\d+$/.test(String(uid))) { const c = chatOf(uid); c.village = vk; c.herd = id; }      // у аккаунта по паролю чата с ботом нет
     save();
   };
   if (state.villages[vk]) add();
   else ensureVillage(farm.village.name, farm.village.lat, farm.village.lon, async () => {}).then(add).catch(e => console.error("село для хозяйства:", e.message));
 }
 
-async function loadState() {
-  try { const s = await store.load(); if (s) state = Object.assign({ chats: {}, villages: {} }, s); }
-  catch (e) { console.error("Хранилище недоступно, работаю без него:", e.message); }
+/** Чтение состояния с повторами. Не прочиталось — ошибка: работать с пустым состоянием нельзя, оно затёрло бы сохранённое. */
+async function loadState({ tries = 8, waitMs = 2000 } = {}) {
+  for (let i = 1; ; i++) {
+    try {
+      const s = await store.load();
+      if (s) { state = Object.assign({ chats: {}, villages: {} }, s); delete state.logins; }
+      break;
+    } catch (e) {
+      console.error(`Хранилище недоступно (попытка ${i} из ${tries}):`, e.message);
+      if (i >= tries) throw e;
+      await new Promise(r => setTimeout(r, Math.min(15000, waitMs * i)));
+    }
+  }
   attachExamples();
+  // пример убрали из сборки: у такого села нет данных — забываем его и предлагаем людям выбрать село заново
+  for (const [k, v] of Object.entries(state.villages)) if (!v || !v.data) delete state.villages[k];
+  // стада с невозможным поголовьем, записанные до появления предела
+  for (const v of Object.values(state.villages)) v.herds = (v.herds || []).filter(h => [h.sheep, h.goats, h.cattle, h.horses].every(x => !x || (x > 0 && x <= HERD_MAX)));
+  for (const c of Object.values(state.chats)) if (c.village && !state.villages[c.village]) { c.village = null; c.herd = null; }
+  loaded = true;
 }
 attachExamples();
 
@@ -117,6 +151,7 @@ const ASK_VILLAGE = {
 };
 
 // ---------- разбор текста ----------
+const HERD_MAX = 20000;                            // больше голов одного вида в одном стаде — опечатка или шутка: испортит план всем
 function parseHerd(text) {
   const t = text.toLowerCase().replace(/ё/g, "е");
   const grab = re => { const m = t.match(re); return m ? +m[1] : 0; };
@@ -335,6 +370,18 @@ function templateCtx(v, herd) {
     почему_план: Object.values(J.explainPlan(plots, herds, pl)).filter(x => !herd || x.стадо === herd.name),
   };
 }
+// вопросы к ИИ из одного чата: 6 в минуту и 60 в день; общий дневной лимит — тот же, что у сайта (api.aiTake)
+const aiChats = new Map();
+function aiChatAllowed(chatId, now = Date.now()) {
+  const a = (aiChats.get(chatId) || []).filter(t => now - t < 864e5);
+  if (aiChats.size > 5000) aiChats.clear();
+  aiChats.set(chatId, a);
+  if (a.length >= 60) return "day";
+  if (a.filter(t => now - t < 60e3).length >= 6) return "minute";
+  if (!A.aiTake()) return "day";
+  a.push(now);
+  return "";
+}
 async function askGemini(question, v, herd) {
   if (!AI_ON()) return null;
   const ctx = { село: v.data.village.name, лето: v.data.source.year };
@@ -520,9 +567,11 @@ function pasturesKeyboard(c, chatId) {
 }
 
 // ---------- ежедневная проверка (её запускает GitHub Actions через POST /cron) ----------
-async function runCron(send, now = new Date()) {
+async function runCron(sendRaw, now = new Date()) {
   const month = now.getMonth() + 1, inSeason = month >= 5 && month <= 9;
   const report = { date: now.toISOString().slice(0, 10), season: inSeason, villages: 0, scenes: 0, alerts: 0, reminders: 0, errors: 0 };
+  // не ушло одному (сеть, заблокировал бота) — остальным отправляем дальше
+  const send = async (...a) => { try { await sendRaw(...a); } catch (e) { report.errors++; console.error("cron send", a[0], e.message); } };
   if (!inSeason) { report.note = "вне сезона (октябрь–апрель): снег, NDVI не проверяем"; return report; }
 
   // 1. новые снимки по участкам, на которые кто-то подписан
@@ -620,7 +669,8 @@ let cronBusy = false;
 async function cronRoute(req, res, send, opts = {}) {
   let who = null;
   const secret = process.env.CRON_SECRET;
-  if (secret && req.headers["x-cron-secret"] && req.headers["x-cron-secret"] === secret) who = "secret";
+  const given = String(req.headers["x-cron-secret"] || ""), h = x => require("crypto").createHash("sha256").update(x).digest();
+  if (secret && given && require("crypto").timingSafeEqual(h(given), h(secret))) who = "secret";
   const m = /^Bearer\s+(\S+)$/.exec(req.headers.authorization || "");
   let reason = "no_credentials";
   if (!who && m) {
@@ -801,9 +851,13 @@ async function handle(update, send, today = new Date()) {
 
   const parsed = parseHerd(text);
   if (parsed && !/^день/.test(low)) {
+    if (["sheep", "goats", "cattle", "horses"].some(k => parsed[k] > HERD_MAX))
+      return send(chatId, `Проверьте число: больше ${fmt(HERD_MAX)} голов одного вида в одном стаде не записываю.`, MENU);
     const id = "tg" + chatId;
     const name = msg.from && msg.from.first_name ? msg.from.first_name : "Моё стадо";
-    v.herds = (v.herds || []).filter(h => h.id !== id);
+    // стадо одно: записали в этом селе — в прежнем его больше нет
+    for (const x of Object.values(state.villages)) if ((x.herds || []).some(h => h.id === id)) x.herds = x.herds.filter(h => h.id !== id);
+    v.herds = v.herds || [];
     const home = v.data.plots.filter(p => p.ring === "near").sort((a, b) => (b.pasture_ha || 0) - (a.pasture_ha || 0))[0].id;
     const herd = Object.assign({ id, name, home }, parsed);
     v.herds.push(herd);
@@ -829,6 +883,11 @@ async function handle(update, send, today = new Date()) {
 
   // всё остальное — вопрос к ИИ
   const isQuestion = text.includes("?") || text.split(/\s+/).length >= 4;
+  if (AI_ON() && text) {
+    const wait = aiChatAllowed(chatId);
+    if (wait) return send(chatId, wait === "minute" ? "Слишком много вопросов подряд, подождите минуту. Кнопки внизу работают всегда."
+      : "На сегодня вопросы к ИИ закончились. Кнопки внизу работают всегда.", MENU);
+  }
   if (isQuestion && AI_ON()) await send(chatId, "Думаю над ответом…");
   const answer = await askGemini(text, v, herd);
   if (answer) return send(chatId, answer, MENU);
@@ -907,7 +966,9 @@ async function run(token) {
   let me = await retry("getMe", () => api("getMe"), 4);
   if (me && !me.ok) { console.error("Токен не подошёл:", me.description); process.exit(1); }   // неверный токен — это не сбой сети
   if (!me) { console.error("Telegram недоступен при старте — поднимаю сервер без проверки токена"); me = { ok: true, result: { username: BOT_USERNAME } }; }
-  await loadState();
+  // без состояния не стартуем: Render перезапустит сервер, данные останутся целы
+  try { await loadState(); } catch (e) { console.error("Состояние не прочитано, останавливаюсь, чтобы не стереть данные:", e.message); process.exit(1); }
+  process.once("SIGTERM", () => flush().finally(() => process.exit(0)));      // Render усыпляет или обновляет сервер — успеваем дописать
   retry("setMyCommands", () => api("setMyCommands", { commands: [
     { command: "start", description: "Выбрать село" }, { command: "today", description: "Где пасти сегодня" },
     { command: "plan", description: "Маршрут на сезон" }, { command: "map", description: "Карта села" },
@@ -947,11 +1008,11 @@ function serve(token, api, onUpdate, info, send) {
   function routes(req, res) {
     if (req.method === "POST" && req.url === "/tg") {
       if (req.headers["x-telegram-bot-api-secret-token"] !== secret) { res.writeHead(401).end(); return; }
-      let body = "";
-      req.on("data", c => { body += c; if (body.length > 1e6) req.destroy(); });
+      const parts = []; let n = 0;                     // байты целиком: иначе кириллица портится на границе пакетов
+      req.on("data", c => { n += c.length; if (n > 1e6) req.destroy(); else parts.push(c); });
       req.on("end", () => {
         res.writeHead(200).end("ok");               // отвечаем сразу, считаем потом
-        try { onUpdate(JSON.parse(body)); } catch (e) { console.error("Плохое обновление:", e.message); }
+        try { onUpdate(JSON.parse(Buffer.concat(parts).toString("utf8"))); } catch (e) { console.error("Плохое обновление:", e.message); }
       });
       return;
     }
@@ -1022,4 +1083,4 @@ if (require.main === module) {
   else { console.log("Нужен TELEGRAM_TOKEN в .env (или проверка: node bot.js --test)"); process.exit(1); }
 }
 
-module.exports = { multiContext, ensureMulti, handle, parseHerd, runCron, cronRoute, buildInfo, villageApi, siteApi, alertText, pastureAlert, trendWords, getState: () => state, setTest: () => { TEST = true; } };
+module.exports = { _loadState: loadState, _save: save, multiContext, ensureMulti, handle, parseHerd, runCron, cronRoute, buildInfo, villageApi, siteApi, alertText, pastureAlert, trendWords, getState: () => state, setTest: () => { TEST = true; } };
