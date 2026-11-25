@@ -37,7 +37,14 @@
     90: { name: "травянистые водно-болотные угодья", category: "uncertain" },
     95: { name: "мангры", category: "excluded" },
     100: { name: "мхи и лишайники", category: "uncertain" },
+    // не классы ESA: пастбищные пиксели, которые refineLand отнёс к непастбищу
+    31: { name: "пятно травы меньше 5 га", category: "excluded" },
+    51: { name: "трава среди застройки", category: "excluded" },
   };
+  // Дворы, улицы, огороды и дачи на карте покрова часто выглядят травой. Правило без OSM (он молчит как раз в сёлах): трава не пастбище,
+  // если в квадрате ±150 м застройки не меньше 10 %, или это отдельное пятно меньше 5 га. Сверено с жильём OSM в 10 местах: снимает 56–93 % травы
+  // внутри него; в степном Кегене — меньше 2 % всей травы.
+  const LAND_RULE = 2, URBAN_R_M = 150, URBAN_SHARE = 0.10, MIN_PATCH_HA = 5;
   const LANDCOVER_YEAR = 2021;
   function classifyLandcover(code) {
     const c = LANDCOVER[code];
@@ -230,6 +237,40 @@
     return land;
   }
 
+  /** Карта покрова вокруг села без травы среди застройки и мелких пятен (коды 51 и 31). Исходный массив не меняется. */
+  function refineLand(land, bbox, size = SIZE) {
+    const n = size, out = Uint8Array.from(land), [kx, ky] = kmPerDeg((bbox[1] + bbox[3]) / 2);
+    const mx = (bbox[2] - bbox[0]) * kx * 1000 / n, my = (bbox[3] - bbox[1]) * ky * 1000 / n;
+    const r = Math.max(1, Math.round(URBAN_R_M / mx)), minPx = MIN_PATCH_HA * 1e4 / (mx * my);
+    const I = new Int32Array((n + 1) * (n + 1));                // сколько пикселей застройки левее и выше
+    for (let y = 0; y < n; y++) { let s = 0; for (let x = 0; x < n; x++) { if (land[y * n + x] === 50) s++; I[(y + 1) * (n + 1) + x + 1] = I[y * (n + 1) + x + 1] + s; } }
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      const i = y * n + x;
+      if (classifyLandcover(land[i]) !== "pasture") continue;
+      const x0 = Math.max(0, x - r), x1 = Math.min(n, x + r + 1), y0 = Math.max(0, y - r), y1 = Math.min(n, y + r + 1);
+      const built = I[y1 * (n + 1) + x1] - I[y0 * (n + 1) + x1] - I[y1 * (n + 1) + x0] + I[y0 * (n + 1) + x0];
+      if (built >= URBAN_SHARE * (x1 - x0) * (y1 - y0)) out[i] = 51;
+    }
+    // отдельные пятна; пятно у края рамки может продолжаться за ней — не трогаем
+    const seen = new Uint8Array(n * n);
+    for (let i = 0; i < n * n; i++) {
+      if (seen[i] || classifyLandcover(out[i]) !== "pasture") continue;
+      const q = [i]; let edge = false; seen[i] = 1;
+      for (let h = 0; h < q.length; h++) {
+        const j = q[h], x = j % n, y = (j - x) / n;
+        if (!x || !y || x === n - 1 || y === n - 1) edge = true;
+        if (x && !seen[j - 1] && classifyLandcover(out[j - 1]) === "pasture") { seen[j - 1] = 1; q.push(j - 1); }
+        if (x < n - 1 && !seen[j + 1] && classifyLandcover(out[j + 1]) === "pasture") { seen[j + 1] = 1; q.push(j + 1); }
+        if (y && !seen[j - n] && classifyLandcover(out[j - n]) === "pasture") { seen[j - n] = 1; q.push(j - n); }
+        if (y < n - 1 && !seen[j + n] && classifyLandcover(out[j + n]) === "pasture") { seen[j + n] = 1; q.push(j + n); }
+      }
+      if (!edge && q.length < minPx) for (const j of q) out[j] = 31;
+    }
+    return out;
+  }
+  /** Покров для расчёта села: всё, что считается по участкам, берёт его (своё пастбище по контуру — исходный покров). */
+  const loadVillageLand = async bbox => refineLand(await loadLand(bbox), bbox);
+
   /**
    * Смещение отражения: с processing baseline 04.00 (сцены с 25.01.2022) ESA добавляет +1000 к DN.
    * Если baseline не указан, решаем по дате съёмки.
@@ -335,7 +376,7 @@
     const plots = makePlots(lat, lon);
     if (!arr) return { year, dates: [], status: "no_data", valid_fraction: 0, plots: plots.map(p => ({ id: p.id, ndvi: null, valid_fraction: 0, obs_count: 0, water_ha: null, water_max_ha: null, water_obs: 0 })) };
     say(`Считаю лето ${year}…`);
-    return Object.assign(seasonFromArrays({ lat, lon, bbox, year, per: arr.per, scls: arr.scls, dates: arr.dates, land: land || await loadLand(bbox) }),
+    return Object.assign(seasonFromArrays({ lat, lon, bbox, year, per: arr.per, scls: arr.scls, dates: arr.dates, land: land || await loadVillageLand(bbox) }),
       { window: arr.window });
   }
 
@@ -348,7 +389,7 @@
     let land = null;
     for (const [i, year] of years.entries()) {
       if (have[year]) { out.push(have[year]); continue; }
-      if (!land) land = await loadLand(bboxFor(lat, lon));
+      if (!land) land = await loadVillageLand(bboxFor(lat, lon));
       onProgress && onProgress({ year, i, n: years.length });
       out.push(await buildSeason({ lat, lon, year, land }));
     }
@@ -510,7 +551,7 @@
   async function buildNoGraze({ lat, lon, onProgress }) {
     const bbox = bboxFor(lat, lon);
     if (onProgress) onProgress("Загружаю карту покрытия земли и OpenStreetMap…");
-    const land = await loadLand(bbox);
+    const land = await loadVillageLand(bbox);
     return noGrazeFor({ lat, lon, bbox, land });
   }
 
@@ -533,7 +574,7 @@
     if (!scenes.length) throw new Error("Нет безоблачных летних снимков для этого места");
 
     say(`Загружаю ${scenes.length} снимков и карту покрытия земли…`);
-    const [raw, land] = await Promise.all([Promise.all(scenes.map(it => sceneData(bbox, it))), loadLand(bbox)]);
+    const [raw, land] = await Promise.all([Promise.all(scenes.map(it => sceneData(bbox, it))), loadVillageLand(bbox)]);
     const d0 = scenes.map(s => s.properties.datetime.slice(0, 10));
     const { per, dates } = mergeSameDate(raw.map(x => x.nd), d0);
     const { per: scls } = mergeSameDate(raw.map(x => x.scl), d0, v => v === 0);
@@ -543,7 +584,7 @@
 
     const plots = makePlots(lat, lon);
     const { idx, pxHa } = plotIndex(lat, lon, bbox);
-    const acc = plots.map(() => ({ all: 0, past: 0, water: 0, excl: 0, unc: 0 }));
+    const acc = plots.map(() => ({ all: 0, past: 0, water: 0, excl: 0, unc: 0, urb: 0, patch: 0 }));
     const pasture = new Uint8Array(N);
     for (let i = 0; i < N; i++) {
       const cat = classifyLandcover(land[i]);
@@ -552,6 +593,7 @@
       const a = acc[idx[i]];
       a.all++; if (cat === "pasture") a.past++; else if (cat === "excluded") a.excl++; else a.unc++;
       if (land[i] === WC_WATER) a.water++;
+      if (land[i] === 51) a.urb++; else if (land[i] === 31) a.patch++;
     }
     const med = plotMeans(ndvi, land, idx);
     const perPlot = per.map(nd => plotMeans(nd, land, idx));
@@ -563,6 +605,7 @@
       p.pasture_ha = Math.round(a.past * pxHa);
       p.excluded_ha = Math.round(a.excl * pxHa);
       p.uncertain_ha = Math.round(a.unc * pxHa);
+      p.urban_ha = Math.round(a.urb * pxHa); p.patch_ha = Math.round(a.patch * pxHa);   // трава, которую не считаем пастбищем
       p.ndvi = med[k].ndvi;
       p.ndvi_base = null;
       p.valid_fraction = +med[k].valid.toFixed(3);
@@ -600,6 +643,7 @@
     return {
       village: { name, lat, lon },
       bbox,
+      land_rule: LAND_RULE,
       nograze: ng,
       ...(nograzeLater ? { nograzeLater } : {}),
       source: {
@@ -636,7 +680,7 @@
     const items2 = sanitizeScenes(items, { now }).items.sort((a, b) => a.properties.datetime < b.properties.datetime ? 1 : -1);
     if (!items2.length) return null;
     const it = items2[0];
-    const [nd, land] = await Promise.all([sceneNdvi(bbox, it), loadLand(bbox)]);
+    const [nd, land] = await Promise.all([sceneNdvi(bbox, it), loadVillageLand(bbox)]);
     const means = plotMeans(nd, land, plotIndex(lat, lon, bbox).idx);
     const plots = {};
     makePlots(lat, lon).forEach((p, k) => { plots[p.id] = means[k]; });
@@ -797,7 +841,7 @@
     return m ? (m[1] === "N" ? "Б" : "Д") + "-" + DIRS[+m[2]] : null;
   }
 
-  return { geocode, reverseGeocode, regionAt, buildVillage, buildNoGraze, noGrazeFor, loadLand, plotIndex, buildSeason, buildYears, fetchPrecip, precipByYear, seasonFromArrays, compareSeasons, plotWater, sclFromBands, NDVI_SAME_PCT, latestScene, polygonStats, latestPolygonScene, polygonAreaHa, closeRing, checkRing, ringSelfIntersects,
+  return { geocode, reverseGeocode, regionAt, buildVillage, buildNoGraze, noGrazeFor, loadLand, refineLand, LAND_RULE, plotIndex, buildSeason, buildYears, fetchPrecip, precipByYear, seasonFromArrays, compareSeasons, plotWater, sclFromBands, NDVI_SAME_PCT, latestScene, polygonStats, latestPolygonScene, polygonAreaHa, closeRing, checkRing, ringSelfIntersects,
     plotCode, plotFromCode, bboxFor, makePlots, setUserAgent, summerYear, SIZE,
     LANDCOVER, LANDCOVER_YEAR, SCL_OK, SCL_NAMES, classifyLandcover, landcoverComposition, sanitizeScenes, pickScenes, boaOffset, ndviFromBands,
     mergeSameDate, medianComposite, fetchRetry, plotMeans, maskedMean, insideMask, ringBbox, polygonFromArrays, plotIndex, metaFor };
