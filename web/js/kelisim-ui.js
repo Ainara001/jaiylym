@@ -75,8 +75,7 @@
     /** Опасное действие — вторым нажатием. */
     function arm(b, fn) {
       if (!b) return;
-      let a = false; const was = b.innerHTML;
-      b.onclick = () => { if (a) return fn(b); a = true; b.textContent = tt("sure"); b.classList.add("btn-danger"); setTimeout(() => { if (b.isConnected) { a = false; b.innerHTML = was; b.classList.remove("btn-danger"); } }, 5000); };
+      X.armBtn(b, tt("sure"), fn);
     }
 
     // ---------- сеть ----------

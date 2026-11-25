@@ -197,12 +197,24 @@ function ensureLand(key) {
   if (TEST || !v || !v.data || v.example || v.data.land_rule === PL.LAND_RULE || landPending.has(key)) return;
   landPending.add(key);
   const { name, lat, lon, region } = v.data.village;
-  PL.buildVillage({ name, lat, lon }).then(res => { delete res.grid; res.village.region = region; v.data = res; save(); })
+  PL.buildVillage({ name, lat, lon }).then(res => {
+    const ok = x => x && ["ok", "empty"].includes(x.status);
+    if (!ok(res.nograze) && ok(v.data.nograze)) return;      // OSM молчит: прежний расчёт с зонами лучше нового без них — повторим в другой раз
+    delete res.grid; res.village.region = region; v.data = res; save();
+  })
     .catch(e => console.error("пересчёт села:", e.message)).finally(() => landPending.delete(key));
+}
+// зоны OSM не загрузились при расчёте — пробуем ещё раз, не чаще раза в час
+const zonesTried = new Map();
+function ensureZones(key) {
+  const v = state.villages[key];
+  if (TEST || !v || !v.data || v.example || !v.data.nograze || v.data.nograze.status !== "error" || Date.now() - (zonesTried.get(key) || 0) < 3600e3) return;
+  zonesTried.set(key, Date.now());
+  PL.buildNoGraze({ lat: v.data.village.lat, lon: v.data.village.lon }).then(ng => { if (ng.status !== "error") { v.data.nograze = ng; save(); } }).catch(e => console.error("зоны села:", e.message));
 }
 async function ensureVillage(name, lat, lon, say) {
   const key = vkey(lat, lon);
-  if (state.villages[key]) { ensureRegion(key); ensureLand(key); ensurePrev(key); ensureMulti(key); return key; }
+  if (state.villages[key]) { ensureRegion(key); ensureLand(key); ensureZones(key); ensurePrev(key); ensureMulti(key); return key; }
   await say(`Считаю пастбища «${name}» по снимкам Sentinel-2… это ~10–20 секунд.`);
   const [res, region] = await Promise.all([PL.buildVillage({ name, lat, lon }), PL.regionAt(lat, lon).catch(() => null)]);
   delete res.grid;
@@ -839,6 +851,7 @@ async function handle(update, send, today = new Date()) {
 
   if (!v) {                                         // село ещё не выбрано: текст = название
     if (!text) return;
+    if (/^(сегодня|план|карта села|водопой|участки|\/(today|plan|map|water|plots))$/.test(low)) return send(chatId, "Сначала выберите село: напишите его название или отправьте геолокацию.", ASK_VILLAGE);
     let found;
     try { found = await PL.geocode(text); } catch (e) { return send(chatId, "Поиск места сейчас недоступен, попробуйте через минуту или отправьте геолокацию.", ASK_VILLAGE); }
     if (!found.length) return send(chatId, `Не нашёл «${text}». Попробуйте написать по-русски или отправьте геолокацию.`, ASK_VILLAGE);
