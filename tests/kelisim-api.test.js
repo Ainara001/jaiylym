@@ -288,6 +288,31 @@ test("возражение: причина обязательна, дата и �
   assert.equal((await call("POST", `/${e.id}/preview`, e.keys.h1, { proposal: { type: "avoid", plot, reason: "far" } })).status, 409);
 });
 
+test("участник: хозяйство или общее стадо, кто отвечает; сезон; сколько сена не хватает", async () => {
+  const s0 = snap(BES);
+  let r = await call("POST", "", null, { snapshot: s0, season: 1999, households: three });
+  assert.equal(r.status, 400); assert.equal(r.d.why, "season");
+  r = await call("POST", "", null, { snapshot: s0, households: [{ name: "Стадо", kind: "herd", herd: { cattle: 5 } }] });
+  assert.equal(r.status, 400, "неизвестный вид участника");
+  r = await call("POST", "", null, { snapshot: s0, rule: "household", households: [{ name: "Общее стадо", kind: "common", owners: 20, herd: { cattle: 900 }, home: "Б-С" }, { name: "Хозяйство", owners: 7, herd: { cattle: 900 }, home: "Б-Ю" }] });
+  assert.equal(r.status, 200);
+  const org = r.d.organizer_key, id = r.d.id, [a, b] = r.d.state.households, key = r.d.links[0].key;
+  assert.deepEqual([a.kind, a.owners, a.resp, b.kind, b.owners, b.resp], ["common", 20, "herder", "farm", null, "owner"], "у хозяйства один хозяин; за общее стадо по умолчанию отвечает пастух");
+  assert.ok([0, 1].includes(r.d.state.season - new Date().getUTCFullYear()));
+  r = await call("POST", `/${id}/me`, key, { name: "Общее стадо", kind: "common", owners: 30, resp: "owner", herd: { cattle: 900 }, home: "Б-С" });
+  assert.deepEqual([r.d.state.households[0].owners, r.d.state.households[0].resp], [30, "owner"]);
+  r = await call("POST", `/${id}/start`, org, { rev: r.d.state.rev });
+  const P1 = r.d.state.plan;
+  assert.ok(P1.share[a.id] >= P1.share[b.id], "общее стадо получает за всех хозяев");
+  // меньше хозяев — меньше корма при правиле «поровну»
+  r = await call("POST", `/${id}/households/${a.id}`, org, { rev: r.d.state.rev, kind: "common", owners: 2 });
+  assert.equal(r.d.state.version, 2); assert.ok(r.d.state.plan.share[a.id] <= P1.share[a.id]);
+  const p = (await call("GET", `/${id}/protocol`, org)).d, h = p.households[0], P2 = r.d.state.plan;
+  assert.equal(p.season, r.d.state.season);
+  assert.ok(Math.abs(p.households.reduce((s, x) => s + x.hay_t, 0) - P2.deficit_t) < 0.3, "тонны участников сходятся с общей нехваткой");
+  assert.equal(h.owners, 2);
+});
+
 test("срок ответа: после него двор ответить не может, организатор может продлить", async () => {
   const t = Date.parse("2026-11-25T06:00:00Z"); let now = t;
   const kel = createKelisim({ kv: memoryKv(), secret: "s", now: () => now });

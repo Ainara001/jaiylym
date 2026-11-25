@@ -821,6 +821,9 @@ main .btn.kbig { min-height: 52px; }
 #kelPage .field, .kel-dlg .field { font-size: 13.5px; color: var(--ink-2); }
 #kelPage .field textarea { width: 100%; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; font: inherit; font-size: 16px; resize: vertical; }
 .kf { margin: 12px 0; }
+.kwho { margin: 12px 0; }
+.kwho-f { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 12px; align-items: end; }
+.kwho:not(:has([data-k=common]:checked)) .kowners { display: none; }
 .kform { margin-top: 14px; }
 .kcheck { min-height: 44px; margin-bottom: 8px; font-size: 14.5px; }
 .kcheck input { flex: none; width: 22px; height: 22px; }
