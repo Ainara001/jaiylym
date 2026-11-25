@@ -110,6 +110,14 @@ async function newcomer(page, label) {
   assert.equal(await ha(), before, label + ": граница запомнилась");
   await page.click('[data-zn="all"]');
   await page.waitForFunction(() => /всю траву вокруг/.test(document.querySelector("#zoneCard").textContent));
+  // на карте закрашены только пиксели пастбища: жильё и зоны OSM прозрачны
+  const painted = () => App(() => new Promise(res => { const s = window.JaiylymApp.S, im = new Image(); im.onload = () => { const c = document.createElement("canvas"); c.width = c.height = im.naturalWidth; const x = c.getContext("2d"); x.drawImage(im, 0, 0); const a = x.getImageData(0, 0, c.width, c.height).data;
+    let on = 0, bad = 0; const block = window.JaiylymNoGraze.blockMask(s.D.nograze, s.D.bbox, c.width, s.ngBuf); for (let i = 0; i < c.width * c.width; i++) if (a[i * 4 + 3]) { on++; if (block[i] || !s.mask.px[i]) bad++; } res([on, bad, c.width * c.width]); }; im.src = s.pxLayer._url; }));
+  if (await App(() => !!window.JaiylymApp.S.pxLayer)) { const [on, bad, all] = await painted(); assert.ok(on > 100 && on < all * 0.9, label + ": закрашено " + on); assert.equal(bad, 0, label + ": жильё не закрашено"); }
+  // города: пастбищ почти нет — сказано прямо
+  await App(() => { const s = window.JaiylymApp.S; s.keep = s.D.plots.map(p => p.pasture_ha); s.D.plots.forEach(p => { p.area_ha = p.area_ha || 1000; p.pasture_ha = 1; }); window.JaiylymApp.rebuildPlots(); window.JaiylymApp.render(); window.JaiylymApp.renderPane("brief"); });
+  assert.match(await page.textContent("#cityNote"), /почти нет пастбищ/);
+  await App(() => { const s = window.JaiylymApp.S; s.D.plots.forEach((p, i) => { p.pasture_ha = s.keep[i]; }); window.JaiylymApp.rebuildPlots(); window.JaiylymApp.render(); });
   // водопои: рейтинг по дефициту; без дефицита — честно «корма не добавит»
   await App(() => window.JaiylymApp.renderPane("water"));
   const wp = () => page.textContent('.pane[data-pane="water"]');
@@ -145,7 +153,7 @@ async function newcomer(page, label) {
   assert.equal(await App(() => window.JaiylymApp.S.herds.length), 0);
   // зоны OSM молчат: село открыто сразу, и прямо сказано, что числа пока без вычета
   await App(() => { const D = JSON.parse(JSON.stringify(window.JAIYLYM_DATA)); delete D.nograze; D.village = { name: "Без зон", lat: 51.2, lon: 71.2, region: "Акмолинская область" };
-    D.png = "data/ndvi.png"; localStorage.setItem("jaiylym:v3:51.200,71.200", JSON.stringify(D)); });
+    D.land_rule = window.JaiylymPipeline.LAND_RULE; D.png = "data/ndvi.png"; localStorage.setItem("jaiylym:v3:51.200,71.200", JSON.stringify(D)); });
   await page.goto(base + "#/map?lat=51.2&lon=71.2&name=Без%20зон");
   await page.waitForFunction(() => window.JaiylymApp.S.D && window.JaiylymApp.S.D.village.name === "Без зон" && window.JaiylymApp.S.pl);
   assert.match(await page.textContent("#ngNote"), /ещё загружаются из OpenStreetMap/, label + ": пока зон нет — честная пометка");

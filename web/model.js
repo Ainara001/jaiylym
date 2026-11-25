@@ -18,7 +18,7 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
 
-  const MODEL_VERSION = "2.2.0";
+  const MODEL_VERSION = "2.3.0";
   const FORMULA = {
     biomass: "biomass_kg_ha = max(0, NDVI − ndvi0) × k_ndvi",
     forage: "available_forage_kg = pasture_ha × biomass_kg_ha × util × forage_factor",
