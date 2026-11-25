@@ -142,18 +142,14 @@ test("запрещённый участок не попадает в план, �
   assert.ok(!J.wells(mini({ "Д-Ю": { forbidden: true } })).some(w => w.plot === "Д-Ю"), "водопой на закрытом участке не предлагается");
 });
 
-test("дойное стадо: сначала ближний участок, дальний — только на нехватку, с предупреждением", () => {
-  const ps = mini({ "Б-С": { pasture_ha: 60 } });
+test("дойное стадо не уходит на дальний участок, даже если там свободно", () => {
+  const ps = mini({ "Б-С": { pasture_ha: 10 } });
   const hs = [{ id: "milk", cattle: 60, home: "Б-С", daily_return: true }];
   const pl = J.plan(ps, hs);
   invariants(pl, ps, hs);
-  assert.ok(pl.load["Б-С"].used > 0, "сначала ближний");
-  assert.ok(pl.load["Д-С"].used > 0);
-  assert.ok(!pl.unmet.milk);
-  assert.ok(pl.warnings.some(w => w.type === "daily_far_used" && w.herds.includes("milk") && w.plots.includes("Д-С")));
-  const full = mini(), p2 = J.plan(full, [{ id: "milk", cattle: 5, home: "Б-С", daily_return: true }]);
-  assert.equal(p2.load["Д-С"].used, 0, "ближних хватает — далеко не идут");
-  assert.ok(!p2.warnings.some(w => w.type === "daily_far_used"));
+  assert.equal(pl.load["Д-С"].used, 0);
+  assert.ok(pl.unmet.milk > 0);
+  assert.ok(pl.suggestions.some(s => s.type === "split_daily_herd"));
 });
 
 test("права пользования: хозяйство с указанными участками пасётся только на них", () => {
