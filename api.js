@@ -143,8 +143,10 @@ const rnd = n => crypto.randomBytes(n).toString("base64url");
 // ---------- аккаунты с паролем (вход без Telegram — по выбору пользователя) ----------
 // Логин — телефон Казахстана (+7XXXXXXXXXX), e-mail или имя латиницей. Пароль хранится только как хэш scrypt с солью.
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 32 };
+/** Строка или число → строка; объект, список — пусто (не ошибка сервера). */
+const plain = x => (typeof x === "string" || typeof x === "number" || typeof x === "boolean" ? String(x) : "");
 function normLogin(x) {
-  const s = String(x == null ? "" : x).trim().toLowerCase();
+  const s = plain(x).trim().toLowerCase();
   const digits = s.replace(/[\s()+-]/g, "");
   if (/^[78]\d{10}$/.test(digits)) return "+7" + digits.slice(1);              // 8 701 …, +7 701 …, 7701…
   if (/^[^\s@]{1,64}@[^\s@]{1,190}\.[a-zа-я]{2,}$/i.test(s)) return s;          // e-mail
@@ -207,8 +209,8 @@ const fixWebLabels = text => String(text || "").replace(/\[\s*(интернет|
 function aiContextIssues(ctx) {
   const out = [];
   if (!ctx || typeof ctx !== "object" || !ctx["село"]) { out.push("Село не открыто: данных участков и стад нет."); return out; }
-  const plots = Array.isArray(ctx["участки"]) ? ctx["участки"] : [];
-  const herds = Array.isArray(ctx["стада"]) ? ctx["стада"] : [];
+  const objs = x => (Array.isArray(x) ? x : []).filter(y => y && typeof y === "object");
+  const plots = objs(ctx["участки"]), herds = objs(ctx["стада"]);
   if (!plots.length) out.push("Нет данных участков.");
   if (!herds.length) out.push("Стада не введены: план и дефицит не считались.");
   const noNdvi = plots.filter(p => p && (p.ndvi_спутник == null)).map(p => p.id);
@@ -219,11 +221,12 @@ function aiContextIssues(ctx) {
   if (st === "feasible" && def > 0) out.push("Противоречие: статус «распределение возможно», но указан дефицит " + def + " т.");
   if ((st === "partially_feasible" || st === "infeasible") && def === 0) out.push("Противоречие: план неполный, но дефицит указан как 0.");
   for (const p of plots) if (p && p.нагрузка_по_плану_проц > 100) { out.push("Противоречие: план превышает 100 % на участке " + p.id + "."); break; }
-  for (const h of herds) if (h && [h.овцы, h.козы, h.крс, h.лошади].some(v => v != null && (!Number.isFinite(+v) || +v < 0))) { out.push("Неверное поголовье у стада «" + h.имя + "»."); break; }
+  for (const h of herds) if (h && [h.овцы, h.козы, h.крс, h.лошади].some(v => v != null && (!Number.isFinite(+v) || +v < 0))) { out.push("Неверное поголовье у стада «" + str(h.имя, 60) + "»."); break; }
   if (ctx["демо_стада"]) out.push("В расчёте есть условные демо-стада — это пример, а не реальные хозяйства.");
   return out;
 }
-const str = (x, max = 80) => String(x == null ? "" : x).replace(/[\u0000-\u001f<>]/g, "").trim().slice(0, max);
+// без разметки, управляющих и невидимых знаков: направление письма и нулевая ширина подделывают чужие имена
+const str = (x, max = 80) => plain(x).replace(/[\u0000-\u001f\u007f<>\u200b\u200e\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, "").trim().slice(0, max);
 const coordOk = (lat, lon) => Number.isFinite(+lat) && Number.isFinite(+lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
 const PLOT_RE = /^[БД]-(С|СВ|В|ЮВ|Ю|ЮЗ|З|СЗ)$/;
 
@@ -344,6 +347,7 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, onDelet
     const g = b.geometry || {};
     let ring = g.type === "Polygon" && Array.isArray(g.coordinates) ? g.coordinates[0] : null;
     if (!Array.isArray(ring) || ring.length < 3 || ring.length > 201) throw Object.assign(new Error("контур: от 3 до 200 точек"), { code: 400 });
+    if (!ring.every(Array.isArray)) throw bad("контур: нужны координаты");
     ring = ring.map(p => [+(+p[0]).toFixed(6), +(+p[1]).toFixed(6)]);
     if (!ring.every(([x, y]) => coordOk(y, x))) throw Object.assign(new Error("неверные координаты"), { code: 400 });
     ring = PL.closeRing(ring);
@@ -482,6 +486,8 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, onDelet
         if (!aiTake()) return json(res, 429, { error: "дневной лимит ИИ исчерпан, попробуйте завтра" }), true;
         const b = await body(req);
         const lang = b.lang === "kk" ? "kk" : "ru";
+        if (!b.context || typeof b.context !== "object" || Array.isArray(b.context)) b.context = {};
+        b.messages = (Array.isArray(b.messages) ? b.messages : []).filter(m => m && typeof m === "object");
         const issues = aiContextIssues(b.context);
         // сжатие под предел по протоколу ai-context.js (без обрезки строки): последние вопросы задают, какие участки важнее
         const userQ = (Array.isArray(b.messages) ? b.messages : []).slice(-12).filter(m => m && m.role !== "ai").map(m => str(m.text, 1200)).join("\n");
@@ -562,8 +568,8 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, onDelet
         const b = await body(req);
         const login = normLogin(b.login);
         if (!login) return json(res, 400, { error: "логин: телефон +7…, e-mail или имя латиницей (3–32 знака)", field: "login" }), true;
-        const pw = String(b.password == null ? "" : b.password);
-        if (pw.length < 8 || pw.length > 128) return json(res, 400, { error: "пароль — от 8 до 128 знаков", field: "password" }), true;
+        const pw = plain(b.password);
+        if (pw.trim().length < 8 || pw.length > 128) return json(res, 400, { error: "пароль — от 8 до 128 знаков", field: "password" }), true;
         if (pw.toLowerCase() === login || /^(\d)\1+$/.test(pw) || /^(12345678|123456789|1234567890|password|qwerty123|йцукенгш)$/i.test(pw))
           return json(res, 400, { error: "слишком простой пароль", field: "password" }), true;
         const name = str(b.name, 80).trim();
@@ -581,7 +587,7 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, onDelet
       if (p === "/auth/login" && req.method === "POST") {
         if (limited(req, "pwlogin", 30, 60e3)) return json(res, 429, { error: "слишком много попыток, подождите минуту" }), true;
         const b = await body(req);
-        const login = normLogin(b.login), pw = String(b.password == null ? "" : b.password).slice(0, 128);
+        const login = normLogin(b.login), pw = plain(b.password).slice(0, 128);
         // неверные попытки на один логин: 10 за 15 минут с одного адреса и 50 со всех — чужой адрес не запрёт хозяина
         const lh = sha(login || "-"), mineK = "pwfail:" + lh + ":" + sha(clientIp(req)).slice(0, 16), allK = "pwfail:" + lh;
         const r = await inTurn(lh, async () => {

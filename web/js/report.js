@@ -3,8 +3,8 @@
  * Если библиотека не загрузилась (нет сети), открывается печать: «Сохранить как PDF». */
 (function () {
   "use strict";
-  // своя копия библиотеки (MIT, web/vendor) — PDF не зависит от внешнего CDN и работает из офлайн-кэша; CDN — запасной путь
-  const LIBS = ["vendor/html2pdf-0.10.1.bundle.min.js", "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"];
+  // только своя копия (MIT, web/vendor): работает из офлайн-кэша, чужой сервер не может подменить код
+  const LIBS = ["vendor/html2pdf-0.10.1.bundle.min.js"];
 
   function loadOne(src) {
     return new Promise((resolve, reject) => {

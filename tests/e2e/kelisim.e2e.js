@@ -193,7 +193,7 @@ async function flow(b, name) {
   await org.waitForFunction(() => document.querySelectorAll(".kprop").length === 1);
   await check(org, "орг после решения");
   await org.fill(".kprop [data-note]", "Туда гонит другое село");
-  await org.click(".kprop [data-dec]");
+  await org.click(".kprop [data-dec]"); await org.waitForTimeout(800);
   await org.click(".kprop [data-dec]");
   await org.waitForFunction(() => !document.querySelector(".kprop"));
   // 9. двор 2: план изменился — подтвердить заново; двор 3 видит отказ; старый ответ на новую версию не проходит молча
@@ -217,7 +217,7 @@ async function flow(b, name) {
   await org.waitForSelector(".kyard");
   await org.click(".kyard:nth-of-type(3) [data-link]");
   await org.click("dialog[open] summary");
-  await org.click("#kNewL"); await org.click("#kNewL");
+  await org.click("#kNewL"); await org.waitForTimeout(800); await org.click("#kNewL");
   await org.waitForFunction(u => { const l = document.querySelector("dialog[open] .klink"); return l && l.textContent.trim() !== u; }, links[2]);
   await org.click("dialog[open] .modal-x button");
   await d3.reload();
@@ -233,7 +233,7 @@ async function flow(b, name) {
   const orgUrl = org.url();
   // 12. все согласны → закрыть → протокол PDF
   assert.match(await org.innerText(".kcount"), /Согласны 3 из 3/);
-  await org.click("#kClose"); await org.click("#kClose");
+  await org.click("#kClose"); await org.waitForTimeout(800); await org.click("#kClose");
   await org.waitForSelector("#kelPdf");
   assert.match(await org.innerText("#kelPage"), /Все участники согласны/);
   const [dl] = await Promise.all([org.waitForEvent("download", { timeout: 60000 }), org.click("#kelPdf")]);
@@ -332,7 +332,7 @@ async function organizer(b, name) {
   const url = org.url();
   const [dl] = await Promise.all([org.waitForEvent("download"), org.click("#kExp")]);
   const file = await dl.path();
-  await org.click("#kDel"); await org.click("#kDel");
+  await org.click("#kDel"); await org.waitForTimeout(800); await org.click("#kDel");
   await org.waitForSelector("#kelDemo");
   await org.goto(url);
   await org.waitForFunction(() => /не найдено/.test(document.querySelector("#kelPage").innerText));

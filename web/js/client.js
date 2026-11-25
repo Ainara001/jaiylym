@@ -45,10 +45,22 @@
     }
     let data = null;
     try { data = await r.json(); } catch (_) {}
-    if (r.status === 401 && auth && token) { setToken(null); user = null; }
-    if (!r.ok) throw new ApiError((data && data.error) || ("HTTP " + r.status), r.status, data && data.field, data);
+    if (r.status === 401 && auth && token) { setToken(null); user = null; changed("expired"); }
+    // сервер просыпается или обновляется: вместо данных — чужая страница или пустота. Это сбой связи, а не ответ
+    if (!r.ok) throw new ApiError((data && data.error) || "network", r.status, data && data.field, data);
+    if (!data || typeof data !== "object") throw new ApiError("network", 0);
     return data;
   }
+  // вход или выход произошёл не по кнопке на этой странице (сессия закончилась, другая вкладка) — страница должна это показать
+  let onAuth = null;
+  const changed = why => { if (onAuth) onAuth(why); };
+  if (typeof window !== "undefined") window.addEventListener("storage", e => {
+    if (e.key !== TOKEN_KEY && e.key !== null) return;
+    const tk = ls.get(TOKEN_KEY, null);
+    if (tk === token) return;
+    token = tk; user = null;
+    if (tk) me().catch(() => {}).then(() => changed("tab")); else changed("tab");
+  });
   function setToken(tk) { token = tk; tk ? ls.set(TOKEN_KEY, tk) : ls.del(TOKEN_KEY); }
 
   // ---------- вход ----------
@@ -70,9 +82,11 @@
     try { if (token) await req("POST", "/auth/logout", null, { timeout: 15000 }); } catch (_) {}
     setToken(null); user = null;
   }
+  let meSeq = 0;
   async function me() {
     if (!token) return (user = null);
-    try { user = await req("GET", "/api/me"); }
+    const my = ++meSeq, tk = token;
+    try { const u = await req("GET", "/api/me"); if (my === meSeq && tk === token) user = u; }          // пока ждали, вышли или вошли другим
     catch (e) { if (e.status === 401) user = null; else throw e; }
     return user;
   }
@@ -122,7 +136,7 @@
   const kel = (method, path, key, body) => req(method, "/api/kelisim" + path, body, { auth: false, kel: key, timeout: 90000 });
 
   window.Client = {
-    API, ApiError, ls,
+    API, ApiError, ls, set onAuth(f) { onAuth = f; },
     get user() { return user; }, get loggedIn() { return !!token; },
     startLogin, pollLogin, register, loginPw, logout, me, saveFarm, deleteAccount, addPasture, deletePasture,
     listScenarios, saveScenario, deleteScenario, listHistory, addHistory,

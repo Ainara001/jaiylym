@@ -27,7 +27,7 @@ const rnd = n => crypto.randomBytes(n).toString("base64url");
 const err = (code, message, extra) => Object.assign(new Error(message), { code }, extra ? { extra } : {});
 const bad = (m, why) => err(400, m, why && { why });
 const same = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
-const str = (x, max) => String(x == null ? "" : x).replace(/[\u0000-\u001f<>]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
+const str = (x, max) => (typeof x === "string" || typeof x === "number" ? String(x) : "").replace(/[\u0000-\u001f\u007f<>]/g, " ").replace(/[\u200b\u200e\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, "").replace(/\s+/g, " ").trim().slice(0, max);
 const PHONE = /(?:(?:\+?7|8)[\s(.-]*)?7\d{2}[\s).-]*\d{3}[\s.-]*\d{2}[\s.-]*\d{2}/, IIN = /\d{6}\s?\d{6}/;
 /** Текст от людей: без разметки и без того, что похоже на телефон или ИИН. */
 function text(x, max, what) {
