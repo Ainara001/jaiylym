@@ -8,9 +8,25 @@
   const TOKEN_KEY = "jaiylym:session";
   const ls = {
     get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } },
-    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (_) { return false; } },
+    set(k, v) {
+      const s = JSON.stringify(v);
+      for (let i = 0; i < 40; i++) {
+        try { localStorage.setItem(k, s); return true; }
+        // хранилище полно — убираем посчитанные сёла (их можно посчитать заново): ключи ссылок, вход и границы важнее
+        catch (_) { if (!dropVillage(k)) return false; }
+      }
+      return false;
+    },
     del(k) { try { localStorage.removeItem(k); } catch (_) {} },
   };
+  const HEAVY = /^jaiylym:v\d+:-?[\d.]+,-?[\d.]+(:ng|:multi:\d+|:prev:\d+)?$/;
+  /** Освободить место: самая большая запись расчёта села, кроме той, что сохраняем. false — убирать нечего. */
+  function dropVillage(keep) {
+    let big = null, size = 0;
+    try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k !== keep && HEAVY.test(k)) { const n = (localStorage.getItem(k) || "").length; if (n > size) { size = n; big = k; } } } } catch (_) {}
+    if (big) ls.del(big);
+    return !!big;
+  }
   let token = ls.get(TOKEN_KEY, null);
   let user = null;
 
