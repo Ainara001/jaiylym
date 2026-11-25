@@ -52,7 +52,7 @@ test("дойные стада пасутся только на ближних у
   for (const h of herds) for (const s of pl.herdPlans[h.id]) {
     if (!s.plot) continue;
     assert.ok(byId[s.plot].water, `${h.id} на участке без воды ${s.plot}`);
-    if (h.daily_return) assert.equal(byId[s.plot].ring, "near", "в Кегене дойным хватает ближних");
+    if (h.daily_return) assert.equal(byId[s.plot].ring, "near");
   }
 });
 
