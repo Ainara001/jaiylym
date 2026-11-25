@@ -311,19 +311,10 @@
     const v = rows(id).map(r => r.au_ha[state]);
     return v.length ? [Math.min(...v), Math.max(...v)] : null;
   }
-  /** Обычная зелёность вокруг села: медиана NDVI участков, взвешенная по площади пастбища. Меньше четырёх участков — сравнивать не с чем. */
-  function greenRef(plots) {
-    const a = plots.filter(p => p.ndvi != null && p.pasture_ha > 0).sort((x, y) => x.ndvi - y.ndvi), half = a.reduce((s, p) => s + p.pasture_ha, 0) / 2;
-    if (a.length < 4) return null;
-    let s = 0;
-    for (const p of a) if ((s += p.pasture_ha) >= half) return +p.ndvi;
-    return null;
-  }
-  const withNorm = (plots, n) => { const ref = greenRef(plots); return plots.map(p => Object.assign({}, p, { norm: n }, ref ? { ndvi_ref: ref } : {})); };
   /** Прикрепить норму к участкам (дальше её учитывает engine.plotCapacity). Без области участки не меняются. */
   function attach(plots, sel) {
     const n = pick(sel);
-    return n ? withNorm(plots, n) : plots;
+    return n ? plots.map(p => Object.assign({}, p, { norm: n })) : plots;
   }
   /** Проверка сохранённого выбора (сценарии, API): { region, row?, state } или null, если выбор неверный. */
   function clean(sel) {
@@ -333,5 +324,5 @@
     return out;
   }
 
-  return { SOURCE, LAW, STATES, REGIONS, rows, region, regionOf, pick, range, attach, withNorm, greenRef, clean };
+  return { SOURCE, LAW, STATES, REGIONS, rows, region, regionOf, pick, range, attach, clean };
 });
