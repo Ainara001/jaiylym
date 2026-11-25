@@ -341,9 +341,29 @@ test("новый двор и удаление двора после начала
   assert.equal(raw.households.find(h => h.id === "h4").key_hash, null, "ссылка удалённого двора отозвана");
 });
 
+test("один участник не отнимает возможность возразить у остальных", async () => {
+  const k = await started();
+  let last;
+  for (let i = 0; i < 21; i++) last = await object(k, "h1", { type: "other", text: "спам " + i });
+  assert.equal(last.status, 429); assert.equal(last.d.why, "objections");
+  assert.equal((await object(k, "h2", { type: "other", text: "моё возражение" })).status, 200);
+  assert.equal((await agree(k, "h1")).status, 200, "согласиться он по-прежнему может");
+});
+
+test("тяжёлые расчёты идут по одному: сервер тем временем отвечает остальным", async () => {
+  const big = Array.from({ length: 40 }, (_, i) => ({ name: "Участник " + i, herd: { sheep: 300 + i * 10, cattle: 20 }, home: "Б-С" }));
+  const k = await started({ snapshot: snap(BES), households: big });
+  const one = async () => { const t = Date.now(); const r = await call("POST", `/${k.id}/preview`, k.keys.h1, { proposal: { type: "herd", herd: { sheep: 20000 } } }); assert.equal(r.status, 200); return Date.now() - t; };
+  const alone = await one(), many = Array.from({ length: 6 }, one);
+  await new Promise(r => setTimeout(r, 30));
+  const t = Date.now(); assert.equal((await call("GET", "/" + k.id, k.org)).status, 200);
+  const light = Date.now() - t; await Promise.all(many);
+  assert.ok(light < alone * 3 + 300, `обычный запрос ждал ${light} мс при одном расчёте ${alone} мс`);
+});
+
 test("предел частоты: поток новых согласований и запросов с одного адреса", async () => {
   let last;
-  for (let i = 0; i < 8; i++) last = await call("POST", "", null, { snapshot: snap(), households: three }, "10.9.9.9");
+  for (let i = 0; i < 11; i++) last = await call("POST", "", null, { snapshot: snap(), households: three }, "10.9.9.9");
   assert.equal(last.status, 429);
   const k = await make(); let code = 0;
   for (let i = 0; i < 130 && code !== 429; i++) code = (await call("GET", "/" + k.id, k.org, undefined, "10.9.9.8")).status;
