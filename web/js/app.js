@@ -2348,7 +2348,7 @@
       где_селу_можно_пасти: zoneText().replace(/<[^>]+>/g, ""),
       // сверено с данными за то же время (web/kelisim.js); без имён дворов и без их текста
       наблюдения_людей: Object.entries(obsNow()).flatMap(([id, g]) => g.items.map(i => ({ участок: id, что: { no_grass: "мало травы", weeds: "бурьян, непоедаемая трава", no_water: "нет воды", far: "далеко" }[i.reason],
-        когда_видели: i.dates.join(", ") || null, дворов: i.households.length, вывод: { check: "проверить на месте", match: "сходится с данными", other_time: "другое время, не сравнивать", no_date: "без даты, не сравнивать", info: "не сверяется" }[i.verdict],
+        когда_видели: i.dates.join(", ") || null, участников: i.households.length, вывод: { check: "проверить на месте", match: "сходится с данными", other_time: "другое время, не сравнивать", no_date: "без даты, не сравнивать", info: "не сверяется" }[i.verdict],
         снимок_ближайшей_даты: i.scene ? { дата: i.scene, ndvi: i.ndvi } : null }))),
       нельзя_пасти: S.D.nograze && S.D.nograze.status === "ok" ? { источник: "OpenStreetMap: жильё, населённые пункты, фермы, промзоны", буфер_м: S.ngBuf,
         вычтено_из_пастбищ_га: Math.round(S.plots.reduce((s, p) => s + (p.nograze_ha || 0), 0)), зон: S.D.nograze.counts } : "не посчитано",
