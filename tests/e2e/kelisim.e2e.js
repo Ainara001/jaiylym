@@ -52,6 +52,12 @@ async function check(page, label) {
   if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `${String(++nShot).padStart(2, "0")}-${label.replace(/[^\wа-яё]+/gi, "_")}.png`), fullPage: true });
 }
 
+/** Выбрать вариант в форме, которая перерисовывается при выборе: нажатие и ожидание отмеченного переключателя в новой форме. */
+async function pick(page, sel) {
+  await page.click(sel, { force: true });
+  await page.waitForFunction(s => { const x = document.querySelector(s); return x && x.checked; }, sel, { timeout: 10000 });
+}
+
 async function flow(b, name) {
   const errors = [], phone = { viewport: { width: 360, height: 740 }, isMobile: name !== "firefox", hasTouch: true, deviceScaleFactor: 2 };
   // 1. организатор: пример → согласование
@@ -136,7 +142,7 @@ async function flow(b, name) {
   await d2.click('.langsw [data-lang="ru"]');
   await d2.waitForFunction(() => /Согласен/.test(document.querySelector("#kelAgree").innerText));
   await d2.click("#kelObj");
-  await d2.check('[name=kMode][value=avoid]', { force: true });
+  await pick(d2, '[name=kMode][value=avoid]');
   await d2.waitForSelector("[name=kReason]", { state: "attached" });
   await d2.click("#kPrev");
   await d2.waitForSelector("#kObjErr:not([hidden])");
@@ -167,13 +173,13 @@ async function flow(b, name) {
   await d3.waitForSelector("#kelObj");
   await d3.click("#kelObj");
   // «другой участок»: считается сразу
-  await d3.check('[name=kMode][value=prefer]', { force: true });
+  await pick(d3, '[name=kMode][value=prefer]');
   await d3.waitForSelector("[name=kPlot]", { state: "attached" });
   await d3.click(".kobj .chip:has([name=kPlot])");
   await d3.click("#kPrev");
   await d3.waitForSelector(".kverd");
   await check(d3, "двор другой участок");
-  await d3.check('[name=kMode][value=herd]', { force: true });
+  await pick(d3, '[name=kMode][value=herd]');
   await d3.waitForSelector("#kHerd");
   await d3.click("#kPrev");
   await d3.waitForSelector("#kObjErr:not([hidden])");
