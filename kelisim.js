@@ -1,7 +1,8 @@
 /*
  * JAIYLYM Келісім — сервер: состояние согласования, личные ссылки, ответы, версии плана, протокол. Расчёт — web/kelisim.js.
  *
- * Ход: collect (дворы вносят скот) → review (план версии N, ответы) → closed (протокол).
+ * Участник (в коде — household, «двор») — хозяйство или общее стадо нескольких хозяев; отвечает хозяин или пастух.
+ * Ход: collect (участники вносят скот) → review (план версии N, ответы) → closed (протокол).
  *  - Доступ — секрет в личной ссылке (у организатора свой, у каждого двора свой). Секрет в адресе после # и в заголовке
  *    Authorization: Kelisim <секрет>, на сервере хранится только SHA-256. Потерянную ссылку организатор перевыпускает.
  *  - Аккаунт не нужен. Телефоны, ИИН и ФИО не нужны: похожее на номер не принимается.
@@ -107,12 +108,29 @@ function checkSnapshot(plots, data) {
 
 // ---------- дворы ----------
 function cleanHousehold(b, k) {
-  const name = text(b && b.name, 60, "имя двора");
-  if (!name) throw bad("укажите имя двора (например, «Двор у моста»)");
-  if (k.households.some(h => !h.removed && h.name.toLowerCase() === name.toLowerCase())) throw err(409, "двор с таким именем уже есть", { why: "name_taken" });
+  const name = text(b && b.name, 60, "имя участника");
+  if (!name) throw bad("укажите имя участника (например, «Хозяйство у моста»)");
+  if (k.households.some(h => !h.removed && h.name.toLowerCase() === name.toLowerCase())) throw err(409, "участник с таким именем уже есть", { why: "name_taken" });
   const home = b.home && PLOT_RE.test(b.home) && isNear(b.home) ? b.home : k.snapshot.plots.filter(p => p.ring === "near").map(p => p.id)[0] || k.snapshot.plots[0].id;
-  return Object.assign({ name, herd: herd(b.herd), home, daily_return: !!b.daily_return, weight: weight(b.weight), allowed: plotList(b.allowed, "участки двора"), avoid: [], prefer: [], prefer_soft: [],
+  return Object.assign({ name }, who3(b), { herd: herd(b.herd), home, daily_return: !!b.daily_return, weight: weight(b.weight), allowed: plotList(b.allowed, "где участнику можно пасти"), avoid: [], prefer: [], prefer_soft: [],
     herd_status: b.herd ? "entered" : "none", joined: null, answer: null, herd_log: [] });
+}
+/** Кто участник: хозяйство или общее стадо, сколько в нём хозяев и кто отвечает. old — прежние значения при правке. */
+function who3(b, old) {
+  const o = Object.assign({ kind: "farm", owners: null, resp: null }, old);
+  const kind = b && b.kind != null ? b.kind : o.kind;
+  if (!K.KINDS.includes(kind)) throw bad("участник: хозяйство или общее стадо");
+  const resp = b && b.resp != null ? b.resp : o.resp || (kind === "common" ? "herder" : "owner");
+  if (!K.RESP.includes(resp)) throw bad("отвечает хозяин или пастух");
+  const owners = kind === "common" ? (b && b.owners !== undefined ? int(b.owners, 500, "число хозяев") : o.owners) || null : null;
+  return { kind, owners, resp };
+}
+/** Сезон, о котором договариваются: этот год или два следующих. */
+function cleanSeason(x, now, params) {
+  if (x == null || x === "") return K.defaultSeason(now, params);
+  const y = new Date(now).getUTCFullYear();
+  if (!Number.isInteger(+x) || +x < y || +x > y + 2) throw bad(`сезон: год от ${y} до ${y + 2}`, "season");
+  return +x;
 }
 function weight(x) {
   if (x == null || x === "") return 1;
@@ -166,7 +184,7 @@ function log(k, by, act, data, now) {
   k.log.push(Object.assign({ at: new Date(now).toISOString(), by, act }, data ? { data } : {}));
   if (k.log.length > MAX.log) k.log.splice(0, k.log.length - MAX.log);
 }
-const find = (k, hid) => { const h = k.households.find(x => x.id === hid && !x.removed); if (!h) throw err(404, "двор не найден"); return h; };
+const find = (k, hid) => { const h = k.households.find(x => x.id === hid && !x.removed); if (!h) throw err(404, "участник не найден"); return h; };
 const openProposal = (k, hid) => k.proposals.find(p => p.household === hid && p.status === "open");
 
 /** Новая версия плана. why — что её вызвало. Ответы «согласен» у незадетых дворов переносятся. */
@@ -194,14 +212,14 @@ const slimEffect = e => e && { verdict: e.verdict, error: e.error, variants: Obj
 const pubProposal = (p, full) => Object.assign({ id: p.id, household: p.household, type: p.type, plot: p.plot, to: p.to, herd: p.herd, home: p.home, daily_return: p.daily_return, reason: p.reason, observed_on: p.observed_on,
   status: p.status, variant: p.variant, version: p.version, at: p.at, decided_at: p.decided_at, effect: p.effect }, full ? { text: p.text, note: p.note } : {});
 function pubHousehold(k, h, org) {
-  return Object.assign({ id: h.id, name: h.name, herd: h.herd, herd_status: h.herd_status, home: h.home, daily_return: h.daily_return, weight: h.weight, allowed: h.allowed, avoid: h.avoid, prefer: h.prefer, prefer_soft: h.prefer_soft,
+  return Object.assign({ id: h.id, name: h.name, kind: h.kind || "farm", owners: h.owners || null, resp: h.resp || "owner", herd: h.herd, herd_status: h.herd_status, home: h.home, daily_return: h.daily_return, weight: h.weight, allowed: h.allowed, avoid: h.avoid, prefer: h.prefer, prefer_soft: h.prefer_soft,
     joined: !!h.joined, answer: K.answerState(k, h), carried: !!(h.answer && h.answer.version === k.version && h.answer.carried), herd_log: h.herd_log }, org ? { link_issued: h.link_issued } : {});
 }
 /** Что видит двор или организатор. Поголовье, доли и ответы видны всем участникам; свободный текст возражений — автору и организатору. */
 function view(k, who, now) {
   const org = who.role === "org", mine = p => org || p.household === who.id;
   return {
-    id: k.id, role: who.role, me: org ? null : who.id, title: k.title, village: k.village, status: k.status, rev: k.rev, version: k.version, rule: k.rule, deadline: k.deadline, expired: expired(k, now),
+    id: k.id, role: who.role, me: org ? null : who.id, title: k.title, village: k.village, status: k.status, rev: k.rev, version: k.version, season: K.seasonOf(k), rule: k.rule, deadline: k.deadline, expired: expired(k, now),
     created: k.created, closed: k.closed || null, restored: k.restored || null,
     households: K.active(k).map(h => pubHousehold(k, h, org)), plan: k.plan, versions: k.versions, proposals: k.proposals.map(p => pubProposal(p, mine(p))),
     snapshot: k.snapshot, official: k.official, herds: K.herdCheck(k), log: org ? k.log.slice(-100) : undefined,
@@ -241,7 +259,7 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
     throw err(403, "ссылка недействительна: попросите организатора прислать новую");
   }
   const onlyOrg = w => { if (w.role !== "org") throw err(403, "это может только организатор"); };
-  const onlyHh = w => { if (w.role !== "household") throw err(403, "это может только двор по своей ссылке"); };
+  const onlyHh = w => { if (w.role !== "household") throw err(403, "это может только участник по своей ссылке"); };
   const notClosed = k => { if (k.status === "closed") throw err(409, "согласование закрыто", { why: "closed" }); };
   const checkRev = (k, rev) => { if (rev !== k.rev) throw err(409, "данные изменились, обновите страницу", { why: "rev", rev: k.rev }); };
   /** Изменение: блокировка, права, правка копии, rev + 1, запись. fn возвращает добавку к ответу. */
@@ -256,7 +274,7 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
   }
   const addKey = h => { const key = rnd(18); h.key_hash = sha(key); h.link_issued = new Date(now()).toISOString(); return key; };
   function addTo(k, b) {
-    if (K.active(k).length >= MAX.households) throw bad(`дворов не больше ${MAX.households}`);
+    if (K.active(k).length >= MAX.households) throw bad(`участников не больше ${MAX.households}`);
     const h = Object.assign({ id: "h" + (k.next++) }, cleanHousehold(b, k));
     k.households.push(h);
     return { h, key: addKey(h) };
@@ -270,9 +288,9 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
       const snapshot = cleanSnapshot(b.snapshot, known);
       const org = rnd(24);
       const k = { schema: 1, id: rnd(12), title: text(b.title, 80, "название") || `Келісім: ${snapshot.village.name}`, village: snapshot.village, created: new Date(t).toISOString(), updated: new Date(t).toISOString(),
-        status: "collect", rev: 1, version: 0, next: 1, org_hash: sha(org), rule: rule(b.rule), deadline: cleanDeadline(b.deadline, t), snapshot, official: cleanOfficial(b.official),
+        status: "collect", rev: 1, version: 0, next: 1, org_hash: sha(org), season: cleanSeason(b.season, t, snapshot.params), rule: rule(b.rule), deadline: cleanDeadline(b.deadline, t), snapshot, official: cleanOfficial(b.official),
         households: [], proposals: [], versions: [], plan: null, log: [] };
-      if (b.households != null && !Array.isArray(b.households)) throw bad("дворы: нужен список");
+      if (b.households != null && !Array.isArray(b.households)) throw bad("участники: нужен список");
       const links = (b.households || []).map(x => { const { h, key } = addTo(k, x); return { id: h.id, name: h.name, key }; });
       log(k, "org", "create", { households: links.length }, t);
       await store(k);
@@ -303,13 +321,15 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
         for (const p of k.proposals) if (p.household === hid && p.status === "open") p.status = "withdrawn";
         log(k, "org", "remove", { household: hid, name: h.name }, t); solve = true;
       } else {
-        if (b.name != null) { const name = text(b.name, 60, "имя двора"); if (!name) throw bad("имя двора пустое", "name"); if (K.active(k).some(x => x.id !== hid && x.name.toLowerCase() === name.toLowerCase())) throw err(409, "двор с таким именем уже есть", { why: "name_taken" }); h.name = name; }
+        if (b.name != null) { const name = text(b.name, 60, "имя участника"); if (!name) throw bad("имя участника пустое", "name"); if (K.active(k).some(x => x.id !== hid && x.name.toLowerCase() === name.toLowerCase())) throw err(409, "участник с таким именем уже есть", { why: "name_taken" }); h.name = name; }
         if (b.herd != null) { const next = herd(b.herd); herdLog(h, next, "org", t); h.herd = next; h.herd_status = b.confirm ? "confirmed" : "entered"; log(k, "org", "herd", { household: hid, to: next }, t); solve = true; }
         else if (b.confirm != null) { if (h.herd_status === "none") throw bad("поголовье ещё не внесено"); h.herd_status = b.confirm ? "confirmed" : "declared"; log(k, "org", b.confirm ? "confirm" : "unconfirm", { household: hid }, t); }
         if (b.weight != null && weight(b.weight) !== h.weight) { log(k, "org", "weight", { household: hid, from: h.weight, to: weight(b.weight) }, t); h.weight = weight(b.weight); solve = true; }
+        const w3 = who3(b, h), was = K.ownersOf(h);
+        if (w3.kind !== (h.kind || "farm") || w3.owners !== (h.owners || null) || w3.resp !== (h.resp || "owner")) { Object.assign(h, w3); log(k, "org", "who", Object.assign({ household: hid }, w3), t); if (k.rule === "household" && K.ownersOf(h) !== was) solve = true; }
         if (b.daily_return != null && !!b.daily_return !== h.daily_return) { h.daily_return = !!b.daily_return; solve = true; }
         if (b.home != null) { if (!PLOT_RE.test(b.home) || !isNear(b.home)) throw bad("домашний участок — только ближний"); h.home = b.home; solve = true; }
-        if (b.allowed != null) { h.allowed = plotList(b.allowed, "участки двора"); log(k, "org", "allowed", { household: hid, to: h.allowed }, t); solve = true; }
+        if (b.allowed != null) { h.allowed = plotList(b.allowed, "где участнику можно пасти"); log(k, "org", "allowed", { household: hid, to: h.allowed }, t); solve = true; }
       }
       if (solve && k.version) resolveAgain(k, { type: b.remove ? "remove" : "edit", household: hid }, [hid], t);
     }),
@@ -330,8 +350,8 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
       onlyOrg(w); checkRev(k, b.rev);
       if (k.status !== "collect") throw err(409, "согласование уже начато");
       const list = K.active(k), empty = list.filter(h => K.SPECIES.every(s => !h.herd[s]));
-      if (list.length < 2) throw bad("нужно хотя бы два двора", "two");
-      if (empty.length === list.length) throw bad("ни один двор не внёс поголовье", "no_herd");
+      if (list.length < 2) throw bad("нужно хотя бы два участника", "two");
+      if (empty.length === list.length) throw bad("ни один участник не внёс поголовье", "no_herd");
       k.status = "review";
       log(k, "org", "start", { without_herd: empty.map(h => h.id) }, t);
       newVersion(k, K.solve(k), { type: "start" }, t);
@@ -350,10 +370,10 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
       const e = K.effect(k, h.id, p);
       // план с момента возражения изменился — сначала показываем свежие последствия, решать по старым числам нельзя
       if (p.version !== k.version) { p.version = k.version; p.effect = slimEffect(e); p.decided_at = undefined; p.note = undefined; log(k, "org", "refresh", { proposal: p.id }, t); return { stale: true, effect: p.effect }; }
-      if (["impossible", "error"].includes(e.verdict)) throw err(409, e.verdict === "impossible" ? "двору не останется участка, где можно пасти" : "предложение больше не применимо", { effect: e.verdict });
+      if (["impossible", "error"].includes(e.verdict)) throw err(409, e.verdict === "impossible" ? "участнику не останется участка, где можно пасти" : "предложение больше не применимо", { effect: e.verdict });
       if (e.verdict === "not_calculated") throw err(409, "словесное возражение нельзя принять расчётом: измените план или отклоните с пояснением");
       // другие теряют корм или им станет дальше — организатор выбирает вариант явно, а не по умолчанию
-      if (K.needsChoice(e) && !b.variant) throw err(409, "это изменение задевает другие дворы: выберите вариант", { effect: slimEffect(e) });
+      if (K.needsChoice(e) && !b.variant) throw err(409, "это изменение задевает других участников: выберите вариант", { effect: slimEffect(e) });
       const variant = b.variant || "equal";
       if (!e.variants[variant]) throw bad("неизвестный вариант");
       const a = K.applyProposal(k, h, p, variant === "room").household;
@@ -380,10 +400,11 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
       if (expired(k, t)) throw err(409, "срок ответа прошёл", { why: "expired" });
       if (k.status !== "collect") throw err(409, "план уже рассчитан: изменение скота отправьте как предложение", { why: "started" });
       const h = find(k, w.id);
-      if (b.name != null) { const name = text(b.name, 60, "имя двора"); if (!name) throw bad("имя двора пустое", "name"); if (K.active(k).some(x => x.id !== h.id && x.name.toLowerCase() === name.toLowerCase())) throw err(409, "двор с таким именем уже есть", { why: "name_taken" }); h.name = name; }
+      if (b.name != null) { const name = text(b.name, 60, "имя участника"); if (!name) throw bad("имя участника пустое", "name"); if (K.active(k).some(x => x.id !== h.id && x.name.toLowerCase() === name.toLowerCase())) throw err(409, "участник с таким именем уже есть", { why: "name_taken" }); h.name = name; }
       if (b.herd != null) { const next = herd(b.herd); herdLog(h, next, h.id, t); h.herd = next; h.herd_status = "declared"; }
       if (b.home != null) { if (!PLOT_RE.test(b.home) || !isNear(b.home)) throw bad("домашний участок — только ближний"); h.home = b.home; }
       if (b.daily_return != null) h.daily_return = !!b.daily_return;
+      Object.assign(h, who3(b, h));
       h.joined = h.joined || new Date(t).toISOString();
       log(k, h.id, "join", { herd: h.herd }, t);
     }),
@@ -450,7 +471,7 @@ function createKelisim({ kv, known, secret, now = () => Date.now() }) {
   function rebuild(f, t) {
     const n = f.snapshot.norm, snapshot = cleanSnapshot(Object.assign({}, f.snapshot, { norm: n ? { region: n.region, row: n.soft ? undefined : n.row, state: n.state } : undefined }), known);
     const k = { schema: 1, id: f.id, title: text(f.title, 80, "название") || "Келісім", village: snapshot.village, created: Number.isNaN(Date.parse(f.created)) ? new Date(t).toISOString() : f.created, updated: new Date(t).toISOString(),
-      status: "collect", rev: 1, version: 0, next: 1, org_hash: f.org_hash, rule: K.RULES.includes(f.rule) ? f.rule : "share", deadline: null, snapshot, official: null,
+      status: "collect", rev: 1, version: 0, next: 1, org_hash: f.org_hash, season: Number.isInteger(f.season) && f.season > 2000 && f.season < 2100 ? f.season : K.defaultSeason(t, snapshot.params), rule: K.RULES.includes(f.rule) ? f.rule : "share", deadline: null, snapshot, official: null,
       households: [], proposals: [], versions: [], plan: null, log: [] };
     for (const h of f.households.filter(x => x && !x.removed).slice(0, MAX.households)) {
       const c = cleanHousehold(Object.assign({}, h, { allowed: h.allowed || [] }), k);
