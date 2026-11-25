@@ -93,7 +93,7 @@ test("тексты README и интерфейса о достоверности 
 
 test("в интерфейсе и боте нет цветных смайликов", () => {
   const emoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{26FF}\u{2B00}-\u{2BFF}\u{FE0F}]/u;
-  for (const f of ["web/index.html", "web/js/app.js", "web/js/i18n.js", "web/js/report.js", "web/js/kelisim-ui.js", "web/css/app.css", "web/model.js", "web/engine.js", "api.js"]) {
+  for (const f of ["web/index.html", "web/js/app.js", "web/js/i18n.js", "web/js/report.js", "web/js/kelisim-ui.js", "web/js/kelisim-live.js", "web/css/app.css", "web/model.js", "web/engine.js", "api.js"]) {
     const lines = read(f).split("\n").map((l, i) => [i + 1, l]).filter(([, l]) => emoji.test(l));
     assert.deepEqual(lines, [], f);
   }

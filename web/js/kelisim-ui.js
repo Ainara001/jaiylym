@@ -66,7 +66,7 @@
       return X.errText(e);
     };
     // общая карта и чат (kelisim-live.js): один корень на согласование, страница вокруг перерисовывается
-    const LV = window.KelisimLive ? window.KelisimLive({ t, I, C, $, $$, esc, toast, kErr: e => kErr(e), armBtn: X.armBtn, plotFull: id => plotFull(id),
+    const LV = window.KelisimLive ? window.KelisimLive({ t, I, C, $, $$, esc, ic, toast, kErr: e => kErr(e), armBtn: X.armBtn, plotFull: id => plotFull(id),
       getV: () => V, getCur: () => cur, reload: () => load(false, true), poke: () => load(true) }) : null;
     const liveSlot = () => (LV ? `<div id="kelLive"></div>` : "");
     const spin = txt => `<p class="startload"><span class="spin" aria-hidden="true"></span><span>${txt}</span></p>`;
