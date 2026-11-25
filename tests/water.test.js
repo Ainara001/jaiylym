@@ -41,7 +41,7 @@ test("без стад, без дефицита и когда причина не
   const [BES] = loadExamples();
   assert.equal(J.wellRank(BES.plots, [], P).status, "no_herds");
   assert.equal(J.wellRank(cases[0].plots, [{ id: "a", home: "Б-С", sheep: 1 }], P).status, "no_deficit");
-  const daily = [{ id: "a", home: "Б-С", daily_return: true, cattle: 5000 }];          // дойное пасётся только у села: дальний водопой ему не поможет
+  const daily = [{ id: "a", home: "Б-С", cattle: 5000, allowed_plots: ["Б-С"] }];     // права только на ближний участок: дальний водопой не поможет
   const ps = BES.plots.map(p => Object.assign({}, p, p.ring === "far" ? { water: false, water_status: "unknown" } : {}));
   const w = J.wellRank(ps, daily, P);
   assert.equal(w.status, "no_help");

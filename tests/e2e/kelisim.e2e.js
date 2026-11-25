@@ -256,6 +256,14 @@ async function flow(b, name) {
   await o2.goto(base + "/#/kelisim");
   await o2.waitForSelector(".ksteps");
   await check(o2, "начало kk");
+  // ушли с согласования, пока оно загружается, — без ошибок
+  await o2.route(/\/api\/kelisim\//, async r => { await new Promise(x => setTimeout(x, 800)); await r.continue().catch(() => {}); });
+  await o2.evaluate(h => { location.hash = h; }, orgUrl.split("#")[1]);
+  await o2.waitForTimeout(150);
+  await o2.evaluate(() => { location.hash = "#/kelisim"; });
+  await o2.waitForSelector(".ksteps");
+  await o2.waitForTimeout(1300);
+  assert.ok(await o2.isVisible(".ksteps"), "прежнее согласование не перерисовывает экран");
   assert.deepEqual(errors, [], "ошибки JavaScript");
 }
 
