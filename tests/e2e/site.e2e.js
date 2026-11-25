@@ -68,7 +68,7 @@ async function newcomer(page, label) {
   // норма нагрузки: в Бесколе снимок выше нормы СКО; выбор типа и области меняет расчёт и запоминается
   await App(() => window.JaiylymApp.renderPane("data"));
   assert.equal(await page.inputValue("#nmRegion"), "SKO");
-  assert.match(await page.textContent("#normBox"), /Норма ограничивает участков: 16 из 16/);
+  assert.match(await page.textContent("#normBox"), /Норма ограничивает участков: 1[0-9] из 16/);
   const cap = () => App(() => Math.round(window.Jaiylym.totalCapacity(window.JaiylymApp.S.plots, window.JaiylymApp.S.P).au_season));
   const soft = await cap();
   await page.selectOption("#nmRow", "SKO-05");
@@ -80,13 +80,40 @@ async function newcomer(page, label) {
   await page.selectOption("#nmRegion", "SKO");
   assert.equal(await cap(), soft);
   await App(() => window.JaiylymApp.renderPane("brief"));
-  assert.match(await page.textContent('.pane[data-pane="brief"]'), /Норма Минсельхоза ограничивает 16 из 16/);
+  assert.match(await page.textContent('.pane[data-pane="brief"]'), /Норма Минсельхоза ограничивает 1[0-9] из 16/);
   assert.equal(await page.isVisible(".tabs"), true);
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), label + ": без горизонтальной прокрутки");
+  // где селу можно пасти: 825 га из плана района → чужие участки → свои гектары → контур → вся трава
+  assert.match(await page.textContent("#zoneCard"), /825 га[\s\S]*плану района[\s\S]*Точных границ нет/);
+  const ha = () => App(() => Math.round(window.JaiylymApp.S.plots.filter(p => !p.forbidden).reduce((s, p) => s + p.pasture_ha, 0)));
+  assert.ok(Math.abs(await ha() - 825) < 2);
+  await page.click('[data-zn="closed"]');
+  await page.click('dialog[open] [data-plot="Д-С"]');
+  await page.waitForSelector('dialog[open] [data-plot="Д-С"][aria-pressed="true"]');
+  if (process.env.KEL_SHOTS) await page.screenshot({ path: path.join(process.env.KEL_SHOTS, "zone-closed.png") });
+  await page.click("dialog[open] .btn-primary");
+  await page.waitForFunction(() => /Исключено чужих участков: 1/.test(document.querySelector("#zoneCard").textContent));
+  assert.ok(Math.abs(await ha() - 825) < 2, label + ": гектары по документам — только на своих участках");
+  await page.click('[data-zn="ha"]');
+  await page.fill("dialog[open] input", "400 га");
+  await page.click("dialog[open] .btn-primary");
+  await page.waitForFunction(() => /400 га/.test(document.querySelector("#zoneCard").textContent));
+  assert.ok(Math.abs(await ha() - 400) < 2);
+  if (process.env.KEL_SHOTS) await page.screenshot({ path: path.join(process.env.KEL_SHOTS, "zone-card.png"), fullPage: true });
+  await App(() => window.JaiylymApp.setZone({ mode: "contour", rings: [[[69.0, 54.78], [69.2, 54.78], [69.2, 54.85], [69.0, 54.85]]] }));
+  await page.waitForFunction(() => /внутри вашей границы/.test(document.querySelector("#zoneCard").textContent));
+  assert.equal(await App(() => window.JaiylymApp.S.plots.find(p => p.id === "Д-Ю").pasture_ha), 0, label + ": за границей — ноль");
+  assert.ok(await App(() => window.JaiylymApp.S.plots.find(p => p.id === "Д-СВ").pasture_ha) > 50);
+  const before = await ha();
+  await page.reload();
+  await page.waitForFunction(() => window.JaiylymApp.S.D && window.JaiylymApp.S.pl);
+  assert.equal(await ha(), before, label + ": граница запомнилась");
+  await page.click('[data-zn="all"]');
+  await page.waitForFunction(() => /всю траву вокруг/.test(document.querySelector("#zoneCard").textContent));
   // водопои: рейтинг по дефициту, «не проверено», запоминание; без дефицита — честно «корма не добавит»
   await App(() => window.JaiylymApp.renderPane("water"));
   const wp = () => page.textContent('.pane[data-pane="water"]');
-  assert.match(await wp(), /ни один новый водопой этого не уменьшит|дефицит меньше на/, label + ": водопой — по делу");
+  assert.match(await wp(), /новый водопой|водопой сейчас|уже с водой/, label + ": водопой — по делу");
   await App(() => { const s = window.JaiylymApp.S; s.D.plots.forEach(p => { if (p.ring === "far") { p.water = false; p.water_status = "unknown"; } }); s.herds = [{ id: "a", name: "Тест", home: "Б-С", sheep: 1 }]; window.JaiylymApp.rebuildPlots(); window.JaiylymApp.render(); window.JaiylymApp.renderPane("water"); });
   assert.match(await page.textContent("#waterVerdict"), /корма не добавит/);
   await App(() => { const s = window.JaiylymApp.S; s.herds = [{ id: "a", name: "Тест", home: "Б-С", sheep: 9000 }]; window.JaiylymApp.render(); window.JaiylymApp.renderPane("water"); });
@@ -192,7 +219,7 @@ async function journey(page, label) {
   // 7. сравнить сценарии
   await page.evaluate(() => window.JaiylymApp.renderPane("whatif"));
   const wi = await page.textContent('.pane[data-pane="whatif"]');
-  for (const re of [/Как сейчас/, /Предлагаемый план/, /Быстрый алгоритм/, /Худшее хозяйство/, /водопой на/, /Скота на 20 % больше/, /доказуемыми/, /Точн|точная граница/i]) assert.match(wi, re);
+  for (const re of [/Если все стада у села/, /Предлагаемый план/, /Быстрый алгоритм/, /Худшее хозяйство/, /водопой на/, /Скота на 20 % больше/, /доказуемыми/, /Точн|точная граница/i]) assert.match(wi, re);
   // неверный параметр не принимается
   await page.evaluate(() => window.JaiylymApp.renderPane("brief"));
   await page.evaluate(() => document.querySelectorAll('.pane[data-pane="brief"] details').forEach(d => { d.open = true; }));

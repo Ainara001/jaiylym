@@ -33,9 +33,15 @@ jobs:
           npm install --no-save --no-package-lock playwright@1.63.0
           npx playwright install --with-deps chromium webkit
       - name: Путь пользователя на ПК и телефоне
+        shell: bash
         env:
           JAIYLYM_BROWSERS: chromium,webkit
-        run: npm run test:e2e
+        run: npm run test:e2e 2>&1 | tee e2e.log
+      - name: Причина сбоя — в аннотацию (видна без журнала)
+        if: failure()
+        run: |
+          MSG=$(grep -E -A25 '^ *(not ok|✖)' e2e.log | grep -v '^ *$' | head -70 | cut -c1-300 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          echo "::error title=e2e::$MSG"
   net:
     runs-on: ubuntu-latest
     timeout-minutes: 15

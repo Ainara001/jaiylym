@@ -36,7 +36,7 @@ test("все ключи, которые использует интерфейс,
   for (const r of K.RULES) { used.add("kel.rule." + r); used.add("kel.rule." + r + "D"); }
   for (const x of K.TYPES) used.add("kel.pt." + x);
   for (const v of ["free", "own", "others", "impossible", "none", "not_calculated", "error"]) { used.add("kel.vd." + v); used.add("kel.vd." + v + "Org"); }
-  for (const x of ["daily", "far", "nearest", "closer_full", "shared", "preferred"]) used.add("kel.why." + x);
+  for (const x of ["daily", "daily_far", "far", "nearest", "closer_full", "shared", "preferred"]) used.add("kel.why." + x);
   for (const x of ["start", "proposal", "add", "remove", "edit", "rule", "restore"]) used.add("kel.wh." + x);
   for (const x of ["check", "match", "other_time", "no_date", "info"]) used.add("obs.r." + x);
   for (const x of ["other_time", "no_date", "info"]) used.add("obs.v." + x);
@@ -50,7 +50,7 @@ test("все ключи, которые использует интерфейс,
   for (const m of read("kelisim.js").matchAll(/why: "(\w+)"/g)) used.add("kel.err." + m[1]);
   for (const m of read("web/index.html").matchAll(/data-i18n(?:-ph|-label)?="([a-zA-Z0-9._]+)"/g)) used.add(m[1]);
   // ключи, собираемые из переменной: t("conf." + c) — их полноту проверяет следующий тест
-  const dynamic = /^(conf|role|herds|src|hist|ab|map\.mode|fc|how\.step|how\.f|unit|meta|rsn|set\.origin|veg|vt|why|wi\.a|wi\.st|wi\.v|wi\.v\.algo|algo|wr|ws|sg|rs|obs\.r|obs\.w|obs\.v|map\.legend|water\.st|wc\.right|wc\.source|mt\.v|mt\.r|mt\.s)\.$/;
+  const dynamic = /^(conf|role|herds|src|hist|ab|map\.mode|fc|how\.step|how\.f|unit|meta|rsn|set\.origin|veg|vt|why|wi\.a|wi\.st|wi\.v|wi\.v\.algo|algo|wr|ws|sg|rs|obs\.r|obs\.w|obs\.v|map\.legend|zn\.k|water\.st|wc\.right|wc\.source|mt\.v|mt\.r|mt\.s)\.$/;
   const missing = [...used].filter(k => !ru.includes(k) && !dynamic.test(k) && !/^ab\.(f|g\.)$/.test(k));
   assert.deepEqual(missing, []);
 });
@@ -64,17 +64,17 @@ test("для всех кодов движка и модели есть текс�
     ...M.WATER_STATUS.map(x => "ws." + x),
     ...M.VEGETATION.map(x => "veg." + x),
     ...["default", "user", "calibrated"].map(x => "set.origin." + x),
-    ...["forbidden", "no_data", "low_quality", "no_water", "closed", "not_allowed", "daily_far", "unknown_plot"].map(x => "rsn." + x),
+    ...["forbidden", "no_data", "low_quality", "no_water", "closed", "not_allowed", "unknown_plot"].map(x => "rsn." + x),
     ...["capacity", "no_allowed_plots", "calendar"].map(x => "why." + x),
-    ...["add_water", "check_data", "extend_rights", "split_daily_herd", "reduce_herd", "hay"].map(x => "sg." + x),
-    ...["no_data_excluded", "low_quality_used", "water_unconfirmed", "rights_not_specified", "rights_user_entered", "forage_unconfirmed"].map(x => "wr." + x),
-    ...["overload", "unknown_capacity", "forbidden_used", "no_water_used", "not_allowed_used", "daily_far", "negative", "conservation", "calendar_gap", "calendar_overlap_or_gap", "window", "calendar_end"].map(x => "vt." + x),
+    ...["add_water", "check_data", "extend_rights", "reduce_herd", "hay"].map(x => "sg." + x),
+    ...["no_data_excluded", "low_quality_used", "water_unconfirmed", "rights_not_specified", "rights_user_entered", "daily_far_used", "forage_unconfirmed"].map(x => "wr." + x),
+    ...["overload", "unknown_capacity", "forbidden_used", "no_water_used", "not_allowed_used", "negative", "conservation", "calendar_gap", "calendar_overlap_or_gap", "window", "calendar_end"].map(x => "vt." + x),
     ...["feasible", "partially_feasible", "infeasible", "no_demand"].map(x => "wi.st." + x),
     ...["current", "plan", "forage", "herds", "season", "cautious", "optimistic"].map(x => "wi.v." + x),
     ...["cautious", "base", "optimistic"].map(x => "wi.a." + x),
     ...["optimized", "greedy"].flatMap(x => ["algo." + x, "wi.v.algo." + x]),
     ...["area", "ndvi", "biomass", "forage", "au_days", "au_season", "sheep", "herd_intake", "days"].flatMap(x => ["how.step." + x, "unit." + x]),
-    "how.f.area", "how.f.ndvi", "how.step.norm", "how.step.limit", "unit.norm", "unit.limit", "src.norm", "how.step.nograze", "unit.nograze", "src.osm",
+    "how.f.area", "how.f.ndvi", "how.step.norm", "how.step.limit", "how.step.zone", "unit.zone", "zn.k.all", "zn.k.contour", "zn.k.ha", "zn.k.haO", "unit.norm", "unit.limit", "src.norm", "how.step.nograze", "unit.nograze", "src.osm",
     ...["measured", "no_data"].map(x => "meta." + x),
     ...["q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "q9"].map(x => "rs." + x),
   ];
