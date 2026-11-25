@@ -122,9 +122,6 @@
   }
 
   // ---------- координатор ----------
-  const coordAddVillage = village => req("POST", "/api/coord/villages", { village }).then(u => (user = u));
-  const coordRemoveVillage = vk => req("DELETE", "/api/coord/villages?vk=" + encodeURIComponent(vk)).then(u => (user = u));
-  const coordFarms = vk => req("GET", "/api/coord/farms?vk=" + encodeURIComponent(vk));
 
   // ---------- данные бота по селу (публично; свои стада помечены, чужие — без имён) ----------
   const villageData = (lat, lon) => req("GET", `/api/village?lat=${lat}&lon=${lon}`, null, { timeout: 90000 });
@@ -140,6 +137,6 @@
     get user() { return user; }, get loggedIn() { return !!token; },
     startLogin, pollLogin, register, loginPw, logout, me, saveFarm, deleteAccount, addPasture, deletePasture,
     listScenarios, saveScenario, deleteScenario, listHistory, addHistory,
-    coordAddVillage, coordRemoveVillage, coordFarms, villageData, ai, kel,
+    villageData, ai, kel,
   };
 })();

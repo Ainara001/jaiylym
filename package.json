@@ -2,7 +2,7 @@
   "name": "jaiylym",
   "version": "1.0.0",
   "private": true,
-  "description": "Jaiylym — пастбища села по спутнику: сайт для акимата и Telegram-бот для пастуха",
+  "description": "Jaiylym — пастбища села по спутнику: сайт и Telegram-бот",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
@@ -12,7 +12,6 @@
     "test:net": "node --test tests/net/*.net.js",
     "test:e2e": "node --test tests/e2e/*.e2e.js",
     "report": "node report.js",
-    "i18n:review": "node scripts/i18n-review.js > docs/KK_REVIEW.md",
     "live-check": "node scripts/live-check.js"
   },
   "engines": {

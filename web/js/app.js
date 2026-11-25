@@ -22,7 +22,6 @@
   const ic = id => `<svg class="ic"><use href="#i-${id}"/></svg>`;
   const src = k => `<span class="src src-${k}">${t("src." + k)}</span>`;
   // скрыто из интерфейса МВП, код работает: координатор и планы акимата; право, источник и цена водопоя; совет про укос
-  const SHOW = { coord: false, wcheck: false, calib: false };
   const coord = x => (x < 0 ? "m" : "") + Math.round(Math.abs(x) * 1000);
   const exampleAt = (lat, lon) => EXAMPLES.find(e => Math.abs(lat - e.data.village.lat) < 0.01 && Math.abs(lon - e.data.village.lon) < 0.01) || null;
   const exName = e => t(e.id === "kegen" ? "ex.kegen" : "ex.beskol");
@@ -39,13 +38,13 @@
   // ---------- состояние ----------
   const S = {
     D: null, plots: [], baseWater: {}, added: new Set(), forbidden: new Set(), waterSet: {}, herds: [],
-    userP: C.ls.get("jaiylym:params", null) || {}, calib: C.ls.get("jaiylym:calibration", null), P: null, t0: 0,
-    algo: C.ls.get("jaiylym:algo", "optimized") === "greedy" ? "greedy" : "optimized",
+    userP: C.ls.get("jaiylym:params", null) || {}, P: null, t0: 0,
+    algo: "optimized",
     ngBuf: [0, 100, 250, 500].includes(+C.ls.get("jaiylym:ngbuf", 100)) ? +C.ls.get("jaiylym:ngbuf", 100) : 100,
     mode: C.ls.get("jaiylym:mode", "plan"), tab: "brief", cur: null, pl: null, botSubs: {}, picking: false, wx: null, aiBrief: null,
     map: null, layers: {}, group: null, ndviLayer: null, png: null, route: "home", loadingKey: null, histKey: null,
   };
-  S.P = resolveParams(S.userP, S.calib);
+  S.P = resolveParams(S.userP);
   if (paramErr) { S.userP = {}; C.ls.del("jaiylym:params"); }
 
   // ---------- мелкие помощники ----------
@@ -130,13 +129,13 @@
     });
   }
 
-  // ---------- маршрутизация: #/home, #/map?lat=..&lon=..&name=..&plot=.., #/scenarios, #/profile, #/coord, #/data ----------
+  // ---------- маршрутизация: #/home, #/map?lat=..&lon=..&name=..&plot=.., #/scenarios, #/profile, #/data ----------
   function parseHash() {
     const h = location.hash.replace(/^#/, "");
     if (/^lat=/.test(h)) return { route: "map", q: new URLSearchParams(h) };          // старые ссылки из бота
     const m = /^\/?([a-z]*)\??(.*)$/.exec(h) || [];
     const r = m[1] === "data" ? "about" : m[1];      // старая ссылка «О данных» ведёт в «Что это»
-    return { route: ["home", "map", "scenarios", "profile", "coord", "about", "ai", "settings", "research", "kelisim"].includes(r) ? r : "home", q: new URLSearchParams(m[2] || "") };
+    return { route: ["home", "map", "scenarios", "profile", "about", "ai", "settings", "kelisim"].includes(r) ? r : "home", q: new URLSearchParams(m[2] || "") };
   }
   function go(route, q) { location.hash = "#/" + route + (q ? "?" + q : ""); }
   function onRoute() {
@@ -174,11 +173,9 @@
     if (route === "home") renderHome();
     if (route === "scenarios") renderScenarios();
     if (route === "profile") renderProfile();
-    if (route === "coord") renderCoord();
     if (route === "about") { renderAbout(); renderDataPage(); }
     if (route === "ai") renderAI();
     if (route === "settings") renderSettings();
-    if (route === "research") renderResearch();
     Kel.route(route === "kelisim", q);
     const more = $("#moreDlg"); if (more && more.open) more.close();
     window.scrollTo(0, 0);
@@ -646,7 +643,7 @@
     S.zone = zone; S.zoneShare = zshare;
     S.rest = Object.assign({}, opts.rest || {});
     S.waterSet = Object.assign({}, opts.water_status || {});
-    if (opts.params) { S.userP = Object.assign({}, S.userP, opts.params); paramErr = null; S.P = resolveParams(S.userP, S.calib); if (paramErr) toast(paramErr, true); }
+    if (opts.params) { S.userP = Object.assign({}, S.userP, opts.params); paramErr = null; S.P = resolveParams(S.userP); if (paramErr) toast(paramErr, true); }
     S.normSel = NM ? NM.clean(opts.norm) || NM.clean(C.ls.get(normKey(key), null)) || NM.clean({ region: NM.regionOf(data.village.region) }) : null;
     S.normState = S.normSel ? "ok" : "none";
     S.ngState = data.nograze ? data.nograze.status : null; S.ngRetried = false;
@@ -720,7 +717,7 @@
   }
   function bindZone(el) {
     $$("[data-zn]", el).forEach(b => b.onclick = () => ({ draw: startZone, closed: closedDlg, ha: haDlg, all: () => { S.forbidden = new Set(); setZone({ mode: "all" }); },
-      season: () => { const x = S.D.village.official.season; S.userP = Object.assign({}, S.userP, { season_days: x.days, season_start: x.from }); S.P = resolveParams(S.userP, S.calib); saveParams(); rebuildPlots(); render(); toast(t("zn.seasonDone", { d: x.days })); } })[b.dataset.zn]());
+      season: () => { const x = S.D.village.official.season; S.userP = Object.assign({}, S.userP, { season_days: x.days, season_start: x.from }); S.P = resolveParams(S.userP); saveParams(); rebuildPlots(); render(); toast(t("zn.seasonDone", { d: x.days })); } })[b.dataset.zn]());
   }
   function startZone() {
     if (S.route !== "map") { go("map", villageHash(S.D.village, S.herds.some(h => h.demo)).split("?")[1]); setTimeout(startZone, 400); return; }
@@ -886,7 +883,7 @@
       S.pl = solve(S.plots, S.herds);
     } catch (e) { status(t("err.calc") + ": " + e.message, { err: true }); return; }
     const past = zoneHa();
-    $("#vtitle").innerHTML = `<b>${esc(S.D.village.name)}</b> · Sentinel-2, ${S.D.source.year} · ${fmt(past)} ${t("common.ha")} ${src("sat")}${freshness()}`;
+    $("#vtitle").innerHTML = `<b>${esc(S.D.village.name)}</b> · Sentinel-2, ${S.D.source.year} · ${fmt(past)} ${t("common.ha")} ${src(S.zone && S.zone.mode !== "all" ? "input" : "sat")}${freshness()}`;
     metric("plan", { status: S.pl.status, before: J.hayTonnes(S.cur.deficit_kg, S.P), after: J.hayTonnes(S.pl.deficit_kg, S.P),
       over: S.cur.overloaded, missing: S.plots.filter(p => p.ndvi == null).length, herds: S.herds.length });
     paintMap();
@@ -1262,12 +1259,12 @@
     if (err) err.hidden = true;
     inp.removeAttribute("aria-invalid");
     S.userP = Object.assign({}, S.userP, r.values);
-    S.P = resolveParams(S.userP, S.calib); saveParams();
+    S.P = resolveParams(S.userP); saveParams();
     return true;
   }
   function bindParams(el) {
     el.querySelectorAll("[data-param]").forEach(i => i.onchange = () => { if (setParam(i.dataset.param, i.value, i, el)) render(); });
-    const r = el.querySelector("[data-reset]"); if (r) r.onclick = () => { S.userP = {}; S.P = resolveParams({}, S.calib); saveParams(); render(); };
+    const r = el.querySelector("[data-reset]"); if (r) r.onclick = () => { S.userP = {}; S.P = resolveParams({}); saveParams(); render(); };
   }
 
   function addHerd() {
@@ -1353,25 +1350,15 @@
     return w.filter(s => gain[s.plot]).sort((a, b) => gain[b.plot] - gain[a.plot]).concat(all.filter(s => s.type !== "add_water"));
   }
   // что проверил человек: право, источник воды, цена. Пусто — «не проверено»; на рейтинг не влияет
-  const WRIGHT = ["ok", "no"], WSRC = ["well", "borehole", "river", "pipe"];
-  const wcKey = () => cacheKey(S.D.village.lat, S.D.village.lon) + ":wcheck";
-  const wcheck = id => Object.assign({ right: "", source: "", cost: 0 }, (C.ls.get(wcKey(), {}) || {})[id]);
-  const wcText = id => { if (!SHOW.wcheck) return ""; const c = wcheck(id); return [`${t("wc.right")}: ${t("wc.right." + (c.right || "none"))}`, `${t("wc.source")}: ${t("wc.source." + (c.source || "none"))}`, `${t("wc.cost")}: ${c.cost ? fmt(c.cost) + " " + t("rep.tenge") : t("wc.none")}`].join("; "); };
   const noWaterObs = () => Object.entries(obsNow()).map(([id, g]) => [id, new Set(g.items.filter(i => i.reason === "no_water").flatMap(i => i.households)).size]).filter(x => x[1]);
 
   function paneWater(el) {
     const wr = wellRank(), ws = wr.list.filter(w => w.gain_t > 0), rest = wr.list.filter(w => !w.gain_t), nm = ids => ids.map(id => esc((S.herds.find(h => h.id === id) || {}).name || id)).join(", ");
     const nobs = noWaterObs(), nob = Object.fromEntries(nobs);
     const addBtn = w => (S.added.has(w.plot) ? "" : `<button class="btn btn-soft btn-sm" data-add="${w.plot}">${ic("plus")} ${t("water.add")}</button>`);
-    const wrow = (w, i) => { const c = wcheck(w.plot), done = (c.right ? 1 : 0) + (c.source ? 1 : 0) + (c.cost ? 1 : 0);
-      return `<li class="wcand"><div class="row"><div class="grow"><b>${i + 1}. ${esc(w.plot)}</b><small>${t("water.gain", { t: fmt(w.gain_t), d: fmt(wr.deficit_t) })} ${src("model")}</small>
+    const wrow = (w, i) => `<li class="wcand"><div class="row"><div class="grow"><b>${i + 1}. ${esc(w.plot)}</b><small>${t("water.gain", { t: fmt(w.gain_t), d: fmt(wr.deficit_t) })} ${src("model")}</small>
         <small>${t("water.better", { n: w.better.length })}${w.better.length ? ": " + nm(w.better) : ""}${w.worse.length ? ` · ${t("water.worse")}: ${nm(w.worse)}` : ""}</small>
-        ${w.other_limits.length ? `<small>${t("water.remain", { r: w.other_limits.map(r => t("rsn." + r)).join(", ") })}</small>` : ""}</div><div class="btns">${addBtn(w)}</div></div>
-        ${!SHOW.wcheck ? "" : `<details ${c.right === "no" ? "open" : ""}><summary>${t("wc.title")}: ${done ? t("wc.done", { n: done }) : t("wc.none")} ${src("input")}</summary><div class="wcform">
-          <label class="field">${t("wc.right")}<select data-wc="${esc(w.plot)}" data-f="right"><option value="">${t("wc.none")}</option>${WRIGHT.map(x => `<option value="${x}" ${c.right === x ? "selected" : ""}>${t("wc.right." + x)}</option>`).join("")}</select></label>
-          <label class="field">${t("wc.source")}<select data-wc="${esc(w.plot)}" data-f="source"><option value="">${t("wc.none")}</option>${WSRC.map(x => `<option value="${x}" ${c.source === x ? "selected" : ""}>${t("wc.source." + x)}</option>`).join("")}</select></label>
-          <label class="field">${t("wc.cost")}, ${t("rep.tenge")}<input type="number" inputmode="numeric" min="0" step="10000" data-wc="${esc(w.plot)}" data-f="cost" value="${c.cost || ""}" placeholder="${t("wc.none")}"></label></div>
-          ${c.right === "no" ? `<p class="note warn">${t("wc.noRight")}</p>` : ""}</details>`}</li>`; };
+        ${w.other_limits.length ? `<small>${t("water.remain", { r: w.other_limits.map(r => t("rsn." + r)).join(", ") })}</small>` : ""}</div><div class="btns">${addBtn(w)}</div></div></li>`;
     const added = [...S.added];
     const baseOnly = S.plots.map(p => (S.added.has(p.id) ? Object.assign({}, p, { water: false, water_status: "unknown" }) : p));
     const before = solve(baseOnly, S.herds);
@@ -1398,16 +1385,6 @@
       <p class="note">${t("water.note")}</p>${statusList}`;
     el.querySelectorAll("[data-add]").forEach(b => b.onclick = () => toggleWater(b.dataset.add, true));
     el.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => toggleWater(b.dataset.rm, false));
-    el.querySelectorAll("[data-wc]").forEach(x => x.onchange = () => {
-      const all = C.ls.get(wcKey(), {}) || {}, c = wcheck(x.dataset.wc), fld = x.dataset.f;
-      c[fld] = fld === "cost" ? Math.max(0, Math.min(1e10, Math.round(+x.value || 0))) : x.value;
-      if (c.right || c.source || c.cost) all[x.dataset.wc] = c; else delete all[x.dataset.wc];
-      C.ls.set(wcKey(), all);
-      const key = `[data-wc="${x.dataset.wc}"][data-f="${fld}"]`, y = el.scrollTop, y2 = scrollY, pp = el.parentElement.scrollTop;
-      paneWater(el);
-      const n = $(key, el); if (n) { n.closest("details").open = true; n.focus({ preventScroll: true }); }
-      el.scrollTop = y; el.parentElement.scrollTop = pp; scrollTo(0, y2);
-    });
   }
 
   function panePlots(el) {
@@ -1726,70 +1703,23 @@
       <p class="fine">${t("wi.assumpNote")}</p>`;
   }
 
-  // ---------- исследование: шаблон интервью и пилотные показатели (только этот браузер, без вымышленных ответов) ----------
-  const RS_KEY = "jaiylym:interviews";
-  const RS_Q = ["q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "q9"];
-  function renderResearch() {
-    const list = C.ls.get(RS_KEY, []) || [];
-    const m = C.ls.get("jaiylym:metrics", null) || { plans: 0, feasible: 0, saved: 0, pdf: 0, completed: 0, times: [], last: null };
-    const med = xs => { if (!xs || !xs.length) return null; const a = xs.slice().sort((x, y) => x - y), k = a.length >> 1; return a.length % 2 ? a[k] : (a[k - 1] + a[k]) / 2; };
-    const L = m.last || {};
-    $("#rsPage").innerHTML = `<div class="card"><h2>${ic("users")} ${t("rs.title")}</h2><p>${t("rs.lead")}</p>
-        <p><b>${t("rs.count", { n: list.length })}</b>${list.length ? "" : " · " + t("rs.none")}</p>
-        <p class="note warn">${t("rs.noPersonal")}</p></div>
-      <form class="card" id="rsForm"><h2>${t("rs.new")}</h2>
-        <div class="formgrid"><label class="field">${t("rs.role")}<select name="role"><option value="farmer">${t("rs.role.farmer")}</option><option value="akimat">${t("rs.role.akimat")}</option><option value="other">${t("rs.role.other")}</option></select></label>
-          <label class="field span2">${t("rs.village")}<input name="village" maxlength="60"></label>
-          <label class="field">${t("rs.date")}<input name="date" type="date" required></label></div>
-        ${RS_Q.map(q => `<label class="field" style="margin-top:8px">${t("rs." + q)}<textarea name="${q}" rows="2" maxlength="1000"></textarea></label>`).join("")}
-        <label class="check" style="margin-top:10px"><input type="checkbox" name="consent"> ${t("rs.consent")}</label>
-        <p style="margin-top:12px"><button class="btn btn-primary btn-sm">${t("rs.save")}</button></p></form>
-      <div class="card"><p style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-soft btn-sm" id="rsJson" ${list.length ? "" : "disabled"}>${t("rs.export")}</button>
-        <button class="btn btn-soft btn-sm" id="rsCsv" ${list.length ? "" : "disabled"}>${t("rs.exportCsv")}</button>
-        <button class="btn btn-ghost btn-sm" id="rsClear" ${list.length ? "" : "disabled"}>${t("rs.clear")}</button></p></div>
-      <div class="card"><h2>${ic("chart")} ${t("rs.metrics")}</h2><p class="fine">${t("rs.metricsNote")}</p>
-        <dl class="kv"><dt>${t("m.plans")}</dt><dd>${m.plans}</dd><dt>${t("m.scenarios")}</dt><dd>${m.saved}</dd>
-          <dt>${t("m.herdsInPlan")}</dt><dd>${L.herds ?? "—"}</dd><dt>${t("m.feasibleShare")}</dt><dd>${m.plans ? pct(m.feasible / m.plans) : "—"}</dd>
-          <dt>${t("m.deficit")}</dt><dd>${L.before_t != null ? fmt1(L.before_t) + " → " + fmt1(L.after_t) : "—"}</dd><dt>${t("m.over")}</dt><dd>${L.overloaded ?? "—"}</dd>
-          <dt>${t("m.missing")}</dt><dd>${L.missing ?? "—"}</dd><dt>${t("m.time")}</dt><dd>${med(m.times) ?? "—"}</dd><dt>${t("m.completed")}</dt><dd>${m.completed}</dd></dl>
-        <button class="btn btn-soft btn-sm" id="rsMetrics">${t("m.export")}</button></div>`;
-    const dl = (name, text, type) => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); };
-    // обезличивание: без названия села и даты дня — только роль, месяц, ответы (свободный текст человек заполняет без ФИО)
-    const anon = () => (C.ls.get(RS_KEY, []) || []).map((x, i) => Object.assign({ n: i + 1, role: x.role, month: (x.date || "").slice(0, 7) }, Object.fromEntries(RS_Q.map(q => [q, x[q] || ""]))));
-    $("#rsForm").onsubmit = ev => {
-      ev.preventDefault();
-      const fd = new FormData(ev.target);
-      if (fd.get("consent") !== "on") { toast(t("rs.needConsent"), true); return; }
-      const rec = { role: fd.get("role"), village: String(fd.get("village") || "").trim(), date: fd.get("date"), saved: new Date().toISOString() };
-      for (const q of RS_Q) rec[q] = String(fd.get(q) || "").trim();
-      if (RS_Q.every(q => !rec[q])) { toast(t("rs.empty"), true); return; }
-      C.ls.set(RS_KEY, (C.ls.get(RS_KEY, []) || []).concat([rec]));
-      toast(t("rs.saved")); renderResearch();
-    };
-    $("#rsJson").onclick = () => dl("jaiylym-interviews-anon.json", JSON.stringify(anon(), null, 2), "application/json");
-    $("#rsCsv").onclick = () => { const rows = anon(); const cols = ["n", "role", "month"].concat(RS_Q);
-      dl("jaiylym-interviews-anon.csv", [cols.join(",")].concat(rows.map(r => cols.map(c => '"' + String(r[c]).replace(/^(?=[=+\-@\t\r])/, "'").replace(/"/g, '""') + '"').join(","))).join("\n"), "text/csv"); };
-    armBtn($("#rsClear"), t("past.delConfirm"), () => { C.ls.del(RS_KEY); renderResearch(); });
-    $("#rsMetrics").onclick = () => dl("jaiylym-pilot-metrics.json", JSON.stringify(Object.assign({ note: t("rs.metricsNote") }, m, { lastKey: undefined }), null, 2), "application/json");
-  }
-
   // ---------- сценарии ----------
-  function scenarioPayload(name, shared) {
-    return { name, shared: !!shared, village: S.D.village, request_id: "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10),
+  function scenarioPayload(name) {
+    return { name, village: S.D.village, request_id: "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10),
       herds: S.herds.filter(h => !h.from_bot).map(h => ({ id: h.id, name: h.name, sheep: h.sheep || 0, goats: h.goats || 0, cattle: h.cattle || 0, horses: h.horses || 0,
         home: h.home, daily_return: !!h.daily_return, allowed_plots: h.allowed_plots || [], demo: !!h.demo, weight: +h.weight || 1 })),
       water: [...S.added], forbidden: [...S.forbidden], water_status: Object.assign({}, S.waterSet), params: Object.assign({}, S.userP),
       rest: Object.assign({}, S.rest || {}), norm: S.normSel || undefined, zone: S.zone || undefined, summary: summary() };
   }
-  async function saveScenario(shared) {
+  async function saveScenario() {
     if (!S.D || document.querySelector("dialog[open]")) return;
     const name = await askText(t("act.namePrompt"), `${S.D.village.name}, ${dateStr(new Date(), false)}`);
     if (!name) return;
     try {
-      await C.saveScenario(scenarioPayload(name, shared));
-      toast(shared ? t("act.published") : C.loggedIn ? t("act.saved") : t("act.savedLocal"));
+      await C.saveScenario(scenarioPayload(name));
+      toast(C.loggedIn ? t("act.saved") : t("act.savedLocal"));
       metric("saved");
-      C.addHistory({ kind: shared ? "publish" : "save", village: S.D.village, summary: summary() });
+      C.addHistory({ kind: "save", village: S.D.village, summary: summary() });
     } catch (e) { toast(errText(e), true); }
   }
   function loadScenario(sc) {
@@ -1812,10 +1742,9 @@
     catch (e) { el.innerHTML = `<div class="card"><p class="empty">${esc(errText(e))}</p></div>`; return; }
     const row = (s, canDel) => `<li class="row"><div class="grow"><b>${esc(s.name)}</b><small>${esc(s.village.name)} · ${when(s.created)} · ${(s.herds || []).length} ${t("sc.herds")} · ${(s.water || []).length} ${t("sc.water")}${s.ownerName && s.shared ? " · " + esc(s.ownerName) : ""}</small><small>${sumLine(s.summary)}</small></div>
       <div class="btns"><button class="btn btn-soft btn-sm" data-load="${esc(s.id)}">${t("sc.load")}</button>${canDel ? `<button class="btn btn-ghost btn-sm" data-del="${esc(s.id)}" aria-label="${t("sc.del")}">${ic("trash")}</button>` : ""}</div></li>`;
-    const all = (sc.own || []).concat(sc.shared || []);
+    const all = sc.own || [];
     el.innerHTML = `${!C.loggedIn ? `<p class="note warn">${t("sc.guestNote")}</p>` : ""}
       <div class="card"><h2>${ic("layers")} ${t("sc.own")}</h2>${(sc.own || []).length ? `<ul class="list">${sc.own.map(s => row(s, true)).join("")}</ul>` : `<p class="empty">${t("sc.empty")}</p>`}</div>
-      ${SHOW.coord && C.loggedIn ? `<div class="card"><h2>${ic("users")} ${t("sc.shared")}</h2>${(sc.shared || []).length ? `<ul class="list">${sc.shared.map(s => row(s, C.user && s.owner === C.user.uid)).join("")}</ul>` : `<p class="empty">${t("sc.sharedEmpty")}</p>`}</div>` : ""}
       <div class="card"><h2>${ic("clock")} ${t("sc.history")}</h2>${(hist || []).length ? `<ul class="list">${hist.slice(0, 30).map((h, i) => `<li class="row"><div class="grow"><b>${esc(h.village.name)}</b><small>${when(h.at)} · ${esc(kindLabel(h.kind))}</small><small>${sumLine(h.summary)}</small></div>
         <div class="btns"><button class="btn btn-ghost btn-sm" data-hist="${i}">${t("sc.load")}</button></div></li>`).join("")}</ul>` : `<p class="empty">${t("sc.histEmpty")}</p>`}</div>`;
     el.querySelectorAll("[data-load]").forEach(b => b.onclick = () => { const s = all.find(x => x.id === b.dataset.load); if (s) loadScenario(s); });
@@ -1938,8 +1867,6 @@
     const u = C.user;
     $("#accountLabel").textContent = u ? u.name : t("auth.login");
     $("#accountShort").textContent = u ? u.name : t("auth.loginShort");
-    const coord = SHOW.coord && !!u && u.role === "coordinator";
-    $$(".coord-only").forEach(el => { el.hidden = !coord; });
   }
 
   // ---------- профиль ----------
@@ -1961,9 +1888,8 @@
     const plotIds = J.DIRS.map(d => "Б-" + d).concat(J.DIRS.map(d => "Д-" + d));
     const initials = (u.name || "?").split(/\s+/).map(s => s[0]).join("").slice(0, 2).toUpperCase();
     el.innerHTML = `<div class="card"><div class="who"><div class="avatar">${esc(initials)}</div><div><h2 style="margin:0">${esc(u.name)}</h2>
-        <span class="tag">${t("role." + (SHOW.coord ? u.role : "farmer"))}</span></div></div>
+        <span class="tag">${t("role.farmer")}</span></div></div>
         <dl class="kv">${u.via === "password" ? `<dt>${t("acct.login")}</dt><dd>${esc(u.login)}</dd>` : `<dt>${t("pr.id")}</dt><dd>${esc(u.uid)}${u.username ? " · @" + esc(u.username) : ""}</dd>`}<dt>${t("pr.since")}</dt><dd>${when(u.created)}</dd></dl>
-        ${SHOW.coord && u.role !== "coordinator" ? `<p class="note">${t("pr.coordHint")}</p>` : ""}
         <p style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px"><button class="btn btn-ghost" id="prLogout">${ic("logout")} ${t("auth.logout")}</button>
         <button class="btn btn-danger" id="prDelete">${ic("trash")} ${t("pr.delete")}</button></p></div>
       <form class="card" id="farmForm"><h2>${ic("leaf")} ${t("pr.farm")} ${src("input")}</h2>
@@ -2100,35 +2026,6 @@
     });
   }
 
-  // ---------- координатор ----------
-  async function renderCoord() {
-    const el = $("#coPage"), u = C.user;
-    if (!SHOW.coord || !u || u.role !== "coordinator") { el.innerHTML = `<div class="card"><p>${t("co.denied")}</p></div>`; return; }
-    const vs = u.villages || [];
-    el.innerHTML = `<div class="card"><h2>${ic("pin")} ${t("co.villages")}</h2>
-      ${vs.length ? `<ul class="list">${vs.map(v => `<li class="row"><div class="grow"><b>${esc(v.name)}</b><small>${v.lat}, ${v.lon}</small></div>
-        <div class="btns"><button class="btn btn-soft btn-sm" data-farms="${esc(v.vk)}">${t("co.farms")}</button><button class="btn btn-ghost btn-sm" data-rmv="${esc(v.vk)}" aria-label="${t("co.remove")}">${ic("x")}</button></div></li>`).join("")}</ul>` : `<p class="empty">${t("co.noVillages")}</p>`}
-      ${S.D ? `<button class="btn btn-ghost" id="coAdd">${ic("plus")} ${t("co.addCurrent")}: ${esc(S.D.village.name)}</button>` : ""}</div>
-      <div class="card" id="coFarms" hidden></div>`;
-    const add = $("#coAdd");
-    if (add) add.onclick = async () => { try { await C.coordAddVillage(S.D.village); renderCoord(); } catch (e) { toast(errText(e), true); } };
-    el.querySelectorAll("[data-rmv]").forEach(b => b.onclick = async () => { try { await C.coordRemoveVillage(b.dataset.rmv); renderCoord(); } catch (e) { toast(errText(e), true); } });
-    el.querySelectorAll("[data-farms]").forEach(b => b.onclick = async () => {
-      const v = vs.find(x => x.vk === b.dataset.farms), box = $("#coFarms");
-      box.hidden = false; box.innerHTML = `<p class="empty">…</p>`;
-      try {
-        const { farms } = await C.coordFarms(v.vk);
-        box.innerHTML = `<h2>${ic("users")} ${t("co.farms")}: ${esc(v.name)}</h2>${farms.length ? `<div class="tablewrap"><table><thead><tr><th>${t("herds.farm")}</th><th>${t("co.owner")}</th>
-          <th class="num">${t("herds.sheep")}</th><th class="num">${t("herds.cattle")}</th><th class="num">${t("herds.horses")}</th><th>${t("co.updated")}</th></tr></thead><tbody>
-          ${farms.map(f => `<tr><td><b>${esc(f.name)}</b></td><td>${esc(f.owner)}</td><td class="num">${fmt(f.sheep)}</td><td class="num">${fmt(f.cattle)}</td><td class="num">${fmt(f.horses)}</td><td>${when(f.updated)}</td></tr>`).join("")}
-          </tbody></table></div><button class="btn btn-primary" id="coJoint" style="margin-top:14px">${ic("map")} ${t("co.joint")}</button>` : `<p class="empty">${t("co.noFarms")}</p>`}`;
-        const j = $("#coJoint");
-        if (j) j.onclick = () => loadScenario({ village: v, water: [], params: null,
-          herds: farms.map(f => ({ id: "f" + f.uid, name: `${f.name} (${f.owner})`, sheep: f.sheep, goats: f.goats, cattle: f.cattle, horses: f.horses, home: f.home, daily_return: f.daily_return })) });
-      } catch (e) { box.innerHTML = `<p class="empty">${esc(errText(e))}</p>`; }
-    });
-  }
-
   // ---------- страница «О данных» ----------
   function renderDataPage() {
     $("#dataPage").innerHTML = `<div class="card">
@@ -2186,14 +2083,16 @@
     const st = b.ratio <= 0.7 ? ["ok", "brief.ok"] : b.ratio <= 1 && b.deficitT < 1 ? ["tight", "brief.tight"] : ["short", "brief.short"];
     const lines = [];
     const res = resultHtml();
-    lines.push(t("brief.cap", { ha: fmt(b.water.reduce((s, p) => s + p.pasture_ha, 0)), sheep: fmt(sheepOf(b.capAU)), au: fmt(b.capAU), myau: fmt(b.au), mysheep: fmt(sheepOf(b.au)) }));
+    lines.push(t(S.zone && S.zone.mode !== "all" ? "brief.capZone" : "brief.cap", { ha: fmt(b.water.reduce((s, p) => s + p.pasture_ha, 0)), sheep: fmt(sheepOf(b.capAU)), au: fmt(b.capAU), myau: fmt(b.au), mysheep: fmt(sheepOf(b.au)) }));
     const nt = normTotals(b.water);
     if (nt.limited) lines.push(t("nm.brief", { k: nt.limited, n: nt.n, sat: fmt(nt.sat), cap: fmt(nt.cap) }) + " " + src("norm"));
     lines.push(b.worst ? t("brief.curOver", { n: S.cur.overloaded, id: `<b>${esc(b.worst.id)}</b>`, pct: pct(S.cur.load[b.worst.id].load) }) : t("brief.curOk"));
     if (b.deficitT < 1) lines.push(t("brief.planOk"));
     else {
       lines.push(t("brief.planShort", { t: `<b>${fmt(b.deficitT)}</b>` }));
-      for (const h of b.shortHerds.slice(0, 3)) lines.push(t("brief.herdShort", { name: esc(h.name), d: `<b>${Math.round(S.pl.coverage[h.id])}</b>`, season: b.Sd }));
+      const days = b.shortHerds.map(h => Math.round(S.pl.coverage[h.id]));
+      if (days.length > 1 && days.every(d => d === days[0])) lines.push(t("brief.allShort", { n: days.length, d: `<b>${days[0]}</b>`, season: b.Sd }));
+      else for (const h of b.shortHerds.slice(0, 3)) lines.push(t("brief.herdShort", { name: esc(h.name), d: `<b>${Math.round(S.pl.coverage[h.id])}</b>`, season: b.Sd }));
       lines.push(t("brief.needLess", { au: fmt(b.excessAU), sheep: fmt(sheepOf(b.excessAU)), t: fmt(b.deficitT) }));
     }
     if (b.well) lines.push(t("brief.well", { id: `<b>${esc(b.well.plot)}</b>`, t: fmt(b.well.gain_t), n: b.well.better.length }));
@@ -2205,12 +2104,11 @@
     if (b.well) todo.push(t("brief.do.well", { id: esc(b.well.plot) }));
     if (b.deficitT >= 1) todo.push(t("brief.do.reduce"));
     todo.push(t("brief.do.bot"));
-    if (SHOW.calib) todo.push(t("brief.do.calib"));
-    return `${demoBanner()}${cityNote()}${zoneCard()}${ngNote()}${res}<div class="brief"><span class="brief-status st-${st[0]}">${t(st[1])}</span>
+    return `${demoBanner()}${cityNote()}${S.zone && S.zone.mode !== "all" ? "" : zoneCard()}${ngNote()}<div class="brief"><span class="brief-status st-${st[0]}">${t(st[1])}</span>
       ${lines.map(x => `<p>${x}</p>`).join("")}
       <h3 style="margin:12px 0 2px;font-size:15px">${t("brief.do")}</h3>
       <ul class="todo">${todo.slice(0, 4).map(x => `<li>${ic("check")}<span>${x}</span></li>`).join("")}</ul>
-      <p class="fine" style="margin-top:10px">${t("brief.trust", { k: S.D.source.dates.length, year: S.D.source.year })} ${src("sat")} ${src("model")}</p></div>
+      <p class="fine" style="margin-top:10px">${t("brief.trust", { k: S.D.source.dates.length, year: S.D.source.year })} ${src("sat")} ${src("model")}</p></div>${res}${S.zone && S.zone.mode !== "all" ? zoneCard() : ""}
       <div class="aibox" id="aiBox"><button class="btn btn-green btn-sm" id="aiBriefBtn">${ic("spark")} ${t("brief.ai")}</button>
         ${S.aiBrief && S.aiBrief.key === briefKey() ? `<div class="aitext">${aiText(S.aiBrief.text)}</div>${S.aiBrief.mark || ""}<p class="fine">${t("brief.aiNote")}</p>` : ""}</div>`;
   }
@@ -2235,7 +2133,7 @@
     if (st.norm) steps.push(
       { v: fmt(st.norm.value), u: t("pop.sheep"), l: t("cap.s.norm"), f: t("cap.f.norm", { ha: fmt1(st.area.value), n: fmt2(p.norm.au_ha * au.sheep) }) + (e.capacity.norm.season_factor < 1 ? ` × ${p.norm.days[1]} / ${P.season_days}` : "") + (e.capacity.norm.green < 0.995 ? ` × ${fmt2(e.capacity.norm.green)}` : ""), s: "norm" },
       { v: fmt(st.limit.value), u: t("pop.sheep"), l: t("cap.s.limit"), f: `${t("cap.f.limit", { a: fmt(st.sheep.value), b: fmt(st.norm.value) })} ${normVerdictText(normVerdict(e.capacity) || { k: "match" })}`, s: e.capacity.limited_by === "norm" ? "norm" : "model" });
-    return `<section class="chain" aria-labelledby="chainH"><h3 id="chainH">${ic("leaf")} ${t("cap.title")}</h3>
+    return `<details class="chain" id="chainBox" ${S.chainOpen ? "open" : ""}><summary>${ic("leaf")} ${t("cap.title")}</summary>
       <label class="field chain-pick">${t("cap.plot")}<select id="chainPlot">${known.map(x => `<option value="${esc(x.id)}" ${x.id === p.id ? "selected" : ""}>${esc(x.id)}</option>`).join("")}</select></label>
       <ol class="chain-steps">${steps.map(x => `<li><div class="cv"><b>${x.v}</b> <span>${esc(x.u)}</span></div>
         <div class="cl">${esc(x.l)} ${src(x.s)}<small>${esc(x.f)}</small></div></li>`).join("")}</ol>
@@ -2248,7 +2146,7 @@
         <li>${t("cap.n.season", { d: P.season_days, s: seasonStart() })}</li>
         <li>${t("cap.n.veg", { k: fmt(P.k_ndvi) })}</li>
       </ul>
-      <button type="button" class="btn btn-soft btn-sm" data-how="${esc(p.id)}">${ic("info")} ${t("cap.more")}</button></section>`;
+      <button type="button" class="btn btn-soft btn-sm" data-how="${esc(p.id)}">${ic("info")} ${t("cap.more")}</button></details>`;
   }
   /** Какая норма применена: выбранный тип или самая мягкая по области. */
   const normNote = n => (n.soft ? t("nm.noteSoft", { r: esc(regName(n.region)), n: fmt2(n.au_ha * S.P.au.sheep) })
@@ -2297,19 +2195,21 @@
     const head = ok ? t("res.feasible") : pl.status === "infeasible" ? t("res.infeasible") : t("res.partial");
     const short = S.herds.filter(h => pl.unmet[h.id]);
     const q = { high: 0, medium: 0, low: 0, none: 0 }; S.plots.forEach(p => q[confidence(p)]++);
-    const why = short.map(h => `<li>${whyHerd(h, pl.diagnostics[h.id])}</li>`).join("");
-    const sg = planSuggestions().map(sgText).filter(Boolean).map(x => `<li>${x}</li>`).join("");
+    const same = {}; short.forEach(h => { const k = whyHerd(Object.assign({}, h, { name: "\u0001" }), pl.diagnostics[h.id]); (same[k] = same[k] || []).push(esc(h.name)); });      // одна причина у всех — одна строка
+    const why = Object.entries(same).map(([k, names]) => `<li>${k.replace("\u0001", names.join(", "))}</li>`).join("");
+    const sg = planSuggestions().map(sgText).filter(Boolean).map((x, i) => `<li>${i ? x : x.replace(/^(?:Или|Немесе) (.)/, (_, c) => c.toUpperCase())}</li>`).join("");
     const wr = (pl.warnings || []).map(wrText).filter(Boolean).map(x => `<li>${x}</li>`).join("");
     const worst = Object.keys(pl.load).filter(id => pl.load[id].used > 0).sort((a, b) => pl.load[b].used - pl.load[a].used)[0] || S.plots[0].id;
     return `<div class="result ${ok ? "res-ok" : "res-short"}" role="status">
       <p class="res-head">${ic(ok ? "check" : "info")} <b>${head}</b></p>
-      ${ok ? "" : `<h4>${t("res.why")}</h4><ul>${why}</ul><h4>${t("res.where")}</h4><p>${t("res.whereLine", { t: fmt(J.hayTonnes(pl.deficit_kg, S.P)), names: short.map(h => esc(h.name)).join(", ") })} ${src("model")}</p>
-        <h4>${t("res.change")}</h4><ul>${sg}</ul>`}
+      ${ok ? "" : `<h4>${t("res.change")}</h4><ul>${sg}</ul>`}
+      <details class="more"><summary>${t("res.more")}</summary>
+      ${ok ? "" : `<h4>${t("res.why")}</h4><ul>${why}</ul><h4>${t("res.where")}</h4><p>${t("res.whereLine", { t: fmt(J.hayTonnes(pl.deficit_kg, S.P)), names: short.map(h => esc(h.name)).join(", ") })} ${src("model")}</p>`}
       ${!ok && pl.bottleneck && pl.bottleneck.groups.length ? bottleneckHtml(pl.bottleneck.groups[0]) : ""}
       <h4>${t("res.algo")}</h4><p>${algoLine(pl)}</p>
       <h4>${t("res.used")}</h4><p>${t("res.usedLine", { k: meta.imagery_count, year: meta.year ?? "—", lc: meta.landcover_year || "", n: S.herds.length, v: M.MODEL_VERSION })}</p>
       <h4>${t("res.trust")}</h4><p>${t("res.trustLine", { h: q.high, m: q.medium, l: q.low, n: q.none })}</p>
-      ${wr ? `<details class="more"><summary>${t("res.warnings")} (${(pl.warnings || []).length})</summary><ul>${wr}</ul></details>` : ""}
+      ${wr ? `<h4>${t("res.warnings")} (${(pl.warnings || []).length})</h4><ul>${wr}</ul>` : ""}</details>
       <p style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button type="button" class="btn btn-soft btn-sm" data-how="${esc(worst)}">${ic("info")} ${t("pop.how")} (${esc(worst)})</button>
         <button type="button" class="btn btn-ghost btn-sm" data-goto="whatif">${ic("layers")} ${t("tab.whatif")}</button></p></div>`;
   }
@@ -2386,6 +2286,8 @@
     el.querySelectorAll("[data-how]").forEach(b => b.onclick = () => openHow(b.dataset.how));
     el.querySelectorAll("[data-goto]").forEach(b => b.onclick = () => renderPane(b.dataset.goto));
     const cp = $("#chainPlot", el);
+    const cb = $("#chainBox", el);
+    if (cb) cb.ontoggle = () => { S.chainOpen = cb.open; };
     if (cp) cp.onchange = () => { S.chainId = cp.value; const y = scrollY; renderPane("brief"); scrollTo(0, y); const n = $("#chainPlot"); if (n) n.focus(); };
     const dt = $("#demoToggle", el);
     if (dt) dt.onclick = () => {
@@ -2495,7 +2397,7 @@
         сено_сверх_нормы_т_если_все_у_села_оценка: Math.round(J.hayTonnes(S.cur.deficit_kg, S.P)), дефицит_сена_т_по_плану_оценка: Math.round(b.deficitT),
         чтобы_корма_хватило_сократить_на_усл_голов: Math.round(b.excessAU), чтобы_корма_хватило_сократить_на_овец: Math.round(sheepOf(b.excessAU)) },
       где_проверять_воду: (r => ({ вывод: { no_herds: "стада не внесены", no_deficit: "корма хватает: новый водопой сейчас корма не добавит", no_help: "корма не хватает, но ни один новый водопой дефицит не уменьшит", ok: "участки по снижению дефицита" }[r.status],
-        участки: r.status !== "ok" ? [] : r.list.filter(w => w.gain_t).slice(0, 3).map(w => ({ участок: w.plot, дефицит_сена_меньше_на_т_оценка: Math.round(w.gain_t), стад_станет_лучше: w.better.length, стад_станет_хуже: w.worse.length || undefined, проверено_людьми: wcText(w.plot) || undefined })) }))(wellRank()),
+        участки: r.status !== "ok" ? [] : r.list.filter(w => w.gain_t).slice(0, 3).map(w => ({ участок: w.plot, дефицит_сена_меньше_на_т_оценка: Math.round(w.gain_t), стад_станет_лучше: w.better.length, стад_станет_хуже: w.worse.length || undefined })) }))(wellRank()),
       // почему план такой: проверяемые факты движка по каждому стаду (engine.explainPlan)
       почему_план: Object.values(J.explainPlan(S.plots, S.herds, S.pl, S.P)),
       погода: S.wx && !S.wx.fail ? { осадки_30_дней_мм: Math.round(S.wx.rain30), прогноз_7_дней: S.wx.next.map(x => `${x.d}: ${Math.round(x.tmin)}..${Math.round(x.tmax)}°C, ${x.p} мм`) } : null,
@@ -2572,42 +2474,20 @@
 
   // ---------- настройки ----------
   function renderSettings() {
-    const cal = S.calib || {};
     $("#setPage").innerHTML = `<div class="card">
         <div class="setrow"><span>${t("set.lang")}</span><div class="seg"><button data-l="ru" class="${I.lang === "ru" ? "on" : ""}">Русский</button><button data-l="kk" class="${I.lang === "kk" ? "on" : ""}">Қазақша</button></div></div>
-        <div class="setrow"><span>${t("set.mode")}</span><div class="seg">${["current", "plan", "ndvi"].map(m => `<button data-m="${m}" class="${S.mode === m ? "on" : ""}">${t("map.mode." + m)}</button>`).join("")}</div></div>
-        <div class="setrow"><span>${t("set.algo")}</span><div class="seg">${["optimized", "greedy"].map(a => `<button data-algo="${a}" class="${S.algo === a ? "on" : ""}">${t("algo." + a)}</button>`).join("")}</div></div></div>
+        <div class="setrow"><span>${t("set.mode")}</span><div class="seg">${["current", "plan", "ndvi"].map(m => `<button data-m="${m}" class="${S.mode === m ? "on" : ""}">${t("map.mode." + m)}</button>`).join("")}</div></div></div>
       <div class="card"><h2>${ic("chart")} ${t("set.model")} ${src("model")}</h2><p class="fine">${t("set.modelNote")}</p>
         <p>${t("set.modelVer")}: <b>${M.MODEL_VERSION}</b> · ${t("set.field")}: <b>${M.fieldValidated(S.P) ? t("how.yes") : t("how.no")}</b></p>
-        <div class="params">${paramInputs()}
-          <label class="field">${t("set.veg")}<select id="setVeg">${M.VEGETATION.map(v => `<option value="${v}" ${S.P.vegetation_type === v ? "selected" : ""}>${t("veg." + v)}</option>`).join("")}</select><small class="fine">${t("set.vegNote")}</small></label></div>
-        <button class="btn btn-ghost btn-sm" id="setReset">${t("params.reset")}</button></div>
-      <form class="card" id="calibForm"><h2>${ic("leaf")} ${t("set.calib")}</h2><p class="fine">${t("set.calibD")}</p>
-        <div class="formgrid"><label class="field">${t("set.calibK")}<input name="k" type="number" step="any" min="${M.SPEC.k_ndvi.min}" max="${M.SPEC.k_ndvi.max}" value="${cal.values ? cal.values.k_ndvi : ""}" required></label>
-          <label class="field span2">${t("set.calibSrc")}<input name="src" maxlength="120" value="${esc(cal.source || "")}" required></label>
-          <label class="field">${t("set.calibDate")}<input name="date" type="date" value="${esc(cal.date || "")}" required></label>
-          <label class="check span4"><input type="checkbox" name="field" ${cal.field ? "checked" : ""}> ${t("set.calibField")}</label></div>
-        <p class="perr" id="calibErr" hidden></p>
-        <p style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary btn-sm">${t("set.calibSave")}</button>${S.calib ? `<button type="button" class="btn btn-ghost btn-sm" id="calibClear">${t("set.calibClear")}</button>` : ""}</p></form>
+        <details class="more"><summary>${t("set.params")}</summary><div class="params">${paramInputs()}</div>
+        <button class="btn btn-ghost btn-sm" id="setReset">${t("params.reset")}</button></details></div>
       <div class="card"><h2>${ic("send")} ${t("set.notify")}</h2><p>${t("set.notifyD")}</p><a class="btn btn-tg" href="https://t.me/JAIYLYM_bot" target="_blank" rel="noopener">${ic("send")} @JAIYLYM_bot</a></div>
       <div class="card"><h2>${ic("save")} ${t("set.data")}</h2><p style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost btn-sm" id="setClear">${t("set.clear")}</button>
         <button class="btn btn-ghost btn-sm" id="setGuest">${t("set.clearGuest")}</button></p><p class="fine">${t("set.version")}: 2026.11 · ${esc(navigator.onLine ? "online" : "offline")}</p></div>`;
     $$("#setPage [data-l]").forEach(b => b.onclick = () => setLang(b.dataset.l));
     $$("#setPage [data-m]").forEach(b => b.onclick = () => { S.mode = b.dataset.m; C.ls.set("jaiylym:mode", S.mode); if (S.D) paintMap(); renderSettings(); });
-    $$("#setPage [data-algo]").forEach(b => b.onclick = () => { S.algo = b.dataset.algo; C.ls.set("jaiylym:algo", S.algo); if (S.D) render(); renderSettings(); });
     $$("#setPage [data-param]").forEach(i => i.onchange = () => { if (setParam(i.dataset.param, i.value, i, $("#setPage")) && S.D) render(); });
-    $("#setVeg").onchange = e => { S.userP = Object.assign({}, S.userP, { vegetation_type: e.target.value }); S.P = resolveParams(S.userP, S.calib); saveParams(); };
-    $("#setReset").onclick = () => { S.userP = {}; S.P = resolveParams({}, S.calib); saveParams(); if (S.D) render(); renderSettings(); };
-    $("#calibForm").onsubmit = ev => {
-      ev.preventDefault();
-      const fd = new FormData(ev.target);
-      const cal2 = { values: { k_ndvi: +fd.get("k") }, source: String(fd.get("src")).trim(), date: String(fd.get("date")), field: fd.get("field") === "on" };
-      const r = M.validate(cal2.values);
-      if (!r.ok) { const e = $("#calibErr"); e.hidden = false; e.textContent = t("set.bad", { v: fd.get("k"), r: r.errors[0].reason }); return; }
-      S.calib = cal2; C.ls.set("jaiylym:calibration", cal2); S.P = resolveParams(S.userP, S.calib);
-      if (S.D) render(); renderSettings(); toast(t("set.calibSaved"));
-    };
-    const cc = $("#calibClear"); if (cc) cc.onclick = () => { S.calib = null; C.ls.del("jaiylym:calibration"); S.P = resolveParams(S.userP, null); if (S.D) render(); renderSettings(); };
+    $("#setReset").onclick = () => { S.userP = {}; S.P = resolveParams({}); saveParams(); if (S.D) render(); renderSettings(); };
     $("#setClear").onclick = () => { try { Object.keys(localStorage).filter(k => k.startsWith("jaiylym:v")).forEach(k => localStorage.removeItem(k)); } catch (_) {} toast(t("set.cleared")); };
     $("#setGuest").onclick = () => { C.ls.del("jaiylym:guest:scenarios"); C.ls.del("jaiylym:guest:history"); toast(t("set.cleared")); };
   }
@@ -2708,8 +2588,7 @@
       const bs = $$(".tabs [data-tab]"), i = bs.findIndex(b => b.getAttribute("aria-selected") === "true");
       const n = bs[(i + (e.key === "ArrowRight" ? 1 : bs.length - 1)) % bs.length]; n.focus(); renderPane(n.dataset.tab);
     });
-    $("#saveScBtn").onclick = () => saveScenario(false);
-    $("#publishBtn").onclick = () => saveScenario(true);
+    $("#saveScBtn").onclick = () => saveScenario();
     $("#pdfBtn").onclick = e => once(e.currentTarget, async () => {
       if (!S.D) return;
       toast(t("rep.making"));
@@ -2727,7 +2606,7 @@
     window.addEventListener("online", netState); window.addEventListener("offline", netState);
     netState();
     onRoute();
-    if (C.loggedIn) { try { await C.me(); } catch (_) {} renderAccount(); if (S.D) { addOwnFarm(); render(); } if (["profile", "coord", "scenarios"].includes(S.route)) onRoute(); }
+    if (C.loggedIn) { try { await C.me(); } catch (_) {} renderAccount(); if (S.D) { addOwnFarm(); render(); } if (["profile", "scenarios"].includes(S.route)) onRoute(); }
     else renderAccount();
     // офлайн-кэш: на https и на локальном сервере (безопасный контекст — так офлайн-режим проверяется автотестом)
     if ("serviceWorker" in navigator && (location.protocol === "https:" || /^(localhost|127\.0\.0\.1)$/.test(location.hostname))) navigator.serviceWorker.register("sw.js").catch(() => {});
@@ -2740,7 +2619,7 @@
     return { t, fmt, fmt1, pct, esc, src, J, M, S, scheme, loadColor, confidence, summary: summary(), trend: trendLine(), lang: I.lang,
       norm: (n => { if (!n) return ""; const tt = normTotals(S.plots), kv = fmt2(n.au_ha * S.P.au.sheep);
         return `${t("nm.source")}. ${n.soft ? t("nm.noteSoft", { r: esc(regName(n.region)), n: kv }) : t("nm.noteRow", { ty: esc(n.type), n: kv, s: t(n.state === "degraded" ? "nm.degraded" : "nm.restored") })} ${t("nm.sum", { sat: fmt(tt.sat), norm: fmt(tt.norm), cap: fmt(tt.cap) })} ${t("nm.sumK", { k: tt.limited, n: tt.n })}`; })(NM && NM.pick(S.normSel)),
-      zone: zoneText(), wells: wellRank(), wcText, planSuggestions, meta: M.metaOf(S.D), scenarios: scen, variantName, sgText, wrText, whyHerd, dateStr, algoLine, bottleneckHtml };
+      zone: zoneText(), wells: wellRank(), planSuggestions, meta: M.metaOf(S.D), scenarios: scen, variantName, sgText, wrText, whyHerd, dateStr, algoLine, bottleneckHtml };
   }
 
   // Келісім — согласование плана между дворами (js/kelisim-ui.js)

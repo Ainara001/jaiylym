@@ -129,7 +129,7 @@
         <p><b>${t("res.change")}:</b> ${(c.planSuggestions ? c.planSuggestions() : S.pl.suggestions || []).map(s => c.sgText ? c.sgText(s) : s.type).join(" ")}</p>` : `<p>${t("rep.none")}</p>`}
 
       ${h2(t("water.title"))}
-      ${wells.length ? `<ul style="margin:0;padding-left:18px">${wells.map(w => `<li>${esc(w.plot)}: ${t("water.gain", { t: fmt(w.gain_t), d: fmt(wr.deficit_t) })}, ${t("water.better", { n: w.better.length })}. ${c.wcText ? esc(c.wcText(w.plot)) : ""}</li>`).join("")}</ul>` : `<p>${!wr.list.length && wr.status !== "no_help" ? t("water.none") : t("water.st." + wr.status, { t: fmt(wr.deficit_t) })}</p>`}${tag("model")} ${tag("input")}
+      ${wells.length ? `<ul style="margin:0;padding-left:18px">${wells.map(w => `<li>${esc(w.plot)}: ${t("water.gain", { t: fmt(w.gain_t), d: fmt(wr.deficit_t) })}, ${t("water.better", { n: w.better.length })}.</li>`).join("")}</ul>` : `<p>${!wr.list.length && wr.status !== "no_help" ? t("water.none") : t("water.st." + wr.status, { t: fmt(wr.deficit_t) })}</p>`}${tag("model")} ${tag("input")}
       ${S.added.size ? `<p><b>${t("water.added")}:</b> ${[...S.added].map(esc).join(", ")} ${tag("input")}</p>` : ""}
       <p style="font-size:10px;color:#555">${t("water.check")}</p>
 

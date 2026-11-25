@@ -44,8 +44,6 @@ test("все ключи, которые использует интерфейс,
   for (const x of ["no_herds", "no_deficit", "no_help"]) used.add("water.st." + x);
   for (const x of K.KINDS) used.add("kel.kind." + x);
   for (const x of K.RESP) { used.add("kel.resp." + x); used.add("kel.respO." + x); }
-  for (const x of ["none", "ok", "no"]) used.add("wc.right." + x);
-  for (const x of ["none", "well", "borehole", "river", "pipe"]) used.add("wc.source." + x);
   for (const x of ["open", "accepted", "declined", "withdrawn"]) used.add("kel.pst." + x);
   for (const x of ["not_a_contract", "no_land_rights", "herds_declared", "model_estimate"]) used.add("kel.lim." + x);
   for (const x of ["none", "entered", "declared", "confirmed"]) used.add("kel.hs." + x);
@@ -64,7 +62,6 @@ test("для всех кодов движка и модели есть текс�
     ...["high", "medium", "low", "none"].map(x => "conf." + x),
     ...["none", "unconfirmed", "calibrated"].map(x => "fc." + x),
     ...M.WATER_STATUS.map(x => "ws." + x),
-    ...M.VEGETATION.map(x => "veg." + x),
     ...["default", "user", "calibrated"].map(x => "set.origin." + x),
     ...["forbidden", "no_data", "low_quality", "no_water", "closed", "not_allowed", "unknown_plot"].map(x => "rsn." + x),
     ...["capacity", "no_allowed_plots", "calendar"].map(x => "why." + x),
@@ -78,7 +75,6 @@ test("для всех кодов движка и модели есть текс�
     ...["area", "ndvi", "biomass", "forage", "au_days", "au_season", "sheep", "herd_intake", "days"].flatMap(x => ["how.step." + x, "unit." + x]),
     "how.f.area", "how.f.ndvi", "how.step.norm", "how.step.limit", "how.step.zone", "unit.zone", "zn.k.all", "zn.k.contour", "zn.k.ha", "zn.k.haO", "unit.norm", "unit.limit", "src.norm", "how.step.nograze", "unit.nograze", "src.osm",
     ...["measured", "no_data"].map(x => "meta." + x),
-    ...["q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8", "q9"].map(x => "rs." + x),
   ];
   assert.deepEqual(need.filter(k => !ru.has(k)), []);
 });

@@ -7,7 +7,6 @@ const os = require("os");
 const path = require("path");
 
 process.env.BOT_STATE_FILE = path.join(os.tmpdir(), `jaiylym-test-${process.pid}.json`);
-process.env.COORDINATOR_IDS = "333";
 delete process.env.REDIS_URL;
 const bot = require("../bot.js");
 const PL = require("../web/pipeline.js");
@@ -55,7 +54,7 @@ test.before(async () => {
 test.after(() => server.close());
 
 const KEGEN = { name: "Кеген", lat: 43.02, lon: 79.22 };
-let farmer, other, coord;
+let farmer, other;
 
 test("вход: код ждёт подтверждения, токен выдаётся один раз", async () => {
   const st = await call("POST", "/auth/start");
@@ -129,32 +128,13 @@ test("сценарии: свои видны только владельцу, ч�
   assert.equal((await call("DELETE", "/api/scenarios/" + s.data.id, { token: farmer })).status, 200);
 });
 
-test("координатор: доступ только к своим сёлам; фермеру раздел закрыт", async () => {
-  coord = (await login(333, "Акимат")).poll.data.token;
-  assert.equal((await call("GET", "/api/me", { token: coord })).data.role, "coordinator");
-  assert.equal((await call("GET", "/api/coord/farms?vk=43.020,79.220", { token: farmer })).status, 403);
-  assert.equal((await call("GET", "/api/coord/farms?vk=43.020,79.220", { token: coord })).status, 403, "село ещё не в списке");
-  await call("POST", "/api/coord/villages", { token: coord, body: { village: KEGEN } });
-  const f = await call("GET", "/api/coord/farms?vk=43.020,79.220", { token: coord });
-  assert.equal(f.status, 200);
-  assert.deepEqual(f.data.farms.map(x => x.uid), ["111"]);
-});
-
-test("общий план села: публикует только координатор, видят хозяйства этого села", async () => {
-  const body = { name: "План акимата", village: KEGEN, herds: [], shared: true };
-  assert.equal((await call("POST", "/api/scenarios", { token: farmer, body })).status, 403);
-  assert.equal((await call("POST", "/api/scenarios", { token: coord, body })).status, 200);
-  assert.equal((await call("GET", "/api/scenarios", { token: farmer })).data.shared.length, 1, "фермер Кегена видит план");
-  assert.equal((await call("GET", "/api/scenarios", { token: other })).data.shared.length, 0, "без хозяйства в селе — не видит");
-});
-
 test("история расчётов — только своя", async () => {
   await call("POST", "/api/history", { token: farmer, body: { village: KEGEN, summary: { overloaded_before: 4, overloaded_after: 0 } } });
   assert.equal((await call("GET", "/api/history", { token: farmer })).data.length, 1);
   assert.equal((await call("GET", "/api/history", { token: other })).data.length, 0);
 });
 
-test("свои пастбища: проверка контура, площадь считает сервер, чужое удалить нельзя, координатор видит", async () => {
+test("свои пастбища: проверка контура, площадь считает сервер, чужое удалить нельзя", async () => {
   const lat = 43.05, lon = 79.22, dy = 1 / 110.57, dx = 1 / (111.32 * Math.cos(lat * Math.PI / 180));
   const ring = [[lon, lat], [lon + dx, lat], [lon + dx, lat + dy], [lon, lat + dy]];           // 1×1 км, контур не замкнут
   const body = { name: "Летнее", geometry: { type: "Polygon", coordinates: [ring] }, area_ha: 99999, water: true,
@@ -172,8 +152,6 @@ test("свои пастбища: проверка контура, площадь
   assert.equal((await call("POST", "/api/me/pastures", { token: farmer, body: { geometry: { type: "Polygon", coordinates: [[[0, 0], [0, 200], [1, 1]]] } } })).status, 400);
 
   assert.equal((await call("DELETE", "/api/me/pastures/" + past.id, { token: other })).status, 404, "чужое пастбище не удаляется");
-  const f = await call("GET", "/api/coord/farms?vk=43.020,79.220", { token: coord });
-  assert.equal(f.data.farms[0].pastures[0].name, "Летнее");
 
   assert.equal(past.stats.provenance, "client_reported", "NDVI с сайта помечен как непроверенный");
   assert.equal(past.stats.verified, false);
@@ -254,13 +232,14 @@ test("чужие данные: чужой сценарий не виден и н
   await call("PUT", "/api/me/farm", { token: a, body: { name: "Ферма А", village: KEGEN, sheep: 10 } });
   await call("PUT", "/api/me/farm", { token: b, body: { name: "Ферма Б", village: KEGEN, sheep: 99, uid: "601" } });
   assert.equal(bot.getState().users["601"].farm.sheep, 10, "поле uid в теле запроса не позволяет писать в чужой профиль");
-  assert.equal((await call("POST", "/api/scenarios", { token: b, body: { name: "план", village: KEGEN, shared: true } })).status, 403, "общий план без роли координатора");
+  assert.equal((await call("POST", "/api/scenarios", { token: b, body: { name: "план", village: KEGEN, shared: true } })).data.shared, undefined, "чужим план не публикуется");
 });
 
 test("повреждённый JSON и слишком большой запрос", async () => {
-  const r = await fetch(base + "/api/scenarios", { method: "POST", headers: { authorization: "Bearer " + coord, "content-type": "application/json", origin: SITE }, body: "{не json" });
+  const tk = (await login(333, "Ж")).poll.data.token;
+  const r = await fetch(base + "/api/scenarios", { method: "POST", headers: { authorization: "Bearer " + tk, "content-type": "application/json", origin: SITE }, body: "{не json" });
   assert.equal(r.status, 400);
-  const big = await fetch(base + "/api/scenarios", { method: "POST", headers: { authorization: "Bearer " + coord, "content-type": "application/json", origin: SITE }, body: "{\"x\":\"" + "a".repeat(300 * 1024) + "\"}" }).catch(e => ({ status: "reset" }));
+  const big = await fetch(base + "/api/scenarios", { method: "POST", headers: { authorization: "Bearer " + tk, "content-type": "application/json", origin: SITE }, body: "{\"x\":\"" + "a".repeat(300 * 1024) + "\"}" }).catch(e => ({ status: "reset" }));
   assert.ok(big.status === 413 || big.status === "reset", "больше 256 КБ отклоняется: " + big.status);
 });
 
