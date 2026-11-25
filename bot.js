@@ -155,9 +155,19 @@ function ensureRegion(key) {
   v.data.village.region = "";
   PL.regionAt(v.data.village.lat, v.data.village.lon).then(r => { v.data.village.region = r; save(); }).catch(e => { delete v.data.village.region; console.error("область села:", e.message); });
 }
+// село посчитано до правила «трава среди застройки — не пастбище»: пересчитать в фоне, стада и подписки не меняются
+const landPending = new Set();
+function ensureLand(key) {
+  const v = state.villages[key];
+  if (TEST || !v || !v.data || v.example || v.data.land_rule === PL.LAND_RULE || landPending.has(key)) return;
+  landPending.add(key);
+  const { name, lat, lon, region } = v.data.village;
+  PL.buildVillage({ name, lat, lon }).then(res => { delete res.grid; res.village.region = region; v.data = res; save(); })
+    .catch(e => console.error("пересчёт села:", e.message)).finally(() => landPending.delete(key));
+}
 async function ensureVillage(name, lat, lon, say) {
   const key = vkey(lat, lon);
-  if (state.villages[key]) { ensureRegion(key); ensurePrev(key); ensureMulti(key); return key; }
+  if (state.villages[key]) { ensureRegion(key); ensureLand(key); ensurePrev(key); ensureMulti(key); return key; }
   await say(`Считаю пастбища «${name}» по снимкам Sentinel-2… это ~10–20 секунд.`);
   const [res, region] = await Promise.all([PL.buildVillage({ name, lat, lon }), PL.regionAt(lat, lon).catch(() => null)]);
   delete res.grid;

@@ -85,5 +85,5 @@ test("POST /cron: запасной способ — CRON_SECRET", async () => {
 });
 
 test("версия на сервере видна в ответе /health", () => {
-  assert.match(bot.buildInfo(), /^Модель 2.2.0, сборка /);
+  assert.match(bot.buildInfo(), /^Модель 2.3.0, сборка /);
 });
