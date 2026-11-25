@@ -107,10 +107,13 @@
     }
     async function act(b, path, body, okText) {
       if (busy) return null;
+      const c = cur;
       busy = true; if (b) { b.disabled = true; b.setAttribute("aria-busy", "true"); }
       try {
-        const r = await C.kel("POST", "/" + cur.id + path, cur.key, body || {});
-        busy = false; seq++; loading = false;
+        const r = await C.kel("POST", "/" + c.id + path, c.key, body || {});
+        busy = false;
+        if (cur !== c) return null;                        // человек уже ушёл на другой экран
+        seq++; loading = false;
         if (r.link) { const o = rec(cur.id, "org"); remember(cur.id, "org", cur.key, { links: Object.assign({}, o && o.links, { [r.link.id]: r.link.key }) }); }
         if (r.state) setView(r.state);
         if (okText) toast(okText);
@@ -118,6 +121,7 @@
       } catch (e) {
         busy = false;
         toast(kErr(e), true);
+        if (cur !== c) return null;
         if (e.status === 403 || e.status === 404) { fail = e.status; V = null; draw(); }
         else if (e.data && (e.data.why === "rev" || e.data.why === "stale" || e.data.why === "decided" || e.data.why === "closed" || e.data.why === "started")) { if (f) f.effect = null; dirty = false; await load(false, true); }
         return null;
@@ -141,11 +145,12 @@
       const id = q.get("id"), o = q.get("o"), d = q.get("d");
       if (id && (o || d)) {
         const role = o ? "org" : "hh", key = o || d;
-        if (!cur || cur.id !== id || cur.key !== key) { cur = { id, role, key }; V = null; f = null; dirty = false; fail = null; offline = false; const hit = C.ls.get(viewKey(), null); if (hit && hit.key === key) { V = hit.v; at = hit.at; } }
+        if (!cur || cur.id !== id || cur.key !== key) { seq++; loading = false; cur = { id, role, key }; V = null; f = null; dirty = false; fail = null; offline = false; const hit = C.ls.get(viewKey(), null); if (hit && hit.key === key) { V = hit.v; at = hit.at; } }
         timer = setInterval(() => { if (on && cur && !document.hidden && navigator.onLine && !busy) load(true); }, POLL);
         load(false);
         return;
       }
+      seq++; loading = false;                              // ответ прежнего согласования больше не нужен
       cur = null; V = null; f = null; dirty = false; fail = null;
       if (q.get("new")) newPage(); else landing();
     }
