@@ -311,16 +311,15 @@ async function organizer(b, name) {
   await org.waitForSelector("dialog[open] .kqr svg");
   await org.click("dialog[open] .modal-x button");
   assert.match(await org.innerText(".kyard:last-of-type"), /Новый двор/);
-  // сверка с числом акимата и срок
+  // срок; сверка с числом акимата скрыта
   await org.click("details[data-d=set] summary");
-  await org.fill("#kSet [name=of_sheep]", "10");
+  assert.equal(await org.$("#kSet [name=of_sheep]"), null);
   await org.fill("#kSet [name=deadline]", "2020-01-01");
   await org.click("#kSet button");
   await org.waitForSelector(".toast.err");
   await org.fill("#kSet [name=deadline]", "2099-06-01");
   await org.click("#kSet button");
   await org.waitForFunction(() => /01\.06\.2099/.test(document.querySelector(".khead").innerText));
-  assert.match(await org.innerText("#kelPage"), /Участники внесли больше/);
   // файл → удалить → восстановить
   const url = org.url();
   const [dl] = await Promise.all([org.waitForEvent("download"), org.click("#kExp")]);

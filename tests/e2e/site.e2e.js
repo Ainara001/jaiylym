@@ -110,7 +110,7 @@ async function newcomer(page, label) {
   assert.equal(await ha(), before, label + ": граница запомнилась");
   await page.click('[data-zn="all"]');
   await page.waitForFunction(() => /всю траву вокруг/.test(document.querySelector("#zoneCard").textContent));
-  // водопои: рейтинг по дефициту, «не проверено», запоминание; без дефицита — честно «корма не добавит»
+  // водопои: рейтинг по дефициту; без дефицита — честно «корма не добавит»
   await App(() => window.JaiylymApp.renderPane("water"));
   const wp = () => page.textContent('.pane[data-pane="water"]');
   assert.match(await wp(), /новый водопой|водопой сейчас|уже с водой/, label + ": водопой — по делу");
@@ -119,11 +119,13 @@ async function newcomer(page, label) {
   await App(() => { const s = window.JaiylymApp.S; s.herds = [{ id: "a", name: "Тест", home: "Б-С", sheep: 9000 }]; window.JaiylymApp.render(); window.JaiylymApp.renderPane("water"); });
   const gains = (await page.$$eval(".wcand small:first-of-type", x => x.map(e => +e.textContent.match(/≈ ([\d\s]+) из/)[1].replace(/\s/g, ""))));
   assert.ok(gains.length > 1 && gains.every((g, i) => !i || gains[i - 1] >= g), label + ": по снижению дефицита");
-  await page.click(".wcand:first-child summary");
-  assert.match(await page.textContent(".wcand:first-child summary"), /не проверено/);
-  await page.selectOption('.wcand:first-child [data-f="right"]', "no");
-  await page.waitForFunction(() => /Права на землю нет/.test(document.querySelector(".wcand").textContent) && /1 из 3/.test(document.querySelector(".wcand summary").textContent));
-  assert.match(JSON.stringify(await App(() => window.JaiylymApp.aiContext()["где_проверять_воду"])), /Право на землю: нет; Источник воды: не проверено/);
+  // лишнее скрыто: анкета водопоя, координатор, исследование, совет про укос, акимат на главной
+  assert.equal(await page.$(".wcand details"), null, label + ": анкеты водопоя нет");
+  assert.equal(JSON.stringify(await App(() => window.JaiylymApp.aiContext()["где_проверять_воду"])).includes("проверено_людьми"), false);
+  assert.equal(await page.$('.mainnav [href="#/research"], #moreDlg [href="#/research"]'), null);
+  assert.equal(await page.$$eval(".coord-only", x => x.every(e => e.hidden)), true);
+  assert.equal(/укос/.test(await page.evaluate(() => { window.JaiylymApp.renderPane("brief"); return document.querySelector('.pane[data-pane="brief"] .todo').textContent; })), false);
+  assert.equal(/акимат/i.test(await page.textContent('[data-view="home"]')), false);
   if (process.env.KEL_SHOTS) await page.screenshot({ path: path.join(process.env.KEL_SHOTS, "water.png"), fullPage: true });
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), label + ": водопои без прокрутки вбок");
   await App(() => window.JaiylymApp.renderPane("brief"));
