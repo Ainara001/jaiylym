@@ -21,6 +21,8 @@
   const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const ic = id => `<svg class="ic"><use href="#i-${id}"/></svg>`;
   const src = k => `<span class="src src-${k}">${t("src." + k)}</span>`;
+  // скрыто из интерфейса МВП, код работает: координатор и планы акимата; право, источник и цена водопоя; совет про укос
+  const SHOW = { coord: false, wcheck: false, calib: false };
   const coord = x => (x < 0 ? "m" : "") + Math.round(Math.abs(x) * 1000);
   const exampleAt = (lat, lon) => EXAMPLES.find(e => Math.abs(lat - e.data.village.lat) < 0.01 && Math.abs(lon - e.data.village.lon) < 0.01) || null;
   const exName = e => t(e.id === "kegen" ? "ex.kegen" : "ex.beskol");
@@ -1253,7 +1255,7 @@
   const WRIGHT = ["ok", "no"], WSRC = ["well", "borehole", "river", "pipe"];
   const wcKey = () => cacheKey(S.D.village.lat, S.D.village.lon) + ":wcheck";
   const wcheck = id => Object.assign({ right: "", source: "", cost: 0 }, (C.ls.get(wcKey(), {}) || {})[id]);
-  const wcText = id => { const c = wcheck(id); return [`${t("wc.right")}: ${t("wc.right." + (c.right || "none"))}`, `${t("wc.source")}: ${t("wc.source." + (c.source || "none"))}`, `${t("wc.cost")}: ${c.cost ? fmt(c.cost) + " " + t("rep.tenge") : t("wc.none")}`].join("; "); };
+  const wcText = id => { if (!SHOW.wcheck) return ""; const c = wcheck(id); return [`${t("wc.right")}: ${t("wc.right." + (c.right || "none"))}`, `${t("wc.source")}: ${t("wc.source." + (c.source || "none"))}`, `${t("wc.cost")}: ${c.cost ? fmt(c.cost) + " " + t("rep.tenge") : t("wc.none")}`].join("; "); };
   const noWaterObs = () => Object.entries(obsNow()).map(([id, g]) => [id, new Set(g.items.filter(i => i.reason === "no_water").flatMap(i => i.households)).size]).filter(x => x[1]);
 
   function paneWater(el) {
@@ -1264,11 +1266,11 @@
       return `<li class="wcand"><div class="row"><div class="grow"><b>${i + 1}. ${esc(w.plot)}</b><small>${t("water.gain", { t: fmt(w.gain_t), d: fmt(wr.deficit_t) })} ${src("model")}</small>
         <small>${t("water.better", { n: w.better.length })}${w.better.length ? ": " + nm(w.better) : ""}${w.worse.length ? ` · ${t("water.worse")}: ${nm(w.worse)}` : ""}</small>
         ${w.other_limits.length ? `<small>${t("water.remain", { r: w.other_limits.map(r => t("rsn." + r)).join(", ") })}</small>` : ""}</div><div class="btns">${addBtn(w)}</div></div>
-        <details ${c.right === "no" ? "open" : ""}><summary>${t("wc.title")}: ${done ? t("wc.done", { n: done }) : t("wc.none")} ${src("input")}</summary><div class="wcform">
+        ${!SHOW.wcheck ? "" : `<details ${c.right === "no" ? "open" : ""}><summary>${t("wc.title")}: ${done ? t("wc.done", { n: done }) : t("wc.none")} ${src("input")}</summary><div class="wcform">
           <label class="field">${t("wc.right")}<select data-wc="${esc(w.plot)}" data-f="right"><option value="">${t("wc.none")}</option>${WRIGHT.map(x => `<option value="${x}" ${c.right === x ? "selected" : ""}>${t("wc.right." + x)}</option>`).join("")}</select></label>
           <label class="field">${t("wc.source")}<select data-wc="${esc(w.plot)}" data-f="source"><option value="">${t("wc.none")}</option>${WSRC.map(x => `<option value="${x}" ${c.source === x ? "selected" : ""}>${t("wc.source." + x)}</option>`).join("")}</select></label>
           <label class="field">${t("wc.cost")}, ${t("rep.tenge")}<input type="number" inputmode="numeric" min="0" step="10000" data-wc="${esc(w.plot)}" data-f="cost" value="${c.cost || ""}" placeholder="${t("wc.none")}"></label></div>
-          ${c.right === "no" ? `<p class="note warn">${t("wc.noRight")}</p>` : ""}</details></li>`; };
+          ${c.right === "no" ? `<p class="note warn">${t("wc.noRight")}</p>` : ""}</details>`}</li>`; };
     const added = [...S.added];
     const baseOnly = S.plots.map(p => (S.added.has(p.id) ? Object.assign({}, p, { water: false, water_status: "unknown" }) : p));
     const before = solve(baseOnly, S.herds);
@@ -1708,7 +1710,7 @@
     const all = (sc.own || []).concat(sc.shared || []);
     el.innerHTML = `${!C.loggedIn ? `<p class="note warn">${t("sc.guestNote")}</p>` : ""}
       <div class="card"><h2>${ic("layers")} ${t("sc.own")}</h2>${(sc.own || []).length ? `<ul class="list">${sc.own.map(s => row(s, true)).join("")}</ul>` : `<p class="empty">${t("sc.empty")}</p>`}</div>
-      ${C.loggedIn ? `<div class="card"><h2>${ic("users")} ${t("sc.shared")}</h2>${(sc.shared || []).length ? `<ul class="list">${sc.shared.map(s => row(s, C.user && s.owner === C.user.uid)).join("")}</ul>` : `<p class="empty">${t("sc.sharedEmpty")}</p>`}</div>` : ""}
+      ${SHOW.coord && C.loggedIn ? `<div class="card"><h2>${ic("users")} ${t("sc.shared")}</h2>${(sc.shared || []).length ? `<ul class="list">${sc.shared.map(s => row(s, C.user && s.owner === C.user.uid)).join("")}</ul>` : `<p class="empty">${t("sc.sharedEmpty")}</p>`}</div>` : ""}
       <div class="card"><h2>${ic("clock")} ${t("sc.history")}</h2>${(hist || []).length ? `<ul class="list">${hist.slice(0, 30).map((h, i) => `<li class="row"><div class="grow"><b>${esc(h.village.name)}</b><small>${when(h.at)} · ${esc(kindLabel(h.kind))}</small><small>${sumLine(h.summary)}</small></div>
         <div class="btns"><button class="btn btn-ghost btn-sm" data-hist="${i}">${t("sc.load")}</button></div></li>`).join("")}</ul>` : `<p class="empty">${t("sc.histEmpty")}</p>`}</div>`;
     el.querySelectorAll("[data-load]").forEach(b => b.onclick = () => { const s = all.find(x => x.id === b.dataset.load); if (s) loadScenario(s); });
@@ -1823,7 +1825,7 @@
     const u = C.user;
     $("#accountLabel").textContent = u ? u.name : t("auth.login");
     $("#accountShort").textContent = u ? u.name : t("auth.loginShort");
-    const coord = !!u && u.role === "coordinator";
+    const coord = SHOW.coord && !!u && u.role === "coordinator";
     $$(".coord-only").forEach(el => { el.hidden = !coord; });
   }
 
@@ -1845,9 +1847,9 @@
     const plotIds = J.DIRS.map(d => "Б-" + d).concat(J.DIRS.map(d => "Д-" + d));
     const initials = (u.name || "?").split(/\s+/).map(s => s[0]).join("").slice(0, 2).toUpperCase();
     el.innerHTML = `<div class="card"><div class="who"><div class="avatar">${esc(initials)}</div><div><h2 style="margin:0">${esc(u.name)}</h2>
-        <span class="tag ${u.role === "coordinator" ? "tag-mine" : ""}">${t("role." + u.role)}</span></div></div>
+        <span class="tag">${t("role." + (SHOW.coord ? u.role : "farmer"))}</span></div></div>
         <dl class="kv">${u.via === "password" ? `<dt>${t("acct.login")}</dt><dd>${esc(u.login)}</dd>` : `<dt>${t("pr.id")}</dt><dd>${esc(u.uid)}${u.username ? " · @" + esc(u.username) : ""}</dd>`}<dt>${t("pr.since")}</dt><dd>${when(u.created)}</dd></dl>
-        ${u.role !== "coordinator" ? `<p class="note">${t("pr.coordHint")}</p>` : ""}
+        ${SHOW.coord && u.role !== "coordinator" ? `<p class="note">${t("pr.coordHint")}</p>` : ""}
         <p style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px"><button class="btn btn-ghost" id="prLogout">${ic("logout")} ${t("auth.logout")}</button>
         <button class="btn btn-danger" id="prDelete">${ic("trash")} ${t("pr.delete")}</button></p></div>
       <form class="card" id="farmForm"><h2>${ic("leaf")} ${t("pr.farm")} ${src("input")}</h2>
@@ -1981,7 +1983,7 @@
   // ---------- координатор ----------
   async function renderCoord() {
     const el = $("#coPage"), u = C.user;
-    if (!u || u.role !== "coordinator") { el.innerHTML = `<div class="card"><p>${t("co.denied")}</p></div>`; return; }
+    if (!SHOW.coord || !u || u.role !== "coordinator") { el.innerHTML = `<div class="card"><p>${t("co.denied")}</p></div>`; return; }
     const vs = u.villages || [];
     el.innerHTML = `<div class="card"><h2>${ic("pin")} ${t("co.villages")}</h2>
       ${vs.length ? `<ul class="list">${vs.map(v => `<li class="row"><div class="grow"><b>${esc(v.name)}</b><small>${v.lat}, ${v.lon}</small></div>
@@ -2083,7 +2085,7 @@
     if (b.well) todo.push(t("brief.do.well", { id: esc(b.well.plot) }));
     if (b.deficitT >= 1) todo.push(t("brief.do.reduce"));
     todo.push(t("brief.do.bot"));
-    todo.push(t("brief.do.calib"));
+    if (SHOW.calib) todo.push(t("brief.do.calib"));
     return `${demoBanner()}${zoneCard()}${ngNote()}${res}<div class="brief"><span class="brief-status st-${st[0]}">${t(st[1])}</span>
       ${lines.map(x => `<p>${x}</p>`).join("")}
       <h3 style="margin:12px 0 2px;font-size:15px">${t("brief.do")}</h3>
@@ -2372,7 +2374,7 @@
         сено_сверх_нормы_т_если_все_у_села_оценка: Math.round(J.hayTonnes(S.cur.deficit_kg, S.P)), дефицит_сена_т_по_плану_оценка: Math.round(b.deficitT),
         чтобы_корма_хватило_сократить_на_усл_голов: Math.round(b.excessAU), чтобы_корма_хватило_сократить_на_овец: Math.round(sheepOf(b.excessAU)) },
       где_проверять_воду: (r => ({ вывод: { no_herds: "стада не внесены", no_deficit: "корма хватает: новый водопой сейчас корма не добавит", no_help: "корма не хватает, но ни один новый водопой дефицит не уменьшит", ok: "участки по снижению дефицита" }[r.status],
-        участки: r.status !== "ok" ? [] : r.list.filter(w => w.gain_t).slice(0, 3).map(w => ({ участок: w.plot, дефицит_сена_меньше_на_т_оценка: Math.round(w.gain_t), стад_станет_лучше: w.better.length, стад_станет_хуже: w.worse.length || undefined, проверено_людьми: wcText(w.plot) })) }))(wellRank()),
+        участки: r.status !== "ok" ? [] : r.list.filter(w => w.gain_t).slice(0, 3).map(w => ({ участок: w.plot, дефицит_сена_меньше_на_т_оценка: Math.round(w.gain_t), стад_станет_лучше: w.better.length, стад_станет_хуже: w.worse.length || undefined, проверено_людьми: wcText(w.plot) || undefined })) }))(wellRank()),
       // почему план такой: проверяемые факты движка по каждому стаду (engine.explainPlan)
       почему_план: Object.values(J.explainPlan(S.plots, S.herds, S.pl, S.P)),
       погода: S.wx && !S.wx.fail ? { осадки_30_дней_мм: Math.round(S.wx.rain30), прогноз_7_дней: S.wx.next.map(x => `${x.d}: ${Math.round(x.tmin)}..${Math.round(x.tmax)}°C, ${x.p} мм`) } : null,
