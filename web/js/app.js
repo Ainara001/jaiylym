@@ -70,7 +70,7 @@
     const d = "#" + [1, 3, 5].map(i => Math.round(parseInt(bg.slice(i, i + 2), 16) * 0.85).toString(16).padStart(2, "0")).join("");
     return `background:${d};color:#fff`;
   }
-  const loadColor = x => (x == null ? "#d9d2bf" : !x ? "#9aa29a" : x <= 0.7 ? "#3e8e5a" : x <= 1 ? "#c9970f" : "#bf4a2a");
+  const loadColor = x => (x == null ? "#d9d2bf" : !x ? "#9aa29a" : x <= 0.7 ? "#3e8e5a" : x <= 1.0005 ? "#c9970f" : "#bf4a2a");
   const ndviColor = v => (v == null ? "#9aa29a" : v < 0.18 ? "#8c510a" : v < 0.25 ? "#d8b56a" : v < 0.32 ? "#9fd068" : "#2f9a4b");
   // Качество спутникового измерения (единое правило web/model.js) — НЕ достоверность числа овец
   const confidence = p => M.satelliteQuality(p);
@@ -203,7 +203,7 @@
   const viewMap = () => $(".view-map");
   /** Убрать с экрана прежнее село, чтобы пока считается новое, на карте и в панели не было чужих данных. */
   function clearVillage() {
-    S.D = null; S.png = null; S.plots = []; S.herds = []; S.layers = {}; S.vBounds = null; S.cur = null; S.pl = null; S.aiBrief = null; S.chatAuto = null;
+    S.D = null; S.png = null; S.mask = null; S.plots = []; S.herds = []; S.layers = {}; S.vBounds = null; S.cur = null; S.pl = null; S.aiBrief = null; S.chatAuto = null;
     if (S.map) {
       endDraw(); S.map.closePopup(); S.group.clearLayers(); S.pastGroup.clearLayers();
       if (S.ngLayer) { S.ngLayer.remove(); S.ngLayer = null; }
@@ -277,6 +277,7 @@
     S.group.clearLayers();
     const [w, s, e, n] = S.D.bbox;
     S.ndviLayer = L.imageOverlay(S.png, [[s, w], [n, e]], { opacity: 0.85 });
+    S.pxLayer = L.imageOverlay(BLANK, [[s, w], [n, e]], { interactive: false }).addTo(S.group);
     L.circleMarker([S.D.village.lat, S.D.village.lon], { radius: 6, color: "#fff", weight: 2, fillColor: "#1b2a21", fillOpacity: 1 })
       .bindTooltip(esc(S.D.village.name)).addTo(S.group);
     // для отображения — плавные дуги (48 точек); расчёт по-прежнему идёт по пикселям, а не по контуру
@@ -295,6 +296,60 @@
     drawNoGraze();
     drawZone();
   }
+  // ---------- закраска только пастбища: жильё, огороды, поля, лес и вода остаются картой ----------
+  const BLANK = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+  /** Пиксели пастбища с карты травы (непрозрачные): { img, n, px } или null, если картинка не читается. */
+  async function pastureMask(png) {
+    try {
+      const img = new Image(); img.src = png; await img.decode();
+      const n = img.naturalWidth, c = document.createElement("canvas"); c.width = c.height = n;
+      const x = c.getContext("2d", { willReadFrequently: true }); x.drawImage(img, 0, 0);
+      const a = x.getImageData(0, 0, n, n).data, px = new Uint8Array(n * n);
+      for (let i = 0; i < px.length; i++) px[i] = a[i * 4 + 3] > 0 ? 1 : 0;
+      return { img, n, px };
+    } catch (_) { return null; }
+  }
+  /** Номер участка и «закрашивать ли» для каждого пикселя: пастбище минус зоны OSM с буфером. Считается один раз на набор зон. */
+  function pixelGrid(D, mask, plots, buf) {
+    const key = D.nograze && D.nograze.status === "ok" ? D.nograze.fetched_at + ":" + buf : "";
+    if (mask.key === key && mask.idx) return mask;
+    const n = mask.n, [w, s, e, no] = D.bbox, order = Object.fromEntries(plots.map((p, k) => [p.id, k]));
+    const block = key && NG && NG.blockMask ? NG.blockMask(D.nograze, D.bbox, n, buf) : null, idx = new Int8Array(n * n).fill(-1);
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+      const i = r * n + c;
+      if (!mask.px[i] || (block && block[i])) continue;
+      const id = Z.plotAt(D.village, w + (c + 0.5) * (e - w) / n, no - (r + 0.5) * (no - s) / n);
+      if (id != null && order[id] != null) idx[i] = order[id];
+    }
+    mask.key = key; mask.idx = idx;
+    return mask;
+  }
+  /** Картинка: пиксели пастбища цветом своего участка (или цветом травы, если colorOf нет); внутри границы села, если она нарисована. */
+  function pixelImage(D, mask, plots, buf, colorOf, rings) {
+    const { n, idx } = pixelGrid(D, mask, plots, buf), c = document.createElement("canvas"); c.width = c.height = n;
+    const x = c.getContext("2d"), im = x.createImageData(n, n);
+    const rgb = plots.map(p => { if (!colorOf) return [0, 0, 0]; const h = colorOf(p); return [1, 3, 5].map(k => parseInt(h.slice(k, k + 2), 16)); });
+    for (let i = 0; i < idx.length; i++) if (idx[i] >= 0) { const [r, g, b] = rgb[idx[i]]; im.data[i * 4] = r; im.data[i * 4 + 1] = g; im.data[i * 4 + 2] = b; im.data[i * 4 + 3] = colorOf ? 165 : 255; }
+    x.putImageData(im, 0, 0);
+    if (!colorOf) { x.globalCompositeOperation = "source-in"; x.drawImage(mask.img, 0, 0); }
+    if (rings && rings.length) {
+      const [w, s, e, no] = D.bbox;
+      x.globalCompositeOperation = "destination-in"; x.beginPath();
+      for (const r of rings) r.forEach(([lon, lat], k) => x[k ? "lineTo" : "moveTo"]((lon - w) / (e - w) * n, (no - lat) / (no - s) * n));
+      x.fill();
+    }
+    return c.toDataURL("image/png");
+  }
+  const zoneRings = () => (S.zone && S.zone.mode === "contour" ? S.zone.rings : null);
+  /** Сектор, где пастбища почти нет (меньше 5 га до ограничений села): город, поля, лес. */
+  const isBare = p => (p.zone ? p.zone.before : p.pasture_ha) < 5;
+  /** Доля пастбища вокруг: { ha, all, low } — low, когда меньше десятой части (скорее всего, город). */
+  function pastureShare() {
+    const ha = S.plots.reduce((s, p) => s + (p.zone ? p.zone.before : p.pasture_ha), 0), all = S.plots.reduce((s, p) => s + (p.area_ha || 0), 0);
+    return { ha, all, low: all > 0 && ha / all < 0.1 };
+  }
+  const cityNote = () => { const x = pastureShare(); return x.low ? `<p class="note warn" id="cityNote">${t("ng.city", { ha: fmt(x.ha), all: fmt(x.all) })}</p>` : ""; };
+
   /** Зоны «нельзя пасти» на карте: контуры жилья, ферм и промзон из OSM (не перехватывают нажатия на участки). */
   function drawNoGraze() {
     if (!S.map || !S.D) return;
@@ -303,7 +358,7 @@
     if (!ng || ng.status !== "ok" || !(ng.zones || []).length) return;
     S.ngLayer = L.layerGroup().addTo(S.map);
     for (const z of ng.zones)
-      L.polygon(z.ring.map(([x, y]) => [y, x]), { color: "#7a1f0f", weight: 1, fillColor: "#bf4a2a", fillOpacity: 0.35, interactive: false, dashArray: z.point ? "3 3" : null })
+      L.polygon(z.ring.map(([x, y]) => [y, x]), Object.assign(z.kind === "garden" ? { color: "#7a5f10", fillColor: "#d9b44a", fillOpacity: 0.16 } : { color: "#2f2a33", fillColor: "#4a3f4f", fillOpacity: 0.38 }, { weight: 1, interactive: false, dashArray: z.point ? "3 3" : null }))
         .addTo(S.ngLayer);
   }
   /** Ранее открытые сёла без расчёта зон — досчитать (WorldCover + OSM), результат в кэш браузера. */
@@ -311,7 +366,7 @@
     if (!NG || typeof PL.buildNoGraze !== "function") return;
     if (!force && data.nograze && data.nograze.status === "ok") return;
     const hit = !force && C.ls.get(key + ":ng", null);
-    if (hit && hit.status === "ok") { data.nograze = hit; return; }
+    if (hit && hit.status === "ok" && hit.version === NG.VERSION) { data.nograze = hit; return; }
     if (!navigator.onLine) { S.ngState = "offline"; return; }
     S.ngState = "loading";
     const later = !force && S.ngLater; S.ngLater = null;
@@ -512,7 +567,7 @@
     if (ex) { data = JSON.parse(JSON.stringify(ex.data)); png = ex.png; }
     else {
       const hit = C.ls.get(key, null);
-      if (hit && hit.plots) { data = hit; png = hit.png; delete data.png; data.village.name = name || data.village.name; }
+      if (hit && hit.plots && (hit.land_rule === PL.LAND_RULE || !navigator.onLine)) { data = hit; png = hit.png; delete data.png; data.village.name = name || data.village.name; }
     }
     if (!data) {
       if (!navigator.onLine) { status(t("err.offline"), { err: true }); if (!S.D) showStart(t("err.offline")); return; }
@@ -543,11 +598,12 @@
     // граница пастбища — до показа села: иначе на миг показали бы чужую землю
     const zs = C.ls.get(key + ":zone", null), zone = Z ? Z.clean(opts.zone) || Z.clean(zs && zs.zone) || Z.defaultFor(data.village) : null;
     const zshare = zone && zone.mode === "contour" ? await zoneShares(data, png, zone.rings) : null;
+    const mask = await pastureMask(png);
     if (S.loadingKey !== key) return;
     status("");
     S.building = null; S.start = null;
     viewMap().classList.remove("no-village");
-    S.D = data; S.png = png; S.fromCache = !ex && !!C.ls.get(key, null) && !S.justBuilt; S.justBuilt = false;
+    S.D = data; S.png = png; S.mask = mask; S.fromCache = !ex && !!C.ls.get(key, null) && !S.justBuilt; S.justBuilt = false;
     S.t0 = Date.now();
     S.baseWater = Object.fromEntries(data.plots.map(p => [p.id, M.waterUsable(p)]));
     S.added = new Set((opts.water || []).filter(id => S.baseWater[id] === false));
@@ -586,15 +642,8 @@
   const saveZone = () => C.ls.set(zoneKey(), { zone: S.zone && !S.zone.official ? S.zone : null, closed: [...S.forbidden] });
   /** Доли участков внутри контура — по пикселям пастбища с карты травы (S.png); картинка не читается — по площади участка. */
   async function zoneShares(D, png, rings) {
-    let mask = { size: 256, bbox: D.bbox };
-    try {
-      const im = new Image(); im.src = png; await im.decode();
-      const c = document.createElement("canvas"), n = im.naturalWidth; c.width = c.height = n;
-      const x = c.getContext("2d", { willReadFrequently: true }); x.drawImage(im, 0, 0);
-      const a = x.getImageData(0, 0, n, n).data;
-      mask = { size: n, bbox: D.bbox, has: i => a[i * 4 + 3] > 0 };
-    } catch (_) {}
-    return Z.shares(D.village, rings, mask);
+    const m = await pastureMask(png);
+    return Z.shares(D.village, rings, m ? { size: m.n, bbox: D.bbox, has: i => m.px[i] > 0 } : { size: 256, bbox: D.bbox });
   }
   async function setZone(z) {
     const key = S.loadingKey, sh = z.mode === "contour" ? await zoneShares(S.D, S.png, z.rings) : null;
@@ -815,13 +864,15 @@
     const id = small && p.ring === "near" ? p.dir : p.id;
     const pc = v => (small ? pct(v).replace(/\s/g, "") : pct(v));
     if (S.mode === "ndvi") return `${id}<br>${p.ndvi ?? "?"}`;
-    if (!l.known) return `${id}<br>?`;
     if (p.forbidden) return `${id}<br>${t("pop.closedTag")}`;
+    if (isBare(p)) return small ? id : `${p.id}<br>${t("map.bare")}`;
+    if (!l.known) return `${id}<br>?`;
     return l.used ? `${id}<br>${pc(l.load)}` : (small ? id : `${p.id}<br>${t("map.free")}`);
   }
   function plotFill(p) {
     const r = S.mode === "current" ? S.cur : S.pl;
     if (S.mode === "ndvi") return ndviColor(p.ndvi);
+    if (isBare(p)) return loadColor(null);
     return r.load[p.id].known ? loadColor(r.load[p.id].load) : loadColor(null);
   }
   // граница участка = вода и правовой статус по введённым данным; заливка = нагрузка (или трава)
@@ -834,17 +885,21 @@
     return { color: "#ffffff", weight: 1.2, dashArray: "4 4" };
   }
   const ngLegend = () => (S.D && S.D.nograze && S.D.nograze.status === "ok" && (S.D.nograze.zones || []).length
-    ? `<i style="background:#bf4a2a;opacity:.6"></i>${t("map.legend.nograze")}<br>` : "");
+    ? `<i style="background:#4a3f4f;opacity:.75"></i>${t("map.legend.nograze")}<br><i style="background:#d9b44a;opacity:.6"></i>${t("map.legend.garden")}<br>` : "");
   function paintMap() {
     if (!S.D) return;
     if (S.noLeaflet) { renderSchemeMap(); }
     else {
       for (const p of S.plots) {
         const lay = S.layers[p.id]; if (!lay) continue;
-        lay.setStyle(Object.assign({ fillColor: plotFill(p), fillOpacity: S.mode === "ndvi" ? 0.06 : 0.5 }, plotStroke(p)));
+        lay.setStyle(Object.assign({ fillColor: plotFill(p), fillOpacity: S.mask ? 0.02 : S.mode === "ndvi" ? 0.06 : 0.5 }, plotStroke(p)));
         lay.setTooltipContent(plotLabel(p));
       }
-      if (S.ndviLayer) { if (S.mode === "ndvi") S.ndviLayer.addTo(S.group); else S.ndviLayer.remove(); }
+      if (S.mask && S.pxLayer) S.pxLayer.setUrl(S.mode === "ndvi" ? BLANK : pixelImage(S.D, S.mask, S.plots, S.ngBuf, plotFill, zoneRings()));
+      if (S.ndviLayer) {
+        if (S.mode !== "ndvi") S.ndviLayer.remove();
+        else { if (S.mask) S.ndviLayer.setUrl(pixelImage(S.D, S.mask, S.plots, S.ngBuf, null, zoneRings())); S.ndviLayer.addTo(S.group); }
+      }
     }
     const lg = $("#legend");
     if (!lg.dataset.bound) {      // на телефоне легенда свёрнута, раскрывается нажатием
@@ -858,7 +913,7 @@
       `<i style="border:1.5px solid #c9c9c9"></i>${t("map.legend.wassumed")}<br><i style="border:1.5px dashed #555"></i>${t("map.legend.wnone")}<br><i style="border:2px dotted #bf4a2a"></i>${t("map.legend.closed")}<br><small>${t("map.legend.rights")}</small>`;
     lg.innerHTML = S.mode === "ndvi"
       ? `<b>${t("map.legend.ndvi")} ${S.D.source.year}</b><i style="background:#2f9a4b"></i>${t("map.legend.dense")}<br><i style="background:#9fd068"></i>${t("map.legend.mid")}<br><i style="background:#d8b56a"></i>${t("map.legend.sparse")}<br><i style="background:#8c510a"></i>${t("map.legend.none")}<br><i style="background:#9aa29a"></i>${t("map.legend.nodata")}<br><small>${t("map.legend.nonpasture")}</small>`
-      : `<b>${t("map.legend.load")}</b><i style="background:#3e8e5a"></i>${t("map.legend.ok")}<br><i style="background:#c9970f"></i>${t("map.legend.warn")}<br><i style="background:#bf4a2a"></i>${t("map.legend.bad")}<br><i style="background:#9aa29a"></i>${t("map.legend.idle")}<br><i style="background:#d9d2bf"></i>${t("map.legend.nodata")}<br>${ngLegend()}${border}`;
+      : `<b>${t("map.legend.load")}</b><i style="background:#3e8e5a"></i>${t("map.legend.ok")}<br><i style="background:#c9970f"></i>${t("map.legend.warn")}<br><i style="background:#bf4a2a"></i>${t("map.legend.bad")}<br><i style="background:#9aa29a"></i>${t("map.legend.idle")}<br><i style="background:#d9d2bf"></i>${t("map.legend.nodata")}<br>${ngLegend()}<small>${t("map.legend.nonpasture")}</small><br>${border}`;
     $$(".modes button").forEach(b => { const on = b.dataset.mode === S.mode; b.classList.toggle("on", on); b.setAttribute("aria-selected", on); });
   }
 
@@ -1558,16 +1613,21 @@
       <p><b>${t("nm.sum", { sat: fmt(tot.sat), norm: fmt(tot.norm), cap: fmt(tot.cap) })}</b> ${t("nm.sumK", { k: tot.limited, n: tot.n })}</p>
       ${n.days && S.P.season_days > n.days[1] ? `<p class="note">${t("nm.season", { a: n.days[1], b: S.P.season_days })}</p>` : ""}` + foot;
   }
+  /** Трава, которую не считаем пастбищем и без OSM: среди застройки и мелкие пятна. */
+  function landHtml() {
+    const sum = k => S.D.plots.reduce((s, p) => s + (p[k] || 0), 0), u = sum("urban_ha"), m = sum("patch_ha");
+    return u + m > 0 ? `<p>${t("ng.land", { u: fmt(u), m: fmt(m) })} ${src("sat")}</p>` : "";
+  }
   /** Вкладка «Данные»: где нельзя пасти — источник, сколько зон, площадь по участкам, буфер. */
   function noGrazeHtml() {
     const ng = S.D.nograze, st = ng ? ng.status : S.ngState;
     const head = `<div class="srcblock s-osm"><h3>${src("osm")} ${t("ng.title")}</h3>`;
-    if (!ng || st === "loading") return head + `<p>${st === "offline" ? t("ng.offline") : t("ng.loading")}</p></div>`;
-    if (st === "error") return head + `<p class="note warn">${t("ng.error")}: ${esc(ng.error || "")}</p><button class="btn btn-ghost btn-sm" id="ngRetry">${t("ng.retry")}</button></div>`;
+    if (!ng || st === "loading") return head + `${landHtml()}<p>${st === "offline" ? t("ng.offline") : t("ng.loading")}</p></div>`;
+    if (st === "error") return head + `${landHtml()}<p class="note warn">${t("ng.error")}: ${esc(ng.error || "")}</p><button class="btn btn-ghost btn-sm" id="ngRetry">${t("ng.retry")}</button></div>`;
     const tot = S.plots.reduce((s, p) => s + (p.nograze_ha || 0), 0), gross = S.plots.reduce((s, p) => s + (p.pasture_ha_gross ?? p.pasture_ha), 0);
     const c = ng.counts || {};
     return head + `<p>${st === "empty" ? t("ng.none") : t("ng.sum", { t: fmt1(tot), g: fmt(gross), p: gross ? Math.round(tot / gross * 100) : 0,
-        s: c.settlement || 0, f: c.farm || 0, i: c.industrial || 0, o: c.other || 0 })}</p>
+        s: c.settlement || 0, f: c.farm || 0, i: c.industrial || 0, o: c.other || 0, r: c.garden || 0 })}</p>${landHtml()}
       <label class="field" style="max-width:320px">${t("ng.buffer")}<select id="ngBuf">${(ng.buffers || NG.BUFFERS).map(b => `<option value="${b}" ${+S.ngBuf === b ? "selected" : ""}>${b} м</option>`).join("")}</select></label>
       <p class="fine">${t("ng.note")} ${c.points ? t("ng.points", { n: c.points }) : ""} ${ng.osm_timestamp ? t("ng.date", { d: dateStr(ng.osm_timestamp, false) }) : ""}</p></div>`;
   }
@@ -2059,7 +2119,7 @@
   const ngNote = () => (S.D.nograze && ["ok", "empty"].includes(S.D.nograze.status) ? "" : S.ngState === "loading" ? `<p class="note" id="ngNote">${t("ng.wait")}</p>`
     : S.ngState === "error" ? `<p class="note warn" id="ngNote">${t("ng.failNote")} <button type="button" class="linkbtn" data-goto="data">${t("ng.toData")}</button></p>` : "");
   function briefHtml() {
-    if (!S.herds.length) return `${zoneCard()}${ngNote()}<div class="brief"><p>${t("brief.noherds")}</p>
+    if (!S.herds.length) return `${cityNote()}${zoneCard()}${ngNote()}<div class="brief"><p>${t("brief.noherds")}</p>
       <p style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn btn-soft btn-sm" id="addDemo">${ic("plus")} ${t("ov.addDemo")}</button>
       <button class="btn btn-ghost btn-sm" id="addHerd0">${ic("plus")} ${t("herds.add")}</button></p></div>`;
     const b = briefData();
@@ -2086,7 +2146,7 @@
     if (b.deficitT >= 1) todo.push(t("brief.do.reduce"));
     todo.push(t("brief.do.bot"));
     if (SHOW.calib) todo.push(t("brief.do.calib"));
-    return `${demoBanner()}${zoneCard()}${ngNote()}${res}<div class="brief"><span class="brief-status st-${st[0]}">${t(st[1])}</span>
+    return `${demoBanner()}${cityNote()}${zoneCard()}${ngNote()}${res}<div class="brief"><span class="brief-status st-${st[0]}">${t(st[1])}</span>
       ${lines.map(x => `<p>${x}</p>`).join("")}
       <h3 style="margin:12px 0 2px;font-size:15px">${t("brief.do")}</h3>
       <ul class="todo">${todo.slice(0, 4).map(x => `<li>${ic("check")}<span>${x}</span></li>`).join("")}</ul>
@@ -2352,8 +2412,9 @@
       наблюдения_людей: Object.entries(obsNow()).flatMap(([id, g]) => g.items.map(i => ({ участок: id, что: { no_grass: "мало травы", weeds: "бурьян, непоедаемая трава", no_water: "нет воды", far: "далеко" }[i.reason],
         когда_видели: i.dates.join(", ") || null, участников: i.households.length, вывод: { check: "проверить на месте", match: "сходится с данными", other_time: "другое время, не сравнивать", no_date: "без даты, не сравнивать", info: "не сверяется" }[i.verdict],
         снимок_ближайшей_даты: i.scene ? { дата: i.scene, ndvi: i.ndvi } : null }))),
-      нельзя_пасти: S.D.nograze && S.D.nograze.status === "ok" ? { источник: "OpenStreetMap: жильё, населённые пункты, фермы, промзоны", буфер_м: S.ngBuf,
+      нельзя_пасти: S.D.nograze && S.D.nograze.status === "ok" ? { источник: "OpenStreetMap: жильё, населённые пункты, фермы, промзоны, сады, дачи, парки и поля", буфер_м: S.ngBuf,
         вычтено_из_пастбищ_га: Math.round(S.plots.reduce((s, p) => s + (p.nograze_ha || 0), 0)), зон: S.D.nograze.counts } : "не посчитано",
+      не_пастбище_по_спутнику: { трава_среди_застройки_га: S.D.plots.reduce((s, p) => s + (p.urban_ha || 0), 0), пятна_меньше_5_га: S.D.plots.reduce((s, p) => s + (p.patch_ha || 0), 0), пастбищ_вокруг_почти_нет: pastureShare().low || undefined },
       участки: S.plots.map(p => ({ id: p.id, кольцо: p.ring === "near" ? "ближний" : "дальний", км_от_села: p.dist_km, направление: p.dir,
         нельзя_пасти_га_osm: p.nograze_ha != null ? p.nograze_ha : undefined,
         пастбищный_покров_га_спутник: p.pasture_ha_gross ?? p.pasture_ha, кормовая_площадь_га: p.pasture_ha, ndvi_спутник: p.ndvi, трава_за_лето_проц: (p.series || []).length >= 2 ? Math.round((p.series[p.series.length - 1].v - p.series[0].v) / p.series[0].v * 100) : null,
@@ -2520,7 +2581,8 @@
       L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 17 }).addTo(heroMap);
       const smooth = PL.makePlots(DEFAULT.village.lat, DEFAULT.village.lon, 48);
       const g = L.featureGroup().addTo(heroMap);
-      smooth.forEach(p => L.polygon(p.geometry.coordinates[0].map(([x, y]) => [y, x]), { color: "#ffffff", weight: 1.2, opacity: .85, fillColor: loadColor(pl.load[p.id].load), fillOpacity: 0.42, interactive: false }).addTo(g));
+      smooth.forEach(p => L.polygon(p.geometry.coordinates[0].map(([x, y]) => [y, x]), { color: "#ffffff", weight: 1.2, opacity: .85, fillColor: loadColor(pl.load[p.id].load), fillOpacity: 0, interactive: false }).addTo(g));
+      pastureMask(EXAMPLES[0].png).then(m => { const [w, s, e, n] = DEFAULT.bbox; if (m) L.imageOverlay(pixelImage(DEFAULT, m, plots, S.ngBuf, p => loadColor(pl.load[p.id].load)), [[s, w], [n, e]], { interactive: false }).addTo(heroMap); });
       setTimeout(() => { heroMap.invalidateSize(); heroMap.fitBounds(g.getBounds(), { padding: [20, 20] }); }, 60);
     } else if (!window.L) {
       $("#heroScheme").hidden = false;
