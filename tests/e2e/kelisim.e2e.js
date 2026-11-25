@@ -70,6 +70,15 @@ async function flow(b, name) {
   await org.click("#kelRows .krow:nth-child(3) summary");
   await org.uncheck("#kelRows .krow:nth-child(3) [data-f=daily]");
   await org.fill("#kelRows .krow:nth-child(3) [data-h=sheep]", "9000");          // корма не хватит: возражения заденут соседей
+  // участник — хозяйство или общее стадо; сколько хозяев спрашиваем только у общего стада
+  const row1 = "#kelRows .krow:nth-child(1) ";
+  assert.equal(await org.inputValue(row1 + "[data-f=owners]"), "8");
+  await org.click(row1 + ".chip:has([data-k=farm])");
+  assert.equal(await org.isVisible(row1 + "[data-f=owners]"), false);
+  assert.match(await org.innerText(row1 + "summary"), /Хозяйство\. Скот: внесёт сам/);
+  await org.click(row1 + ".chip:has([data-k=common])");
+  await org.fill(row1 + "[data-f=owners]", "12");
+  assert.equal(await org.$eval("#kelSeason", e => e.options.length), 2);
   await check(org, "орг новое");
   await org.click("#kelCreate");
   await org.waitForSelector("#kStart");
@@ -100,7 +109,7 @@ async function flow(b, name) {
   await d1.waitForSelector(".kdone");
   await org.reload();
   await org.waitForSelector("#kStart");
-  assert.match(await org.innerText(".kyard:nth-of-type(1)"), /700[\s\S]*заявил двор/);
+  assert.match(await org.innerText(".kyard:nth-of-type(1)"), /отвечает пастух[\s\S]*700[\s\S]*внёс участник/);
   await org.click(".kyard:nth-of-type(1) [data-conf]");
   await org.waitForFunction(() => /подтвердил организатор/.test(document.querySelector(".kyard").innerText));
   // 4. план
@@ -112,6 +121,9 @@ async function flow(b, name) {
   await d1.reload();
   await d1.waitForSelector("#kelAgree");
   assert.match(await d1.innerText(".kroute"), /\d\d\.\d\d – \d\d\.\d\d/);
+  assert.match(await d1.innerText(".khead"), /сезон 20\d\d \(01\.05–/);
+  assert.match(await d1.innerText("#kelPage"), /Общее стадо, хозяев: 12, отвечает пастух[\s\S]*Трава взята по снимкам 2026 года/);
+  assert.match(await d1.innerText(".kfeed"), /Не хватает примерно [\d ,]+ т сена/);
   await check(d1, "двор план");
   await d1.click("#kelAgree");
   await d1.waitForSelector("#kelAns .kdone");
@@ -223,7 +235,7 @@ async function flow(b, name) {
   assert.match(await org.innerText(".kcount"), /Согласны 3 из 3/);
   await org.click("#kClose"); await org.click("#kClose");
   await org.waitForSelector("#kelPdf");
-  assert.match(await org.innerText("#kelPage"), /Все дворы согласны/);
+  assert.match(await org.innerText("#kelPage"), /Все участники согласны/);
   const [dl] = await Promise.all([org.waitForEvent("download", { timeout: 60000 }), org.click("#kelPdf")]);
   assert.match(dl.suggestedFilename(), /^jaiylym-kelisim-.+\.pdf$/);
   const file = await dl.path();
@@ -252,7 +264,7 @@ async function flow(b, name) {
   await o2.waitForSelector(".kyard");
   await check(o2, "орг телефон");
   await o2.click('.langsw [data-lang="kk"]');
-  await o2.waitForFunction(() => /Аулалар/.test(document.querySelector("#kelPage").innerText));
+  await o2.waitForFunction(() => /Қатысушылар/.test(document.querySelector("#kelPage").innerText));
   await check(o2, "орг телефон kk");
   await o2.goto(base + "/#/kelisim");
   await o2.waitForSelector(".ksteps");
@@ -316,7 +328,7 @@ async function organizer(b, name) {
   await org.fill("#kSet [name=deadline]", "2099-06-01");
   await org.click("#kSet button");
   await org.waitForFunction(() => /01\.06\.2099/.test(document.querySelector(".khead").innerText));
-  assert.match(await org.innerText("#kelPage"), /Дворы заявили больше/);
+  assert.match(await org.innerText("#kelPage"), /Участники внесли больше/);
   // файл → удалить → восстановить
   const url = org.url();
   const [dl] = await Promise.all([org.waitForEvent("download"), org.click("#kExp")]);

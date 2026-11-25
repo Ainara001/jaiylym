@@ -1,5 +1,6 @@
 /*
- * JAIYLYM Келісім — согласование пастбищ между дворами: расчётная часть (браузер и Node, без сети).
+ * JAIYLYM Келісім — согласование пастбищ: расчётная часть (браузер и Node, без сети).
+ * Участник (в коде — household, «двор») — хозяйство или общее стадо нескольких хозяев; отвечает хозяин или пастух.
  *
  * Двор возражает («этот участок не подходит», «хочу другой», «у меня больше скота») — считаем, что будет со всеми остальными:
  *  - equal:   потерю делят все по правилу справедливости (честный пересчёт max-min);
@@ -16,8 +17,9 @@
 
   const REASONS = ["no_grass", "weeds", "no_water", "far", "no_rights", "crowded", "other"];
   const TYPES = ["avoid", "prefer", "swap", "herd", "clear", "other"];
-  const RULES = ["share", "household"];          // share — всем одинаковая доля потребности; household — всем дворам поровну корма
+  const RULES = ["share", "household"];          // share — всем одинаковая доля потребности; household — всем хозяевам поровну корма
   const WEIGHTS = [1, 1.5, 2];
+  const KINDS = ["farm", "common"], RESP = ["owner", "herder"];
   const SPECIES = ["sheep", "goats", "cattle", "horses"];
   const TOL = 0.01;                              // 1 п. п. доли: меньше — погрешность календаря, а не потеря
   const REL = 0.05;                              // у кого корма и так мало, для того потеря — уже 5 % его корма
@@ -31,6 +33,19 @@
   const r4 = x => +(+x).toFixed(4), r1 = x => +(+x).toFixed(1);
   const active = k => k.households.filter(h => !h.removed);
   const plotIds = k => k.snapshot.plots.map(p => p.id);
+  /** Сколько хозяев стоит за участником: у хозяйства один, у общего стада — сколько указали. */
+  const ownersOf = h => (h.kind === "common" && h.owners > 1 ? h.owners : 1);
+  /** Сезон, о котором договариваются: текущий, а после его конца — следующий год. */
+  function defaultSeason(ms, P0) {
+    const P = J.params(P0 || null), y = new Date(ms).getUTCFullYear(), end = Date.parse(`${y}-${P.season_start}T00:00:00Z`) + P.season_days * 864e5;
+    return ms >= end ? y + 1 : y;
+  }
+  const seasonOf = k => k.season || defaultSeason(Date.parse(k.created), k.snapshot.params);
+  /** Сколько тонн сена не хватает участнику до конца сезона (весь непокрытый корм, в сене). */
+  function hayOf(k, plan, id) {
+    const P = J.params(k.snapshot.params || null);
+    return plan && plan.need[id] != null ? r1(J.hayTonnes(Math.max(0, plan.need[id] - plan.feed[id]) * P.intake, P)) : 0;
+  }
 
   // ---------- двор → стадо движка ----------
   /** Участки, где двору можно пасти: разрешённые (если заданы) без тех, от которых он отказался. [] — нигде. */
@@ -47,8 +62,8 @@
   function options(k, list, extra) {
     const P = params(k), opts = Object.assign({ algorithm: "optimized" }, extra);
     if (k.rule === "household") {
-      // всем дворам поровну корма: доля растёт обратно потребности, пока двор не насытится
-      const d = list.map(h => J.herdAU(herdOf(k, h), P)), lo = Math.min(...d.filter(x => x > 0), Infinity);
+      // всем хозяевам поровну корма: доля растёт обратно потребности (у общего стада — на одного хозяина), пока не насытится
+      const d = list.map(h => J.herdAU(herdOf(k, h), P) / ownersOf(h)), lo = Math.min(...d.filter(x => x > 0), Infinity);
       opts.weights = Object.fromEntries(list.map((h, i) => [h.id, d[i] > 0 ? lo / d[i] : 1]));
     }
     for (const key of ["prefer", "prefer_soft"]) {
@@ -289,9 +304,9 @@
     const now = k.plan;
     return {
       title: k.title, village: k.village, created: k.created, closed: k.closed || null, version: k.version, versions: (k.versions || []).length,
-      rule: k.rule, outcome: !k.version ? "not_started" : st.agree.length === list.length ? "agreed" : st.object.length ? "disagreed" : "unanswered",
+      season: seasonOf(k), rule: k.rule, outcome: !k.version ? "not_started" : st.agree.length === list.length ? "agreed" : st.object.length ? "disagreed" : "unanswered",
       counts: { total: list.length, agree: st.agree.length, object: st.object.length, pending: st.pending.length },
-      households: list.map(h => ({ id: h.id, name: h.name, herd: h.herd, herd_status: h.herd_status, weight: h.weight || 1, daily_return: !!h.daily_return,
+      households: list.map(h => ({ id: h.id, name: h.name, kind: h.kind || "farm", owners: h.owners || null, resp: h.resp || "owner", hay_t: hayOf(k, now, h.id), herd: h.herd, herd_status: h.herd_status, weight: h.weight || 1, daily_return: !!h.daily_return,
         share: now ? now.share[h.id] : null, days: now ? now.days[h.id] : null, route: now ? now.routes[h.id] : [], answer: answerState(k, h),
         answered_at: h.answer && h.answer.version === k.version ? h.answer.at : null, carried: !!(h.answer && h.answer.version === k.version && h.answer.carried) })),
       decisions: (k.proposals || []).map(p => ({ id: p.id, household: p.household, type: p.type, plot: p.plot || null, to: p.to || null, herd: p.herd || null, reason: p.reason || null, observed_on: p.observed_on || null,
@@ -304,6 +319,6 @@
     };
   }
 
-  return { REASONS, TYPES, RULES, WEIGHTS, SPECIES, TOL, SHIFT_DAYS, active, herdOf, allowedOf, solve, compare, routeChanged, plotsOf, applyProposal, candidates, effect, needsChoice, mustReconfirm,
+  return { REASONS, TYPES, RULES, WEIGHTS, KINDS, RESP, SPECIES, ownersOf, defaultSeason, seasonOf, hayOf, TOL, SHIFT_DAYS, active, herdOf, allowedOf, solve, compare, routeChanged, plotsOf, applyProposal, candidates, effect, needsChoice, mustReconfirm,
     why, herdTotals, herdCheck, answerState, protocol, withHousehold, OBS, observations, compareObs, plotObs, obsOf };
 });
