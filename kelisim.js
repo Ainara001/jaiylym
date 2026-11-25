@@ -319,6 +319,88 @@
     };
   }
 
-  return { REASONS, TYPES, RULES, WEIGHTS, KINDS, RESP, SPECIES, ownersOf, defaultSeason, seasonOf, hayOf, TOL, SHIFT_DAYS, active, herdOf, allowedOf, solve, compare, routeChanged, plotsOf, applyProposal, candidates, effect, needsChoice, mustReconfirm,
+  // ---------- места на общей карте: участник ставит кружок «хочу пасти здесь» ----------
+  const PIN_DIRS = ["С", "СВ", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ"];
+  const PIN_R = [250, 500, 1000];                 // радиус кружка, м
+  /** Где точка относительно села: расстояние, направление и участок (кольца 0,5–3 и 3–8 км, как в pipeline.makePlots). */
+  function pinPlace(village, lat, lon) {
+    const kx = 111.32 * Math.cos(village.lat * Math.PI / 180), ky = 110.57;
+    const dx = (lon - village.lon) * kx, dy = (lat - village.lat) * ky, d = Math.hypot(dx, dy);
+    let a = Math.atan2(dx, dy) * 180 / Math.PI; if (a < 0) a += 360;
+    const dir = PIN_DIRS[Math.round(a / 45) % 8];
+    const ring = d < 0.5 ? "village" : d <= 3 ? "near" : d <= 8 ? "far" : "outside";
+    return { dist_km: r1(d), bearing: Math.round(a), ring, plot: ring === "near" ? "Б-" + dir : ring === "far" ? "Д-" + dir : null };
+  }
+  const median = xs => { const a = xs.slice().sort((x, y) => x - y), m = a.length >> 1; return a.length ? (a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2) : null; };
+  /**
+   * Насколько хорошо место: факты расчёта (трава, вода, ёмкость, кто ещё здесь, нагрузка по плану, путь) → плюсы, минусы и вывод.
+   * pins — все места согласования [{ hid, lat, lon }]. Только числа движка и снимка; своих оценок нет.
+   * Вывод: bad — пасти нельзя или это не пастбище; poor — 2+ серьёзных минуса; mixed — 1; good — серьёзных минусов нет.
+   */
+  function pinFacts(k, hid, pin, pins) {
+    const P = J.params(k.snapshot.params || null), sheep = au => Math.round(au / P.au.sheep);
+    const place = pinPlace(k.village, pin.lat, pin.lon), pros = [], cons = [], info = [];
+    const h = active(k).find(x => x.id === hid), mine = h ? J.herdAU(herdOf(k, h), P) : 0;
+    const facts = { plot: place.plot, ring: place.ring, dist_km: place.dist_km, my_sheep: sheep(mine) };
+    const out = v => ({ facts, pros, cons, info, verdict: v });
+    if (!place.plot) { cons.push({ k: place.ring }); return out(place.ring === "village" ? "bad" : "unknown"); }
+    const p = k.snapshot.plots.find(x => x.id === place.plot);
+    if (!p) { cons.push({ k: "outside" }); return out("unknown"); }
+    let major = 0;
+    if (p.forbidden) { cons.push({ k: "forbidden" }); return out("bad"); }
+    if (h && (h.allowed || []).length && !h.allowed.includes(p.id)) { cons.push({ k: "notAllowed" }); major++; }
+    // трава
+    const m = median(k.snapshot.plots.filter(x => x.ndvi != null && !x.forbidden).map(x => x.ndvi));
+    facts.ndvi = p.ndvi; facts.ndvi_village = m == null ? null : +m.toFixed(3);
+    if (p.ndvi == null) { cons.push({ k: "noNdvi" }); major++; }
+    else if (m != null && p.ndvi >= m + 0.03) pros.push({ k: "grassHi", v: p.ndvi, m: +m.toFixed(3) });
+    else if (m != null && p.ndvi <= m - 0.03) { cons.push({ k: "grassLo", v: p.ndvi, m: +m.toFixed(3) }); major++; }
+    else info.push({ k: "grassMid", v: p.ndvi });
+    // ёмкость: хватит ли одному и всем, кто отметил этот же участок
+    const c = J.plotCapacity(p, P), cap = c.known ? c.au_season : null;
+    const others = (pins || []).filter(o => o.hid !== hid && pinPlace(k.village, o.lat, o.lon).plot === p.id)
+      .map(o => { const hh = active(k).find(x => x.id === o.hid); return { id: o.hid, name: hh ? hh.name : "", au: hh ? J.herdAU(herdOf(k, hh), P) : 0 }; });
+    facts.cap_sheep = cap == null ? null : sheep(cap);
+    facts.others = others.map(o => o.name);
+    if (cap != null && mine > 0) {
+      if (mine <= cap) pros.push({ k: "fits", cap: sheep(cap), mine: sheep(mine) });
+      else { cons.push({ k: "small", cap: sheep(cap), mine: sheep(mine) }); major++; }
+    }
+    if (others.length) {
+      const need = mine + others.reduce((s, o) => s + o.au, 0);
+      if (cap != null && need > cap) { cons.push({ k: "crowd", names: others.map(o => o.name), need: sheep(need), cap: sheep(cap) }); major++; }
+      else info.push({ k: "shared", names: others.map(o => o.name) });
+    }
+    // нагрузка по действующему плану
+    if (k.plan && k.plan.load && k.plan.load[p.id] != null) {
+      const l = k.plan.load[p.id]; facts.plan_load = +l.toFixed(2);
+      if (l > 1.001) { cons.push({ k: "planOver", p: Math.round(l * 100) }); major++; }
+      else if (l < 0.005) pros.push({ k: "planFree" });
+      else if (l < 0.7) pros.push({ k: "planRoom", p: Math.round(l * 100) });
+    }
+    // вода
+    facts.water = p.water_status || "unknown";
+    if (p.water_status === "confirmed") pros.push({ k: "waterOk" });
+    else if (p.water_status === "satellite") pros.push({ k: "waterSat" });
+    else if (p.water_status === "assumed") info.push({ k: "waterVillage" });
+    else { cons.push({ k: "waterNo" }); major++; }
+    // путь
+    if (place.ring === "far" && h && h.daily_return) { cons.push({ k: "dairyFar", d: place.dist_km }); major++; }
+    else if (place.ring === "near") pros.push({ k: "near", d: place.dist_km });
+    else info.push({ k: "far", d: place.dist_km });
+    if (p.nograze_ha > 0) info.push({ k: "nograze", ha: Math.round(p.nograze_ha) });
+    // где ещё свободно: участки с водой и запасом ёмкости после всех отмеченных мест (подсказка «есть ли лучше»)
+    const taken = {};
+    for (const o of pins || []) { const pl = pinPlace(k.village, o.lat, o.lon).plot; const hh = active(k).find(x => x.id === o.hid); if (pl && hh) taken[pl] = (taken[pl] || 0) + J.herdAU(herdOf(k, hh), P); }
+    facts.alternatives = k.snapshot.plots
+      .filter(x => x.id !== p.id && !x.forbidden && x.ndvi != null && ["confirmed", "satellite", "assumed"].includes(x.water_status) && !(h && h.daily_return && x.id.startsWith("Д")))
+      .map(x => { const cx = J.plotCapacity(x, P); return { id: x.id, free: cx.known ? sheep(cx.au_season - (taken[x.id] || 0)) : null, ndvi: x.ndvi }; })
+      .filter(x => x.free != null && x.free > 0)
+      .map(x => Object.assign(x, { fits: x.free >= sheep(mine) }))
+      .sort((a, b) => (b.fits - a.fits) || (b.free - a.free)).slice(0, 3);
+    return out(major === 0 ? "good" : major === 1 ? "mixed" : "poor");
+  }
+
+  return { REASONS, TYPES, RULES, WEIGHTS, KINDS, RESP, SPECIES, PIN_R, pinPlace, pinFacts, ownersOf, defaultSeason, seasonOf, hayOf, TOL, SHIFT_DAYS, active, herdOf, allowedOf, solve, compare, routeChanged, plotsOf, applyProposal, candidates, effect, needsChoice, mustReconfirm,
     why, herdTotals, herdCheck, answerState, protocol, withHousehold, OBS, observations, compareObs, plotObs, obsOf };
 });
