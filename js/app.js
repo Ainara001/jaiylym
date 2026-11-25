@@ -558,6 +558,8 @@
   }
 
   async function openVillage(name, lat, lon, opts = {}) {
+    lat = +lat; lon = +lon;
+    if (!(Math.abs(lat) <= 85 && Math.abs(lon) <= 180)) { showStart(t("err.coords")); return; }      // испорченная ссылка
     const key = cacheKey(lat, lon);
     S.loadingKey = key;
     $$(".results").forEach(u => { u.hidden = true; });
@@ -1760,7 +1762,7 @@
   const errText = e => (e && e.message === "offline" ? t("err.offline") : e && e.message === "network" ? t("err.server") : (e && e.message) || t("err.server"));
   const when = s => dateStr(s);
   const kindLabel = k => t("hist." + k) === "hist." + k ? k : t("hist." + k);
-  const sumLine = s => (s ? `${t("kpi.overloaded")}: ${s.overloaded_before} → ${s.overloaded_after}; ${t("kpi.excess")}: ${fmt(s.excess_t || 0)} → ${fmt(s.deficit_t || 0)}` : "");
+  const sumLine = s => (s ? `${t("kpi.overloaded")}: ${fmt(+s.overloaded_before || 0)} → ${fmt(+s.overloaded_after || 0)}; ${t("kpi.excess")}: ${fmt(+s.excess_t || 0)} → ${fmt(+s.deficit_t || 0)}` : "");
 
   async function renderScenarios() {
     const el = $("#scPage");
