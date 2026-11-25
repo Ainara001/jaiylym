@@ -10,24 +10,41 @@ const tls = require("tls");
 
 const KEY = "jaiylym:state";
 
-function redisClient(url) {
+function redisClient(url, { timeoutMs = 10000 } = {}) {
   const u = new URL(url);
-  let sock = null, buf = Buffer.alloc(0), queue = [], ready = null;
+  let cur = null;                                  // текущее соединение: { sock, buf, queue, ready }
 
+  // Всё состояние — внутри соединения: после обрыва недочитанный ответ и события старого сокета не попадают в новое,
+  // иначе ответы сдвинулись бы на чужие запросы.
   function connect() {
-    if (ready) return ready;
-    ready = new Promise((resolve, reject) => {
-      const opts = { host: u.hostname, port: +u.port || 6379 };
-      sock = u.protocol === "rediss:" ? tls.connect(opts, resolve) : net.connect(opts, resolve);
-      sock.on("data", d => { buf = Buffer.concat([buf, d]); drain(); });
-      const fail = e => { ready = null; sock = null; queue.splice(0).forEach(q => q.reject(e || new Error("Redis закрыл соединение"))); reject(e); };
-      sock.on("error", fail);
-      sock.on("close", () => fail());
-    }).then(async () => {
-      if (u.password) await send(u.username ? ["AUTH", decodeURIComponent(u.username), decodeURIComponent(u.password)] : ["AUTH", decodeURIComponent(u.password)], true);
+    if (cur) return cur;
+    const c = { buf: Buffer.alloc(0), queue: [], dead: false };
+    cur = c;
+    const opts = { host: u.hostname, port: +u.port || 6379 };
+    const open = new Promise((resolve, reject) => {
+      c.fail = e => {
+        if (c.dead) return;
+        c.dead = true;
+        if (cur === c) cur = null;
+        const err = e || new Error("Redis закрыл соединение");
+        c.queue.splice(0).forEach(q => { clearTimeout(q.timer); q.reject(err); });
+        reject(err);
+        c.sock.destroy();
+      };
+      c.sock = u.protocol === "rediss:" ? tls.connect(opts, resolve) : net.connect(opts, resolve);
+      c.sock.setKeepAlive(true, 30000);
+      c.sock.on("data", d => { if (c.dead) return; c.buf = Buffer.concat([c.buf, d]); try { drain(c); } catch (e) { c.fail(e); } });
+      c.sock.on("error", c.fail);
+      c.sock.on("close", () => c.fail());
+      const t = setTimeout(() => c.fail(new Error("Redis не ответил при подключении")), timeoutMs);
+      const off = () => clearTimeout(t);
+      c.sock.once("connect", off); c.sock.once("close", off);
     });
-    ready.catch(() => {});
-    return ready;
+    c.ready = open.then(async () => {
+      if (u.password) await command(c, u.username ? ["AUTH", decodeURIComponent(u.username), decodeURIComponent(u.password)] : ["AUTH", decodeURIComponent(u.password)]);
+    });
+    c.ready.catch(e => c.fail(e));                 // не прошла авторизация — следующий запрос подключится заново
+    return c;
   }
 
   // разбор одного ответа RESP; возвращает [значение, длина] или null, если данных пока мало
@@ -47,32 +64,36 @@ function redisClient(url) {
     throw new Error("Неожиданный ответ Redis: " + type);
   }
 
-  function drain() {
+  function drain(c) {
     for (;;) {
-      if (!queue.length) return;
-      const r = parse(buf);
+      if (!c.queue.length) return;
+      const r = parse(c.buf);
       if (!r) return;
-      buf = buf.subarray(r[1]);
-      const q = queue.shift();
+      c.buf = c.buf.subarray(r[1]);
+      const q = c.queue.shift();
+      clearTimeout(q.timer);
       r[0] instanceof Error ? q.reject(r[0]) : q.resolve(r[0]);
     }
   }
 
-  function send(args, raw) {
-    const go = () => new Promise((resolve, reject) => {
+  function command(c, args) {
+    return new Promise((resolve, reject) => {
+      if (c.dead) return reject(new Error("Redis закрыл соединение"));
       const parts = args.map(a => Buffer.from(String(a), "utf8"));
-      const head = `*${parts.length}\r\n`;
       const body = parts.map(p => Buffer.concat([Buffer.from(`$${p.length}\r\n`), p, Buffer.from("\r\n")]));
-      queue.push({ resolve, reject });
-      sock.write(Buffer.concat([Buffer.from(head), ...body]));
+      // молчащее соединение (ответа нет) — закрываем: очередь ответов больше не сопоставить с запросами
+      const timer = setTimeout(() => c.fail(new Error("Redis не ответил вовремя")), timeoutMs);
+      c.queue.push({ resolve, reject, timer });
+      c.sock.write(Buffer.concat([Buffer.from(`*${parts.length}\r\n`), ...body]));
     });
-    return raw ? go() : connect().then(go);
   }
+  const send = args => { const c = connect(); return c.ready.then(() => command(c, args)); };
 
   return {
     get: k => send(["GET", k]),
     set: (k, v, ttlSec) => send(ttlSec ? ["SET", k, v, "EX", Math.ceil(ttlSec)] : ["SET", k, v]),
     del: k => send(["DEL", k]),
+    close: () => { if (cur) cur.sock.destroy(); },
   };
 }
 
@@ -95,8 +116,9 @@ function createStore() {
   const file = process.env.BOT_STATE_FILE || require("path").join(__dirname, "bot_state.json");
   return {
     kind: "файл bot_state.json",
-    load: async () => { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch (_) { return null; } },
-    save: async obj => { fs.writeFileSync(file, JSON.stringify(obj)); },
+    // файла нет — начинаем с нуля; файл есть, но не читается — ошибка, иначе первая запись стёрла бы данные
+    load: async () => { let x; try { x = fs.readFileSync(file, "utf8"); } catch (e) { if (e.code === "ENOENT") return null; throw e; } return JSON.parse(x); },
+    save: async obj => { fs.writeFileSync(file + ".tmp", JSON.stringify(obj)); fs.renameSync(file + ".tmp", file); },
     kv: memoryKv(),   // на своём компьютере сессии живут до перезапуска
   };
 }

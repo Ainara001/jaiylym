@@ -118,6 +118,13 @@ async function newcomer(page, label) {
   await App(() => { const s = window.JaiylymApp.S; s.keep = s.D.plots.map(p => p.pasture_ha); s.D.plots.forEach(p => { p.area_ha = p.area_ha || 1000; p.pasture_ha = 1; }); window.JaiylymApp.rebuildPlots(); window.JaiylymApp.render(); window.JaiylymApp.renderPane("brief"); });
   assert.match(await page.textContent("#cityNote"), /почти нет пастбищ/);
   await App(() => { const s = window.JaiylymApp.S; s.D.plots.forEach((p, i) => { p.pasture_ha = s.keep[i]; }); window.JaiylymApp.rebuildPlots(); window.JaiylymApp.render(); });
+  // чужие стада из Telegram: в расчёт — только по кнопке, и так же убираются
+  await App(() => { const s = window.JaiylymApp.S; s.herds = [{ id: "a", name: "Тест", home: "Б-С", sheep: 10 }]; s.botHerds = [{ id: "tg1", name: "Из Telegram 1", from_bot: true, sheep: 20000, goats: 0, cattle: 0, horses: 0, home: "Б-С" }]; s.useBot = false; window.JaiylymApp.render(); window.JaiylymApp.renderPane("herds"); });
+  const hn = () => App(() => window.JaiylymApp.S.herds.length);
+  assert.match(await page.textContent("#botHerds"), /Их никто не проверял/); assert.equal(await hn(), 1);
+  await App(() => document.querySelector("#botToggle").click()); assert.equal(await hn(), 2);
+  await App(() => { window.JaiylymApp.renderPane("herds"); document.querySelector("#botToggle").click(); }); assert.equal(await hn(), 1, label + ": убирается");
+  await App(() => { const s = window.JaiylymApp.S; s.botHerds = []; s.herds = []; window.JaiylymApp.render(); window.JaiylymApp.renderPane("brief"); });
   // водопои: рейтинг по дефициту; без дефицита — честно «корма не добавит»
   await App(() => window.JaiylymApp.renderPane("water"));
   const wp = () => page.textContent('.pane[data-pane="water"]');
