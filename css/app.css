@@ -295,10 +295,12 @@ details[open] > summary::before { content: "–"; }
 .formgrid .span4 { grid-column: 1 / -1; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; font-size: 13.5px; cursor: pointer; background: #fff; user-select: none; }
-.chip input { position: absolute; opacity: 0; pointer-events: none; }
+.chip { position: relative; }
+.chip input { position: absolute; left: 0; width: 1px; height: 1px; min-height: 0; padding: 0; opacity: 0; pointer-events: none; }
 .chip:has(input:checked) { background: var(--primary); color: #fff; border-color: var(--primary); }
 .chip:has(input:focus-visible) { outline: 3px solid #e3b25c; outline-offset: 2px; }
 .who { display: flex; gap: 16px; align-items: center; }
+.who > div:last-child, .who h2, .kv dd { min-width: 0; overflow-wrap: anywhere; }
 .avatar { width: 56px; height: 56px; border-radius: 16px; background: var(--primary); color: #fff; display: grid; place-items: center; font-size: 22px; font-weight: 800; flex: none; }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 14px; margin-top: 12px; }
 .kv dt { color: var(--muted); }
@@ -820,6 +822,7 @@ main .btn.kbig { min-height: 52px; }
 #kelPage details > summary::before, .kel-dlg details > summary::before { flex: none; }
 #kelPage .field, .kel-dlg .field { font-size: 13.5px; color: var(--ink-2); }
 #kelPage .field textarea { width: 100%; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; font: inherit; font-size: 16px; resize: vertical; }
+.btn.btn-danger-on { background: var(--danger, #a33422); color: #fff; border-color: transparent; }
 .kf { margin: 12px 0; }
 .kwho { margin: 12px 0; }
 .kwho-f { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 12px; align-items: end; }

@@ -94,6 +94,29 @@
     ? `p_${coord(S.D.village.lat)}_${coord(S.D.village.lon)}_${PL.plotCode(plotId)}`
     : `v_${coord(S.D.village.lat)}_${coord(S.D.village.lon)}`) : "");
 
+  /**
+   * Опасное действие — вторым нажатием. Второе нажатие раньше 0,7 с не считается (случайный двойной тап), через 5 с кнопка
+   * возвращается в исходный вид; пока действие выполняется, кнопка не нажимается.
+   */
+  function armBtn(b, text, fn) {
+    if (!b) return;
+    const was = b.innerHTML;
+    let at = 0, timer = null;
+    const reset = () => { at = 0; clearTimeout(timer); if (b.isConnected) { b.innerHTML = was; b.classList.remove("btn-danger-on"); } };
+    b.onclick = async () => {
+      const now = Date.now();
+      if (!at) { at = now; b.textContent = text; b.classList.add("btn-danger-on"); timer = setTimeout(reset, 5000); return; }
+      if (now - at < 700) return;
+      clearTimeout(timer); b.disabled = true;
+      try { await fn(b); } finally { if (b.isConnected) { b.disabled = false; reset(); } }
+    };
+  }
+  /** Пока идёт запрос, кнопка не нажимается второй раз. */
+  async function once(b, fn) {
+    if (b.dataset.busy) return;
+    b.dataset.busy = "1"; b.disabled = true; b.setAttribute("aria-busy", "true");
+    try { return await fn(); } finally { delete b.dataset.busy; b.disabled = false; b.removeAttribute("aria-busy"); }
+  }
   async function askText(title, value, num) {
     return new Promise(resolve => {
       const d = document.createElement("dialog");
@@ -471,12 +494,17 @@
   }
   async function finishDraw() {
     if (!S.draw || S.draw.pts.length < 3) { toast(t("past.need3"), true); return; }
-    const ring = S.draw.pts.map(p => [+p.lng.toFixed(6), +p.lat.toFixed(6)]);
+    const ring = S.draw.pts.map(p => [+p.lng.toFixed(6), +p.lat.toFixed(6)]), closed = PL.closeRing(ring);
+    // ошибка контура — рисование продолжается: лишние точки можно убрать, а не рисовать всё заново
+    if (PL.ringSelfIntersects(closed)) { toast(t("past.cross"), true); return; }
+    if (PL.polygonAreaHa(closed) < 1) { toast(t("past.tiny"), true); return; }
     if (S.draw.zone) {                         // граница пастбища села: снимки заново не нужны, доли считаются по карте травы
       endDraw();
       const old = S.zone && S.zone.mode === "contour" ? S.zone.rings : [];
       if (old.length >= Z.MAX_RINGS) { toast(t("zn.many"), true); return; }
+      const was = S.zone;
       await setZone(Z.clean({ mode: "contour", rings: old.concat([ring]) }));
+      if (zoneHa() < 1) { await setZone(was || { mode: "all" }); toast(t("zn.noGrass"), true); return; }      // внутри только жильё, поля или вода
       toast(zoneText());
       const zc = $("#zoneCard"); if (zc && phone()) zc.scrollIntoView({ block: "center" });
       return;
@@ -517,8 +545,8 @@
         close(); openLogin();
         return;
       }
-      await savePasture({ ring, st, name: $("#pName", d).value, water: $("#pWater", d).checked });
-      close();
+      // не сохранилось — окно с контуром остаётся, рисовать заново не нужно
+      await once($("#pSave", d), async () => { if (await savePasture({ ring, st, name: $("#pName", d).value, water: $("#pWater", d).checked })) close(); });
     };
     d.showModal();
   }
@@ -529,7 +557,8 @@
           wc_pasture_share: st.wc_pasture_share, valid_fraction: st.valid_fraction, water_on_map: st.water_on_map, year: st.year } });
       toast(t("past.saved"));
       drawPastures();
-    } catch (e) { toast(errText(e), true); }
+      return true;
+    } catch (e) { toast(errText(e), true); return false; }
   }
 
   // ---------- выбор села ----------
@@ -563,13 +592,14 @@
     const key = cacheKey(lat, lon);
     S.loadingKey = key;
     $$(".results").forEach(u => { u.hidden = true; });
-    let data = null, png = null;
+    let data = null, png = null, old = null;
     const ex = exampleAt(lat, lon);
     S.building = null;
     if (ex) { data = JSON.parse(JSON.stringify(ex.data)); png = ex.png; }
     else {
       const hit = C.ls.get(key, null);
       if (hit && hit.plots && (hit.land_rule === PL.LAND_RULE || !navigator.onLine)) { data = hit; png = hit.png; delete data.png; data.village.name = name || data.village.name; }
+      else if (hit && hit.plots) old = hit;
     }
     if (!data) {
       if (!navigator.onLine) { status(t("err.offline"), { err: true }); if (!S.D) showStart(t("err.offline")); return; }
@@ -588,13 +618,16 @@
         data = res; S.justBuilt = true;
         C.ls.set(key, Object.assign({}, res, { png }));
       } catch (e) {
-        if (S.loadingKey === key) {
+        if (S.loadingKey === key && old) {                    // пересчёт не удался — показываем сохранённый расчёт, а не ошибку
+          data = old; png = old.png; delete data.png; data.village.name = name || data.village.name;
+          toast(t("err.oldCalc"), true);
+        } else if (S.loadingKey === key) {
           S.building = null;
           const msg = t("err.build") + ": " + (/fetch|network|load failed|timeout|timed out/i.test(e.message) ? t("err.imagery") : e.message);
           status("");
           showStart(msg, { name, lat, lon, opts });
         }
-        return;
+        if (!data) return;
       }
     }
     // граница пастбища — до показа села: иначе на миг показали бы чужую землю
@@ -660,6 +693,13 @@
     S.zoneLayer = L.layerGroup().addTo(S.map);
     for (const r of S.zone.rings) L.polygon(r.map(([x, y]) => [y, x]), { color: "#ffffff", weight: 4, fill: false, interactive: false }).addTo(S.zoneLayer), L.polygon(r.map(([x, y]) => [y, x]), { color: "#1e4634", weight: 2.5, fill: false, interactive: false }).addTo(S.zoneLayer);
   }
+  const seasonStart = () => String(S.P.season_start || "05-01").split("-").reverse().join(".");
+  /** Сезон из плана района отличается от принятого в расчёте — сказать и дать посчитать по нему. */
+  function seasonNote(of) {
+    const x = of && of.season;
+    if (!x || S.P.season_days === x.days) return "";
+    return `<p class="fine">${t("zn.season", { a: x.from.split("-").reverse().join("."), b: x.to.split("-").reverse().join("."), d: x.days, n: S.P.season_days })} <button type="button" class="linkbtn" data-zn="season">${t("zn.seasonGo", { d: x.days })}</button></p>`;
+  }
   const zoneHa = () => S.plots.filter(p => !p.forbidden).reduce((s, p) => s + p.pasture_ha, 0);
   /** Какую землю учитывает расчёт — одной фразой. */
   function zoneText() {
@@ -673,13 +713,14 @@
     const m = S.zone ? S.zone.mode : "all", of = S.D.village.official;
     return `<section class="zone zone-${m}" id="zoneCard"><h3>${ic("pin")} ${t("zn.title")}</h3><p>${zoneText()} ${src(m === "all" ? "sat" : "input")}</p>
       ${S.zone && S.zone.official && of ? `<p class="fine">${t("zn.src")}: <a href="${esc(of.url)}" target="_blank" rel="noopener">${esc(of.title)}</a>. ${t("zn.noBorders")}</p>` : m === "ha" ? `<p class="fine">${t("zn.noBorders")}</p>` : m === "all" ? `<p class="fine">${t("zn.allD")}</p>` : ""}
-      <div class="zbtns"><button type="button" class="btn btn-sm ${m === "all" ? "btn-primary" : "btn-soft"}" data-zn="draw">${ic("pen")} ${t(m === "contour" ? "zn.more" : "zn.draw")}</button>
+      ${seasonNote(of)}<div class="zbtns"><button type="button" class="btn btn-sm ${m === "all" ? "btn-primary" : "btn-soft"}" data-zn="draw">${ic("pen")} ${t(m === "contour" ? "zn.more" : "zn.draw")}</button>
       <button type="button" class="btn btn-sm btn-soft" data-zn="closed">${ic("x")} ${t("zn.mark")}</button>
       <button type="button" class="btn btn-sm btn-ghost" data-zn="ha">${t("zn.setHa")}</button>
       ${m !== "all" ? `<button type="button" class="btn btn-sm btn-ghost" data-zn="all">${t("zn.reset")}</button>` : ""}</div></section>`;
   }
   function bindZone(el) {
-    $$("[data-zn]", el).forEach(b => b.onclick = () => ({ draw: startZone, closed: closedDlg, ha: haDlg, all: () => { S.forbidden = new Set(); setZone({ mode: "all" }); } })[b.dataset.zn]());
+    $$("[data-zn]", el).forEach(b => b.onclick = () => ({ draw: startZone, closed: closedDlg, ha: haDlg, all: () => { S.forbidden = new Set(); setZone({ mode: "all" }); },
+      season: () => { const x = S.D.village.official.season; S.userP = Object.assign({}, S.userP, { season_days: x.days, season_start: x.from }); S.P = resolveParams(S.userP, S.calib); saveParams(); rebuildPlots(); render(); toast(t("zn.seasonDone", { d: x.days })); } })[b.dataset.zn]());
   }
   function startZone() {
     if (S.route !== "map") { go("map", villageHash(S.D.village, S.herds.some(h => h.demo)).split("?")[1]); setTimeout(startZone, 400); return; }
@@ -1021,7 +1062,7 @@
       <fieldset class="rest"><legend>${t("rest.title")} ${src("input")}</legend>
         <label class="field">${t("rest.spring")}<input type="number" inputmode="numeric" min="0" max="${S.P.season_days}" step="1" data-rest="${esc(p.id)}" data-side="spring" value="${((S.rest || {})[p.id] || {}).spring || 0}"></label>
         <label class="field">${t("rest.autumn")}<input type="number" inputmode="numeric" min="0" max="${S.P.season_days}" step="1" data-rest="${esc(p.id)}" data-side="autumn" value="${((S.rest || {})[p.id] || {}).autumn || 0}"></label>
-        <small class="fine">${t("rest.note", { d: S.P.season_days })}</small></fieldset>
+        <small class="fine">${t("rest.note", { d: S.P.season_days, s: seasonStart() })}</small></fieldset>
       <a class="btn btn-tg btn-sm" style="width:100%;margin-top:10px;color:#fff" href="${botLink(p.id)}" target="_blank" rel="noopener">${ic("send")} ${t("pop.subscribe")}</a>
       ${S.botSubs[p.id] ? `<p class="fine" style="margin:6px 0 0">${t("pop.subsCount", { n: S.botSubs[p.id] })}</p>` : ""}</div>`;
   }
@@ -1263,7 +1304,7 @@
       const h = S.herds[+card.dataset.i];
       card.querySelectorAll("[data-k]").forEach(inp => inp.onchange = () => {
         const k = inp.dataset.k;
-        h[k] = inp.type === "checkbox" ? inp.checked : inp.type === "number" ? Math.max(0, Math.round(+inp.value || 0)) : inp.dataset.num ? +inp.value : inp.value;
+        h[k] = inp.type === "checkbox" ? inp.checked : inp.type === "number" ? Math.min(100000, Math.max(0, Math.round(+inp.value || 0))) : inp.dataset.num ? +inp.value : inp.value;
         if (inp.type === "number") inp.value = h[k];
         if (h.demo) h.demo_edited = true;                  // изменённое демо-стадо остаётся демо-стадом
         S.cur = J.current(S.plots, S.herds, S.P); S.pl = solve(S.plots, S.herds); paintMap();
@@ -1295,7 +1336,7 @@
       const dg = S.pl.diagnostics && S.pl.diagnostics[h.id];
       const why = cov < Sd - 0.5 ? `<p class="note warn" style="margin:-6px 0 14px">${t("routes.short", { d: Math.max(0, Math.round(cov)) })} ${dg && dg.reason ? whyHerd(h, dg) : ""}</p>` : "";
       return `<div class="rname"><span>${esc(h.name)}</span><small>${fmt(J.herdAU(h, S.P))} ${t("herds.au")}</small></div><div class="tl" role="img" aria-label="${esc(h.name)}">${bars}</div>${why}`;
-    }).join("") + `<p class="note">${t("routes.note", { d: Sd })} ${src("model")}</p>`;
+    }).join("") + `<p class="note">${t("routes.note", { d: Sd, s: seasonStart() })} ${src("model")}</p>`;
   }
 
   /** Рейтинг «где проверять воду» считается один раз на план. */
@@ -1727,9 +1768,8 @@
     };
     $("#rsJson").onclick = () => dl("jaiylym-interviews-anon.json", JSON.stringify(anon(), null, 2), "application/json");
     $("#rsCsv").onclick = () => { const rows = anon(); const cols = ["n", "role", "month"].concat(RS_Q);
-      dl("jaiylym-interviews-anon.csv", [cols.join(",")].concat(rows.map(r => cols.map(c => '"' + String(r[c]).replace(/"/g, '""') + '"').join(","))).join("\n"), "text/csv"); };
-    let armed = false;
-    $("#rsClear").onclick = e => { if (!armed) { armed = true; e.currentTarget.textContent = t("past.delConfirm"); return; } C.ls.del(RS_KEY); renderResearch(); };
+      dl("jaiylym-interviews-anon.csv", [cols.join(",")].concat(rows.map(r => cols.map(c => '"' + String(r[c]).replace(/^(?=[=+\-@\t\r])/, "'").replace(/"/g, '""') + '"').join(","))).join("\n"), "text/csv"); };
+    armBtn($("#rsClear"), t("past.delConfirm"), () => { C.ls.del(RS_KEY); renderResearch(); });
     $("#rsMetrics").onclick = () => dl("jaiylym-pilot-metrics.json", JSON.stringify(Object.assign({ note: t("rs.metricsNote") }, m, { lastKey: undefined }), null, 2), "application/json");
   }
 
@@ -1742,7 +1782,7 @@
       rest: Object.assign({}, S.rest || {}), norm: S.normSel || undefined, zone: S.zone || undefined, summary: summary() };
   }
   async function saveScenario(shared) {
-    if (!S.D) return;
+    if (!S.D || document.querySelector("dialog[open]")) return;
     const name = await askText(t("act.namePrompt"), `${S.D.village.name}, ${dateStr(new Date(), false)}`);
     if (!name) return;
     try {
@@ -1779,15 +1819,15 @@
       <div class="card"><h2>${ic("clock")} ${t("sc.history")}</h2>${(hist || []).length ? `<ul class="list">${hist.slice(0, 30).map((h, i) => `<li class="row"><div class="grow"><b>${esc(h.village.name)}</b><small>${when(h.at)} · ${esc(kindLabel(h.kind))}</small><small>${sumLine(h.summary)}</small></div>
         <div class="btns"><button class="btn btn-ghost btn-sm" data-hist="${i}">${t("sc.load")}</button></div></li>`).join("")}</ul>` : `<p class="empty">${t("sc.histEmpty")}</p>`}</div>`;
     el.querySelectorAll("[data-load]").forEach(b => b.onclick = () => { const s = all.find(x => x.id === b.dataset.load); if (s) loadScenario(s); });
-    el.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+    el.querySelectorAll("[data-del]").forEach(b => armBtn(b, t("past.delConfirm"), async () => {
       try { await C.deleteScenario(b.dataset.del); renderScenarios(); } catch (e) { toast(errText(e), true); }
-    });
+    }));
     el.querySelectorAll("[data-hist]").forEach(b => b.onclick = () => { const h = hist[+b.dataset.hist]; go("map", `lat=${h.village.lat}&lon=${h.village.lon}&name=${encodeURIComponent(h.village.name)}`); });
   }
 
   // ---------- вход ----------
   // Два равноправных способа: логин и пароль (регистрация на сайте) или Telegram (без пароля, с уведомлениями в боте).
-  let pollTimer = null;
+  let pollTimer = null, loginSeq = 0;          // loginSeq: ответ на прежний шаг входа (другая вкладка окна, окно закрыто) не меняет окно
   const spin = `<span class="spin" style="width:16px;height:16px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite"></span>`;
   function acctErr(e) {
     if (e && (e.message === "offline" || e.message === "network")) return e.message === "offline" ? t("err.offline") : t("login.fail");
@@ -1798,7 +1838,7 @@
     return errText(e);
   }
   function openLogin(mode) {
-    const dlg = $("#loginDlg"), body = $("#loginBody");
+    const dlg = $("#loginDlg"), body = $("#loginBody"), my = ++loginSeq;
     clearTimeout(pollTimer);
     const reg = mode === "register";
     $("#loginTitle").textContent = t("acct.title");
@@ -1835,17 +1875,18 @@
       if (!v("login")) return fail(t("acct.e.login"));
       if (reg && f.elements.password.value.length < 8) return fail(t("acct.e.password"));
       if (!f.elements.password.value) return fail(t("acct.e.bad"));
-      go.disabled = true; const label = go.innerHTML; go.innerHTML = `${spin} ${t("login.wait2")}`;
+      if (go.disabled) return;                    // второй тап и Enter, пока идёт первый запрос
+      go.disabled = true; $$(".acct-tabs button, #tgGo", body).forEach(b => { b.disabled = true; }); const label = go.innerHTML; go.innerHTML = `${spin} ${t("login.wait2")}`;
       const wake = setTimeout(() => { go.innerHTML = `${spin} ${t("login.wake")}`; }, 4000);
       try {
         if (reg) await C.register(v("name"), v("login"), f.elements.password.value);
         else await C.loginPw(v("login"), f.elements.password.value);
-        clearTimeout(wake); dlg.close(); toast(t(reg ? "acct.welcome" : "login.ok")); await afterAuthChange();
-      } catch (ex) { clearTimeout(wake); go.disabled = false; go.innerHTML = label; fail(acctErr(ex)); }
+        clearTimeout(wake); if (my === loginSeq) dlg.close(); toast(t(reg ? "acct.welcome" : "login.ok")); await afterAuthChange();
+      } catch (ex) { clearTimeout(wake); $$(".acct-tabs button, #tgGo", body).forEach(b => { b.disabled = false; }); go.disabled = false; go.innerHTML = label; fail(acctErr(ex)); }
     };
   }
   async function openTelegramLogin() {
-    const dlg = $("#loginDlg"), body = $("#loginBody");
+    const dlg = $("#loginDlg"), body = $("#loginBody"), my = ++loginSeq;
     clearTimeout(pollTimer);
     $("#loginTitle").textContent = t("login.title");
     const back = `<button type="button" class="linkbtn" id="lgBack">← ${t("acct.back")}</button>`;
@@ -1856,8 +1897,9 @@
     const wake = setTimeout(() => { const w = $("#lgWait"); if (w) w.textContent = t("login.wake"); }, 4000);
     let st;
     try { st = await C.startLogin(); }
-    catch (e) { clearTimeout(wake); body.innerHTML = `${back}<p class="note warn">${t("login.fail")}</p><button class="btn btn-ghost" id="lgAgain">${t("login.again")}</button>`; bindBack(); $("#lgAgain").onclick = openTelegramLogin; return; }
+    catch (e) { clearTimeout(wake); if (my !== loginSeq) return; body.innerHTML = `${back}<p class="note warn">${t("login.fail")}</p><button class="btn btn-ghost" id="lgAgain">${t("login.again")}</button>`; bindBack(); $("#lgAgain").onclick = openTelegramLogin; return; }
     clearTimeout(wake);
+    if (my !== loginSeq) return;                  // пока ждали код, человек нажал «назад» или закрыл окно
     body.innerHTML = `${back}<ol class="steps-ol"><li>${t("login.step1")}</li><li>${t("login.step2")}</li></ol>
       <div class="code" aria-label="${t("login.code")}">${esc(st.code)}</div>
       <a class="btn btn-tg wide" href="${esc(st.link)}" target="_blank" rel="noopener">${ic("send")} ${t("login.open")}</a>
@@ -1865,20 +1907,26 @@
     bindBack();
     const started = Date.now();
     const poll = async () => {
-      if (!dlg.open) return;
+      if (!dlg.open || my !== loginSeq) return;
       try {
         const r = await C.pollLogin(st.nonce);
-        if (r.status === "ok") { dlg.close(); toast(t("login.ok")); await afterAuthChange(); return; }
+        if (r.status === "ok") { if (my === loginSeq) dlg.close(); toast(t("login.ok")); await afterAuthChange(); return; }
+        if (my !== loginSeq) return;
         if (r.status === "denied" || r.status === "expired") {
           $("#lgState").innerHTML = `<span>${t(r.status === "denied" ? "login.denied" : "login.expired")}</span> <button class="btn btn-ghost btn-sm" id="lgAgain">${t("login.again")}</button>`;
           $("#lgAgain").onclick = openTelegramLogin; return;
         }
       } catch (_) { /* временная ошибка сети — пробуем дальше */ }
-      if (Date.now() - started < 600000) pollTimer = setTimeout(poll, 2500);
+      if (my === loginSeq && Date.now() - started < 600000) pollTimer = setTimeout(poll, 2500);
     };
     pollTimer = setTimeout(poll, 2500);
   }
 
+  /** Вышли из аккаунта: на общем телефоне следующий человек не должен видеть чужую переписку и незаконченное. */
+  function forgetPersonal() {
+    S.pendingPasture = null; S.aiBrief = null; chat = null;
+    try { sessionStorage.removeItem("jaiylym:chat"); } catch (_) {}
+  }
   async function afterAuthChange() {
     renderAccount();
     if (S.D) { addOwnFarm(); render(); }
@@ -1896,7 +1944,8 @@
 
   // ---------- профиль ----------
   async function renderProfile() {
-    const el = $("#prPage"), u = C.user;
+    const el = $("#prPage"), u = C.user, oldForm = $("#farmForm");
+    const draft = oldForm && oldForm.dataset.dirty === (u ? u.uid : "") ? { vals: [...new FormData(oldForm)], village: oldForm._village } : null;
     if (!u) {
       el.innerHTML = `<div class="card"><h2>${ic("user")} ${t("pr.guest.t")}</h2><p>${t("pr.guest.d")}</p></div>
         <div class="card"><h2>${ic("user")} ${t("acct.title")}</h2><p>${t("acct.guestD")}</p>
@@ -1941,6 +1990,14 @@
         <button class="btn btn-accent" id="pastDraw">${ic("pen")} ${t("past.draw")}</button>
         <p class="fine" style="margin-top:10px">${t("past.boundaryNote")}</p></div>`;
     let village = f.village;
+    const form = $("#farmForm"), mark = () => { form.dataset.dirty = u.uid; form._village = village; };
+    form.addEventListener("input", mark);
+    if (draft) {                                  // страница перерисована (язык, вход) — несохранённое остаётся
+      const has = (k, v) => draft.vals.some(x => x[0] === k && (v == null || x[1] === v));
+      for (const x of form.elements) { if (!x.name) continue; if (x.type === "checkbox") x.checked = has(x.name, x.value); else { const y = draft.vals.find(z => z[0] === x.name); if (y) x.value = y[1]; } }
+      village = draft.village; if (village) $("#farmVillage").textContent = village.name;
+      mark();
+    }
     // карта для пастбища: село хозяйства, иначе открытое село, иначе центр самого пастбища
     const mapQ = (extra, q) => {
       const v = f.village || (S.D && S.D.village) || (q && (() => { const r = q.geometry.coordinates[0]; return { name: q.name, lat: +(r.reduce((s, p) => s + p[1], 0) / r.length).toFixed(5), lon: +(r.reduce((s, p) => s + p[0], 0) / r.length).toFixed(5) }; })()) || DEFAULT.village;
@@ -1950,21 +2007,17 @@
     $$("[data-pid]").forEach(box => {
       const q = u.pastures.find(x => x.id === box.dataset.pid);
       box.querySelector("[data-pshow]").onclick = () => go("map", mapQ("pasture=" + q.id, q));
-      let armedP = false;
-      box.querySelector("[data-pdel]").onclick = async e => {
-        if (!armedP) { armedP = true; e.currentTarget.lastChild.textContent = " " + t("past.delConfirm"); return; }
+      armBtn(box.querySelector("[data-pdel]"), t("past.delConfirm"), async () => {
         try { await C.deletePasture(q.id); drawPastures(); renderProfile(); } catch (err) { toast(errText(err), true); }
-      };
+      });
     });
-    $("#prLogout").onclick = async () => { await C.logout(); toast(t("auth.logout")); afterAuthChange(); };
-    let armed = false;
-    $("#prDelete").onclick = async e => {
-      if (!armed) { armed = true; e.currentTarget.textContent = t("pr.deleteConfirm"); return; }
-      try { await C.deleteAccount(); toast(t("pr.deleted")); afterAuthChange(); } catch (err) { toast(errText(err), true); }
-    };
+    $("#prLogout").onclick = e => once(e.currentTarget, async () => { await C.logout(); forgetPersonal(); toast(t("auth.out")); await afterAuthChange(); });
+    armBtn($("#prDelete"), t("pr.deleteConfirm"), async () => {
+      try { await C.deleteAccount(); forgetPersonal(); toast(t("pr.deleted")); await afterAuthChange(); } catch (err) { toast(errText(err), true); }
+    });
     $("#farmPickMap").onclick = async () => {
       const v = await pickVillageOnMap(village || (S.D && S.D.village));
-      if (v) { village = v; $("#farmVillage").textContent = v.name; }
+      if (v) { village = v; $("#farmVillage").textContent = v.name; mark(); }
     };
     const ul = $("#farmSearch .results");
     $("#farmFind").onclick = async () => {
@@ -1973,7 +2026,7 @@
         const found = await PL.geocode(q);
         if (!found.length) { toast(t("err.notFound"), true); return; }
         ul.innerHTML = found.map((x, i) => `<li tabindex="0" data-i="${i}">${esc(x.name)}<small>${esc(x.full)}</small></li>`).join(""); ul.hidden = false;
-        ul.querySelectorAll("li").forEach(li => li.onclick = () => { const x = found[+li.dataset.i]; village = { name: x.name, lat: x.lat, lon: x.lon }; $("#farmVillage").textContent = x.name; ul.hidden = true; });
+        ul.querySelectorAll("li").forEach(li => li.onclick = () => { const x = found[+li.dataset.i]; village = { name: x.name, lat: x.lat, lon: x.lon }; $("#farmVillage").textContent = x.name; ul.hidden = true; mark(); });
       } catch (e) { toast(t("err.geocode"), true); }
     };
     $("#farmForm").onsubmit = async ev => {
@@ -1982,8 +2035,10 @@
       const fd = new FormData(ev.target);
       const farm = { name: fd.get("name"), village, home: fd.get("home"), daily_return: fd.get("daily_return") === "on", plots: fd.getAll("plots") };
       for (const k of ["sheep", "goats", "cattle", "horses"]) farm[k] = Math.max(0, Math.round(+fd.get(k) || 0));
-      try { await C.saveFarm(farm); toast(t("pr.farmSaved")); if (S.D) { addOwnFarm(); render(); } renderProfile(); }
-      catch (e) { toast(errText(e), true); }
+      await once(ev.submitter || form.querySelector("button.btn-primary"), async () => {
+        try { await C.saveFarm(farm); delete form.dataset.dirty; toast(t("pr.farmSaved")); if (S.D) { addOwnFarm(); render(); } renderProfile(); }
+        catch (e) { toast(errText(e), true); }
+      });
     };
   }
 
@@ -2190,7 +2245,7 @@
         <li>${t("cap.n.au", { cattle: fmt2(au.cattle), horses: fmt2(au.horses), sheep: fmt2(au.sheep), goats: fmt2(au.goats) })}</li>
         ${p.zone ? `<li>${t("zn.chain", { a: fmt1(p.zone.before), s: pct(p.zone.share), b: fmt1(st.area.value) })}</li>` : ""}
         ${st.nograze ? `<li>${t("cap.n.ng", { g: fmt(p.pasture_ha_gross), n: fmt1(st.nograze.value), a: fmt1(p.zone ? p.zone.before : st.area.value), b: p.nograze_buffer_m })}</li>` : ""}
-        <li>${t("cap.n.season", { d: P.season_days })}</li>
+        <li>${t("cap.n.season", { d: P.season_days, s: seasonStart() })}</li>
         <li>${t("cap.n.veg", { k: fmt(P.k_ndvi) })}</li>
       </ul>
       <button type="button" class="btn btn-soft btn-sm" data-how="${esc(p.id)}">${ic("info")} ${t("cap.more")}</button></section>`;
@@ -2292,7 +2347,7 @@
     }
     items.sort((a, b) => a.d - b.d);
     const rows = items.slice(0, 6).map(x => `<li><span><b>${esc(x.h.name)}</b> ${t("moves.to")} ${esc(x.s.plot)}</span><small>${x.d < 0 ? "01.05" : x.d === 0 ? t("moves.today") : t("moves.in", { d: x.d })}</small></li>`).join("");
-    return `<div class="mini"><h3>${ic("route")} ${t("moves.title")}</h3>${!inSeason ? `<p class="fine" style="margin:0 0 4px">${t("moves.season")}</p>` : ""}
+    return `<div class="mini"><h3>${ic("route")} ${t("moves.title")}</h3>${!inSeason ? `<p class="fine" style="margin:0 0 4px">${t("moves.season", { s: seasonStart() })}</p>` : ""}
       ${rows ? `<ul class="list moves">${rows}</ul>` : `<p class="fine" style="margin:0">${t("moves.none")}</p>`}</div>`;
   }
 
@@ -2468,26 +2523,32 @@
       return !!S.D;
     } finally { S.chatLoading = false; }
   }
+  let chat = null;                             // { hist, busy }: переписка живёт вне страницы — уход со страницы её не рвёт
   function renderAI() {
     if (!S.D) { ensureChatVillage().then(ok => { if (ok && S.route === "ai") renderAI(); }); }
     const el = $("#aiPage");
-    const hist = (() => { try { return JSON.parse(sessionStorage.getItem("jaiylym:chat") || "[]"); } catch (_) { return []; } })();
+    if (!chat) { let h = []; try { h = JSON.parse(sessionStorage.getItem("jaiylym:chat") || "[]"); } catch (_) {} chat = { hist: Array.isArray(h) ? h.filter(m => m && typeof m.text === "string") : [], busy: false }; }
+    const hist = chat.hist;
     const ctxLine = S.D ? t("ai.ctx", { v: `${esc(S.D.village.name)} · ${S.plots.length} ${t("ai.plots")} · ${S.herds.length} ${t("sc.herds")}` }) +
       (S.chatAuto ? ` <a href="#/map">${S.chatAuto === "demo" ? t("ai.ctxDemo", { v: esc(S.D.village.name) }) : t("ai.ctxLast")}</a>` : "") : t("ai.loadingCtx");
     el.innerHTML = `<div class="chat"><div class="chat-head"><h1>${ic("spark")} ${t("ai.title")}</h1><p class="fine" style="margin:0">${t("ai.lead")}</p>
         <span class="chat-ctx">${ic("pin")} ${ctxLine}</span></div>
-      <div class="chat-log" id="chatLog" aria-live="polite">${hist.map(m => `<div class="msg ${m.role}">${m.role === "ai" ? aiText(m.text) + aiSources(m.sources) : esc(m.text)}</div>`).join("")}</div>
+      <div class="chat-log" id="chatLog" aria-live="polite">${hist.map(m => `<div class="msg ${m.role}">${m.role === "ai" ? (m.err ? esc(m.text) : aiText(m.text) + (m.mark || "") + aiSources(m.sources) + aiSuggest(m.suggest)) : esc(m.text)}</div>`).join("")}${chat.busy ? `<div class="msg ai" id="aiTyping">${t("ai.thinking")}</div>` : ""}</div>
       <div class="chips-q">${["ai.q1", "ai.q5", "ai.q6", "ai.q7", "ai.q8", "ai.q2", "ai.q3", "ai.q4"].map(k => `<button type="button" data-q="${esc(t(k))}">${t(k)}</button>`).join("")}</div>
-      <form class="chat-form" id="chatForm"><textarea id="chatIn" rows="1" placeholder="${t("ai.ph")}" aria-label="${t("ai.ph")}"></textarea>
+      <form class="chat-form" id="chatForm"><textarea id="chatIn" rows="1" maxlength="1200" placeholder="${t("ai.ph")}" aria-label="${t("ai.ph")}"></textarea>
         <button class="btn btn-primary">${ic("send")} <span>${t("ai.send")}</span></button></form></div>
       <p class="fine" style="margin-top:10px">${t("ai.disclaimer")} ${t("ai.note")} ${hist.length ? `<button class="linkbtn" id="chatClear">${t("ai.clear")}</button>` : ""}</p>`;
     const log = $("#chatLog"), inp = $("#chatIn");
     log.scrollTop = log.scrollHeight;
     const send = async text => {
       text = text.trim(); if (!text) return;
-      hist.push({ role: "user", text });
-      log.insertAdjacentHTML("beforeend", `<div class="msg user">${esc(text)}</div><div class="msg ai" id="aiTyping">${t("ai.thinking")}</div>`);
-      log.scrollTop = log.scrollHeight; inp.value = "";
+      if (chat.busy) { toast(t("ai.waitPrev")); return; }          // двойной тап и несколько подсказок подряд — один вопрос
+      const c = chat, save = () => { try { if (chat === c) sessionStorage.setItem("jaiylym:chat", JSON.stringify(hist.filter(m => !m.err).map(({ suggest, mark, ...m }) => m).slice(-30))); } catch (_) {} };
+      c.busy = true;
+      for (let i = hist.length - 1; i >= 0; i--) if (hist[i].err) hist.splice(i, 1);
+      hist.push({ role: "user", text }); save();
+      const redraw = keep => { const y = scrollY, had = document.activeElement && document.activeElement.id === "chatIn"; renderAI(); const i = $("#chatIn"); i.value = keep; scrollTo(0, y); if (had) i.focus({ preventScroll: true }); };
+      redraw("");
       try {
         // вопрос о том, как менялась трава по годам, а ряд для этого села ещё не посчитан — сначала считаем (1–2 минуты)
         if (S.D && TR() && TR().asksYears(text) && S.multi && S.multi.state === "idle" && navigator.onLine) {
@@ -2495,20 +2556,18 @@
           await runMulti();
           const ty2 = $("#aiTyping"); if (ty2) ty2.textContent = t("ai.thinking");
         }
-        const r = await C.ai({ mode: "chat", lang: I.lang, context: aiContext(), messages: hist.slice(-10) });
-        hist.push(Object.assign({ role: "ai", text: r.text }, r.sources && r.sources.length ? { sources: r.sources } : {}));
-        $("#aiTyping").outerHTML = `<div class="msg ai">${aiText(r.text)}${aiMark(r)}${aiSources(r.sources)}${aiSuggest(r.suggestions)}</div>`;
+        const r = await C.ai({ mode: "chat", lang: I.lang, context: aiContext(), messages: hist.slice(-10).map(({ role, text }) => ({ role, text })) });
+        hist.push(Object.assign({ role: "ai", text: r.text, mark: aiMark(r) }, r.sources && r.sources.length ? { sources: r.sources, suggest: r.suggestions } : {}));
       } catch (e) {
-        hist.pop();
-        $("#aiTyping").outerHTML = `<div class="msg ai err">${esc(t("brief.aiFail") + ": " + errText(e))}</div>`;
+        hist.push({ role: "ai", err: true, text: t("brief.aiFail") + ": " + errText(e) });
       }
-      try { sessionStorage.setItem("jaiylym:chat", JSON.stringify(hist.slice(-30))); } catch (_) {}
-      log.scrollTop = log.scrollHeight;
+      c.busy = false; save();
+      if (chat === c && S.route === "ai") redraw(($("#chatIn") || {}).value || "");
     };
     $("#chatForm").onsubmit = e => { e.preventDefault(); send(inp.value); };
     inp.onkeydown = e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(inp.value); } };
     $$(".chips-q button", el).forEach(b => b.onclick = () => send(b.dataset.q));
-    const clr = $("#chatClear"); if (clr) clr.onclick = () => { try { sessionStorage.removeItem("jaiylym:chat"); } catch (_) {} renderAI(); };
+    const clr = $("#chatClear"); if (clr) clr.onclick = () => { if (chat.busy) return; chat = null; try { sessionStorage.removeItem("jaiylym:chat"); } catch (_) {} renderAI(); };
   }
 
   // ---------- настройки ----------
@@ -2651,18 +2710,20 @@
     });
     $("#saveScBtn").onclick = () => saveScenario(false);
     $("#publishBtn").onclick = () => saveScenario(true);
-    $("#pdfBtn").onclick = async () => {
+    $("#pdfBtn").onclick = e => once(e.currentTarget, async () => {
       if (!S.D) return;
       toast(t("rep.making"));
       try { await window.Report.export(reportCtx()); C.addHistory({ kind: "pdf", village: S.D.village, summary: summary() }); metric("pdf"); }
-      catch (e) { toast(t("rep.printFallback"), true); }
-    };
+      catch (_) { toast(t("rep.printFallback"), true); }
+    });
     $("#accountBtn").onclick = () => (C.loggedIn ? go("profile") : openLogin("login"));
     const more = $("#moreDlg");
     $("#moreBtn").onclick = () => more.showModal();
     more.addEventListener("click", e => { if (e.target === more || e.target.closest("a")) more.close(); });
-    $("#loginDlg").addEventListener("close", () => clearTimeout(pollTimer));
-    window.addEventListener("hashchange", onRoute);
+    $("#loginDlg").addEventListener("close", () => { clearTimeout(pollTimer); loginSeq++; if (!C.loggedIn) S.pendingPasture = null; });
+    // «Назад» и переход по ссылке закрывают открытые окна: иначе они остаются поверх другой страницы
+    window.addEventListener("hashchange", () => { $$("dialog[open]").forEach(d => d.close()); onRoute(); });
+    C.onAuth = why => { forgetPersonal(); if (why === "expired") toast(t("auth.expired"), true); afterAuthChange(); };
     window.addEventListener("online", netState); window.addEventListener("offline", netState);
     netState();
     onRoute();
@@ -2683,7 +2744,7 @@
   }
 
   // Келісім — согласование плана между дворами (js/kelisim-ui.js)
-  const Kel = !window.KelisimUI ? { route() {} } : window.KelisimUI({ t, I, S, C, J, M, K: window.JaiylymKelisim, NM, $, $$, esc, ic, src, fmt, fmt1, pct, dateStr, pillStyle, loadColor, scheme, toast, go, errText, openVillage, exampleAt, EXAMPLES, exName, regName, phone, zoneText, closedDlg, startZone, zoneHa });
+  const Kel = !window.KelisimUI ? { route() {} } : window.KelisimUI({ armBtn, t, I, S, C, J, M, K: window.JaiylymKelisim, NM, $, $$, esc, ic, src, fmt, fmt1, pct, dateStr, pillStyle, loadColor, scheme, toast, go, errText, openVillage, exampleAt, EXAMPLES, exName, regName, phone, zoneText, closedDlg, startZone, zoneHa });
   $("#kelBtn").onclick = () => go("kelisim", "new=1");
 
   window.JaiylymApp = { S, openVillage, render, summary, confidence, scheme, reportCtx, Kel, pickVillageOnMap, aiContext, briefData, openHow, renderPane, rebuildPlots, setZone };   // для отладки и тестов
