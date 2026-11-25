@@ -619,7 +619,7 @@
     rebuildPlots();
     S.herds = opts.herds ? opts.herds.map(h => Object.assign({}, h)) : (ex && opts.demo ? demoHerds() : []);
     addOwnFarm();
-    S.botSubs = {};
+    S.botSubs = {}; S.botHerds = []; S.useBot = false;
     C.ls.set("jaiylym:last", { name: data.village.name, lat: data.village.lat, lon: data.village.lon });
     if (!opts.keepRoute) syncHash();
     $("#mapQ").value = data.village.name;
@@ -789,7 +789,8 @@
       let n = 0;
       const fromBot = (d.herds || []).filter(h => !h.mine).map(h => Object.assign({}, h, {
         name: `${t("herds.tg")} ${++n}`, home: near.has(h.home) ? h.home : "Б-С" }));
-      S.herds = S.herds.filter(h => !h.from_bot).concat(fromBot);
+      S.botHerds = fromBot;                    // чужие стада из Telegram — только по кнопке: любой человек мог написать любое число
+      S.herds = S.herds.filter(h => !h.from_bot).concat(S.useBot ? fromBot : []);
       render();
     } catch (_) { /* бот спит или нет сети — сайт работает и без него */ }
   }
@@ -1253,7 +1254,9 @@
           <label class="field" style="flex-direction:row;align-items:center;gap:8px" title="${esc(t("herds.wNote"))}">${t("herds.weight")}<select data-k="weight" data-num="1">${[[1, t("herds.w1")], [1.5, t("herds.w15")], [2, t("herds.w2")]].map(([w, l]) => `<option value="${w}" ${(+h.weight || 1) === w ? "selected" : ""}>${l}</option>`).join("")}</select></label>
           <span class="au">${fmt(J.herdAU(h, S.P))} ${t("herds.au")} ${src("input")}</span>
         </div>${rights(h)}</div>`).join("") +
+      (S.botHerds && S.botHerds.length ? `<div class="note" id="botHerds"><p>${t(S.useBot ? "herds.tgUsed" : "herds.tgN", { n: S.botHerds.length, au: fmt(S.botHerds.reduce((s, h) => s + J.herdAU(h, S.P), 0)) })}</p><button type="button" class="btn btn-ghost btn-sm" id="botToggle">${t(S.useBot ? "herds.tgOff" : "herds.tgOn")}</button></div>` : "") +
       `<button class="btn btn-soft" id="addHerd">${ic("plus")} ${t("herds.add")}</button><p class="note">${t("herds.note")}</p><p class="note">${t("herds.wNote")}</p><p class="note">${t("herds.codes")}</p>`;
+    const bt = $("#botToggle", el); if (bt) bt.onclick = () => { S.useBot = !S.useBot; S.herds = S.herds.filter(h => !h.from_bot).concat(S.useBot ? S.botHerds : []); render(); };
     $$(".herd", el).forEach(card => {
       const h = S.herds[+card.dataset.i];
       card.querySelectorAll("[data-k]").forEach(inp => inp.onchange = () => {

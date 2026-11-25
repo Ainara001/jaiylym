@@ -428,10 +428,14 @@ test("аккаунт по логину и паролю (без Telegram): рег
   assert.equal((await reg({ name: "Айгерим", login: "+77011234567", password: "pastbishe-2026" })).status, 200, "логин снова свободен");
 });
 
-test("аккаунт по паролю: после 10 неверных попыток логин закрыт на 15 минут (с любых адресов)", async () => {
+test("аккаунт по паролю: после 10 неверных попыток логин закрыт для этого адреса на 15 минут, после 50 — для всех", async () => {
   const r = await call("POST", "/auth/register", { body: { name: "Ерлан", login: "erlan.k", password: "jailau-parol-7" }, ip: "10.9.2.1" });
   assert.equal(r.status, 200);
-  for (let i = 0; i < 10; i++) assert.equal((await call("POST", "/auth/login", { body: { login: "Erlan.K", password: "wrong-" + i }, ip: "10.9.3." + i })).status, 401);
-  const locked = await call("POST", "/auth/login", { body: { login: "erlan.k", password: "jailau-parol-7" }, ip: "10.9.4.1" });
+  for (let i = 0; i < 10; i++) assert.equal((await call("POST", "/auth/login", { body: { login: "Erlan.K", password: "wrong-" + i }, ip: "91.9.3.1" })).status, 401);
+  const try1 = (password, ip) => call("POST", "/auth/login", { body: { login: "erlan.k", password }, ip });
+  const locked = await try1("jailau-parol-7", "91.9.3.1");
   assert.equal(locked.status, 429, "даже верный пароль — после 10 неверных попыток подождать");
+  assert.equal((await try1("jailau-parol-7", "91.9.4.1")).status, 200, "хозяин с другого адреса входит");
+  for (let k = 0; k < 4; k++) for (let i = 0; i < 10; i++) await try1("bad", `91.9.${10 + k}.1`);
+  assert.equal((await try1("jailau-parol-7", "91.9.5.1")).status, 429, "подбор с многих адресов — пауза для всех");
 });
