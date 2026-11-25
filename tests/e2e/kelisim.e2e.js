@@ -366,6 +366,47 @@ async function storage(b) {
   assert.deepEqual(errors, [], "ошибки JavaScript");
 }
 
+/** Общая карта и чат: два участника в разных браузерах — кружок с плюсами и минусами, оценка (без ключа ИИ — по расчёту), чат, голос, «Вы уверены?», сводка. */
+async function liveFlow(b, name) {
+  const errors = [], D = loadExamples()[1];
+  const r = await fetch(base + "/api/kelisim", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: "Карта", snapshot: { village: D.village, plots: D.plots, params: {}, source: { year: D.source.year, dates: D.source.dates } },
+    households: [{ name: "Асан", herd: { sheep: 800 } }, { name: "Гульнар", herd: { cattle: 40 }, daily_return: true }] }) }).then(x => x.json());
+  const link = (role, key) => `${base}/#/kelisim?id=${r.id}&${role}=${key}`;
+  const a = await open(b, errors, { viewport: { width: 360, height: 740 }, isMobile: name !== "firefox", hasTouch: true }, "Асан");
+  const g = await open(b, errors, { viewport: { width: 1280, height: 900 } }, "Гульнар");
+  const o = await open(b, errors, { viewport: { width: 1280, height: 900 } }, "орг");
+  await a.goto(link("d", r.links[0].key)); await g.goto(link("d", r.links[1].key)); await o.goto(link("o", r.organizer_key));
+  for (const p of [a, g, o]) await p.waitForSelector("#klive .leaflet-container", { timeout: 20000 });
+  // участники как в викторине: организатор и два двора, у каждого статус
+  assert.equal(await a.locator(".kperson").count(), 3);
+  // Асан ставит кружок: кнопка → нажатие на карту
+  await a.click("#lvPlace");
+  const box = await a.locator("#lvMap").boundingBox();
+  await a.mouse.click(box.x + box.width * 0.78, box.y + box.height * 0.25);
+  await a.waitForSelector("#lvMine .kmine", { timeout: 15000 });
+  assert.match(await a.textContent("#lvMine"), /Хорошее место|Есть минусы|Много минусов|Не подходит|Нет данных/);
+  await a.waitForFunction(() => /оценка по расчёту|По расчёту/.test(document.querySelector("#lvAi").textContent), null, { timeout: 15000 });   // ключа ИИ нет — шаблон по расчёту
+  // Гульнар видит кружок Асана и что Асан в сети; пишет в чат и голосует
+  await g.waitForSelector(".kpin", { timeout: 15000 });
+  await g.waitForFunction(() => [...document.querySelectorAll(".kperson")].some(x => /Асан/.test(x.textContent) && x.classList.contains("kp-online")), null, { timeout: 15000 });
+  await g.fill("#lvIn", "Там трава хорошая, а вода есть?"); await g.click("#lvSend");
+  await a.waitForFunction(() => /вода есть\?/.test(document.querySelector("#lvLog").textContent), null, { timeout: 15000 });
+  await g.click(".kpin");
+  await g.click('.kpop [data-v="1"]');
+  await a.waitForFunction(() => /👍 1/.test(document.querySelector("#lvMine").textContent), null, { timeout: 15000 });
+  // Асан подтверждает: «Вы уверены?» с минусами и оценкой
+  await a.click("#lvConf");
+  await a.waitForSelector("dialog[open] #sureYes");
+  assert.match(await a.textContent("dialog[open]"), /Вы уверены/);
+  await check(a, name + " Асан: вы уверены");
+  await a.click("#sureYes");
+  await a.waitForFunction(() => /место подтверждено/.test(document.querySelector("#lvMine").textContent));
+  // организатор видит сводку: место, вывод, подтверждено; кто ещё не отметил
+  await o.waitForFunction(() => /Асан/.test((document.querySelector("#lvSum") || {}).textContent || "") && /Ещё не отметили: Гульнар/.test(document.querySelector("#lvSum").textContent), null, { timeout: 15000 });
+  for (const [p, l] of [[a, "Асан"], [g, "Гульнар"], [o, "орг"]]) await check(p, name + " карта " + l);
+  assert.deepEqual(errors, [], "ошибки JavaScript");
+}
+
 for (const name of BROWSERS) {
   test(`${name}: Келісім — хранилище браузера заполнено`, { skip: !pw && "playwright не установлен", timeout: 60000 }, async () => {
     const b = await pw[name].launch();
@@ -374,6 +415,10 @@ for (const name of BROWSERS) {
   test(`${name}: Келісім — организатор на телефоне`, { skip: !pw && "playwright не установлен", timeout: 120000 }, async () => {
     const b = await pw[name].launch();
     try { await organizer(b, name); } finally { await b.close(); }
+  });
+  test(`${name}: Келісім — общая карта и чат`, { skip: !pw && "playwright не установлен", timeout: 120000 }, async () => {
+    const b = await pw[name].launch();
+    try { await liveFlow(b, name); } finally { await b.close(); }
   });
   test(`${name}: Келісім — три двора от создания до протокола`, { skip: !pw && "playwright не установлен", timeout: 180000 }, async () => {
     const b = await pw[name].launch();

@@ -65,6 +65,10 @@
       if (e && e.status >= 500) return t("err.server");
       return X.errText(e);
     };
+    // общая карта и чат (kelisim-live.js): один корень на согласование, страница вокруг перерисовывается
+    const LV = window.KelisimLive ? window.KelisimLive({ t, I, C, $, $$, esc, toast, kErr: e => kErr(e), armBtn: X.armBtn, plotFull: id => plotFull(id),
+      getV: () => V, getCur: () => cur, reload: () => load(false, true), poke: () => load(true) }) : null;
+    const liveSlot = () => (LV ? `<div id="kelLive"></div>` : "");
     const spin = txt => `<p class="startload"><span class="spin" aria-hidden="true"></span><span>${txt}</span></p>`;
     const opened = () => Object.fromEntries($$("details[data-d]", el()).map(d => [d.dataset.d, d.open]));
     function put(html) {
@@ -141,6 +145,7 @@
     function route(active, q) {
       on = active;
       clearInterval(timer);
+      if (LV) LV.stop(false);                              // опрос карты и чата — только пока открыта страница согласования
       document.body.classList.toggle("kel-guest", !!(active && q.get("id") && q.get("d")));
       if (!active) return;
       if (!K || typeof C.kel !== "function") { el().innerHTML = `<div class="card"><p>${tt("old")}</p></div>`; return; }   // старые файлы из кэша
@@ -344,7 +349,7 @@
           ${first && w ? `<small>${txt}</small>` : !s.plot ? `<small>${tt("gapD")}</small>` : ""}</li>`; }).join("")}</ol>
         <div class="tl" aria-hidden="true">${bars}</div>`;
     }
-    const mapOf = (ids, also) => `<div class="kmap">${scheme(V.snapshot.plots, p => (ids.includes(p.id) ? "#b05627" : (also || []).includes(p.id) ? "#2f7aa6" : "#9db3a2"), () => "", { size: 300 })}<small class="fine">${tt("mapNote")}</small></div>`;
+    const mapOf = (ids, also) => `<div class="kmap">${scheme(V.snapshot.plots, p => (ids.includes(p.id) ? "#24543f" : (also || []).includes(p.id) ? "#2f7aa6" : "#9db3a2"), () => "", { size: 300 })}<small class="fine">${tt("mapNote")}</small></div>`;
     const whyVersion = () => {
       const w = (V.versions[V.versions.length - 1] || {}).why || {};
       return w.type === "proposal" ? tt(w.household === V.me ? "wv.mine" : "wv.proposal", { n: esc(nameOf(w.household)) }) : w.type === "start" ? "" : tt("wv." + w.type, { n: esc(nameOf(w.household)) });
@@ -383,7 +388,8 @@
     function hhPage() {
       const h = me(); if (!h) { fail = 403; return failPage(); }
       const body = V.status === "collect" ? hhCollect(h) : hhPlan(h);
-      put(head(` · ${esc(h.name)}`) + (V.restored && !V.restored.verified ? `<p class="note warn">${tt("restUn")}</p>` : "") + body + (V.status === "collect" ? "" : obsCard()) + everyone() + limits() + `<p class="fine"><a href="#/about">${tt("about")}</a></p>`);
+      put(head(` · ${esc(h.name)}`) + (V.restored && !V.restored.verified ? `<p class="note warn">${tt("restUn")}</p>` : "") + body + liveSlot() + (V.status === "collect" ? "" : obsCard()) + everyone() + limits() + `<p class="fine"><a href="#/about">${tt("about")}</a></p>`);
+      if (LV) LV.mount($("#kelLive"));
       V.status === "collect" ? bindCollect(h) : bindPlan(h);
     }
     function hhCollect(h) {
@@ -517,12 +523,13 @@
         : `<p><b>${tt("out." + outcome())}</b> ${tt("o.counts", { a: c.agree, n, o: c.object, w: c.pending })}</p><button type="button" class="btn btn-primary kbig" id="kelPdf">${ic("file")} ${tt("protocol")}</button>`;
       const keep = rec(V.id, "org") && !rec(V.id, "org").kept ? `<div class="note warn kkeep"><p><b>${tt("keepT")}</b> ${tt("keepD")}</p><button type="button" class="btn btn-sm btn-soft" id="kKeep">${tt("copyOrg")}</button></div>` : "";
       put(head(` · ${tt("orgTag")}`) + keep + (V.restored ? `<p class="note warn">${tt(V.restored.verified ? "restOk" : "restUn")}</p>` : "") + (V.expired && st !== "closed" ? `<p class="note warn">${tt("o.expired", { d: dOnly(V.deadline) })}</p>` : "")
-        + `<div class="card">${step}${cta}</div>` + (open.length ? `<h2>${tt("o.objections")}</h2>` + open.map(propCard).join("") : "")
+        + `<div class="card">${step}${cta}</div>` + liveSlot() + (open.length ? `<h2>${tt("o.objections")}</h2>` + open.map(propCard).join("") : "")
         + `<div class="card"><h2>${tt("yards")} <span class="tag">${n}</span></h2>${V.households.map(yardRow).join("") || `<p class="empty">${tt("o.noYards")}</p>`}
             ${st === "closed" ? "" : `<form class="kaddf" id="kAddF"><label class="field">${tt("o.newYard")}<input maxlength="60" placeholder="${esc(tt("yardPh"))}"></label><button class="btn btn-soft">${ic("plus")} ${tt("addYard")}</button></form>`}
             ${V.herds.over.map(o => `<p class="note warn">${tt("over", { s: low(t("herds." + o.species)), a: fmt(o.declared), b: fmt(o.official) })}</p>`).join("")}</div>`
         + obsCard() + (V.plan ? planCard() : "") + settingsCard() + historyCard() + limits());
       bindOrg();
+      if (LV) LV.mount($("#kelLive"));
     }
     // ключи этого открытия держим и в памяти: личные ссылки доступны, даже если браузер не даёт их сохранить
     const live = {};
