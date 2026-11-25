@@ -133,8 +133,8 @@ test("предложения: другой участок, обмен, отме�
   const only = kel(plots, [hh("a", { sheep: 100 }, { allowed: ["Б-С"] }), hh("b", { sheep: 100 })]);
   assert.equal(K.effect(only, "a", { type: "avoid", plot: "Б-С" }).verdict, "impossible");
   assert.equal(K.effect(only, "a", { type: "prefer", plot: "Д-С" }).error, "not_allowed", "на участок вне своих прав попросить нельзя");
-  // дойное может попросить дальний участок — никто не теряет, но участок дальше 3 км
-  assert.equal(K.effect(k, "c", { type: "prefer", plot: "Д-С" }).verdict, "free");
+  // дойному стаду дальний участок недоступен: пожелание ничего не меняет
+  assert.equal(K.effect(k, "c", { type: "prefer", plot: "Д-С" }).verdict, "none");
   const h1 = K.applyProposal(k, k.households[0], { type: "avoid", plot: at }).household;
   assert.deepEqual(K.applyProposal(k, h1, { type: "clear" }).household.avoid, []);
 });
@@ -165,7 +165,7 @@ test("почему такой участок — коды без текста; �
   const D = loadExamples()[1], plots = NG.apply(D.plots, D.nograze);
   const k = kel(plots, [hh("a", { sheep: 300 }), hh("c", { cattle: 20 }, { daily_return: true, home: "Б-З" })], { official: { sheep: 100 } });
   for (const h of k.households) for (const w of K.why(k, h.id)) {
-    assert.ok(w.codes.length && w.codes.every(c => ["daily", "daily_far", "far", "nearest", "closer_full", "shared", "preferred"].includes(c)), JSON.stringify(w));
+    assert.ok(w.codes.length && w.codes.every(c => ["daily", "far", "nearest", "closer_full", "shared", "preferred"].includes(c)), JSON.stringify(w));
     assert.ok(K.plotsOf(k.plan.routes[h.id]).includes(w.plot));
   }
   assert.ok(K.why(k, "c").every(w => w.codes.includes("daily") && w.plot.startsWith("Б")));

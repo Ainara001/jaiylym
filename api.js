@@ -18,7 +18,6 @@ const crypto = require("crypto");
 const PL = require("./web/pipeline.js");
 const M = require("./web/model.js");
 const NM = require("./web/norms.js");
-const Z = require("./web/zone.js");
 const { createKelisim, createRoutes } = require("./kelisim.js");
 const G = require("./ai.js");   // DeepSeek (DEEPSEEK_API_KEY) или Gemini (GEMINI_API_KEY) — см. ai.js
 const F = require("./ai-facts.js");
@@ -86,8 +85,6 @@ const AI_RULES = "Используй только данные из блока �
   "Числа (ёмкость, число овец, дефицит, нагрузка) бери ТОЛЬКО из данных: сам их не считай и не придумывай. Если нужного числа нет — прямо скажи, что его нет в расчёте. " +
   "Ёмкость участка — меньшее из двух: оценки по снимку и предельной нормы нагрузки Минсельхоза (блок «норма_нагрузки_МСХ», у участка — «что_ограничивает»). " +
   "Если ограничивает норма — так и скажи: по снимку вышло больше, но по норме столько нельзя; не советуй ставить скота больше нормы. " +
-  "Блок «где_селу_можно_пасти» — какую землю учитывает расчёт: контур или гектары ввёл человек, прав на землю это не подтверждает. Если «вся трава вокруг» — скажи, что в расчёт может входить чужая земля. " +
-  "Где трава слабее, чем обычно вокруг села (поле «трава_слабее_обычной…»), предел уменьшен во столько же раз — это вклад снимка. " +
   "Если тип пастбища не выбран, норма — самая мягкая по области: скажи, что тип можно выбрать на вкладке «Данные». " +
   "Чтобы объяснить, откуда число, используй поле «как_рассчитано» (шаги формулы) — перескажи шаги с их числами. " +
   "Почему стадо пасётся на этом участке, почему ему не хватило корма и какие участки ему недоступны — бери из поля «почему_план» " +
@@ -366,7 +363,6 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, allowed
       village: { name: str(v.name, 80), lat: +(+v.lat).toFixed(5), lon: +(+v.lon).toFixed(5) },
       herds, water: plotList(b.water, "водопои"), forbidden: plotList(b.forbidden, "закрытые участки"), water_status, rest, params,
       norm: b.norm == null ? undefined : (n => { if (!n) throw bad("норма нагрузки: неизвестная область"); return n; })(NM.clean(b.norm)),
-      zone: Z.clean(b.zone) || undefined,
       model_version: M.MODEL_VERSION,
       request_id: /^[A-Za-z0-9_-]{8,64}$/.test(b.request_id || "") ? b.request_id : null,
       summary: b.summary && typeof b.summary === "object" ? JSON.parse(JSON.stringify(b.summary).slice(0, 2000)) : null,

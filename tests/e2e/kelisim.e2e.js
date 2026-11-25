@@ -60,7 +60,6 @@ async function flow(b, name) {
   await org.click("#kelDemo");
   await org.waitForSelector("#kelCreate");
   assert.ok(await org.isVisible("text=Стада из примера условные"));
-  assert.match(await org.innerText("#kelPage"), /Где селу можно пасти[\s\S]*825 га/);
   // оставляем три двора: первый без скота — внесёт сам
   while (await org.$$eval("#kelRows .krow", x => x.length) > 3) await org.click("[data-rmrow='0']");
   const names = ["Двор у моста", "Двор Сары-Арка", "Двор у озера"];

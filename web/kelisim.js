@@ -191,7 +191,7 @@
   // ---------- объяснение ----------
   /**
    * Почему у двора такой участок — кодами, чтобы показать на любом языке:
-   * daily (дойное — у села), daily_far (дойное на дальнем: ближних не хватило), far (дальний — ближние берегут), nearest (ближе свободного нет), closer_full (ближние заняты до предела), kept (прежний участок сохранён).
+   * daily (дойное — у села), far (дальний — ближние берегут), nearest (ближе свободного нет), closer_full (ближние заняты до предела), kept (прежний участок сохранён).
    */
   function why(k, hid) {
     const P = params(k), list = active(k), h = list.find(x => x.id === hid);
@@ -206,7 +206,7 @@
       const p = byId[id], closer = can.filter(x => x !== id && byId[x].ring === p.ring && km(x) < km(id) - 0.05);
       const full = closer.filter(x => (used[x] || 0) >= cap[x] - 1);
       const codes = [];
-      if (h.daily_return) codes.push(p.ring === "far" ? "daily_far" : "daily"); else if (p.ring === "far") codes.push("far");
+      if (h.daily_return) codes.push("daily"); else if (p.ring === "far") codes.push("far");
       if (!closer.length) codes.push("nearest"); else if (full.length === closer.length) codes.push("closer_full"); else codes.push("shared");
       if ((h.prefer || []).includes(id) || (h.prefer_soft || []).includes(id)) codes.push("preferred");
       return { plot: id, km: km(id), codes, closer_full: full, water: p.water_status || null, load: k.plan.load[id] };
@@ -297,7 +297,7 @@
       decisions: (k.proposals || []).map(p => ({ id: p.id, household: p.household, type: p.type, plot: p.plot || null, to: p.to || null, herd: p.herd || null, reason: p.reason || null, observed_on: p.observed_on || null,
         status: p.status, variant: p.variant || null, version: p.version, decided_at: p.decided_at || null,
         losers: p.effect && p.effect.variants && p.variant && p.effect.variants[p.variant] ? p.effect.variants[p.variant].losers.map(x => ({ id: x.id, delta: x.delta })) : [] })),
-      snapshot: { zone: k.snapshot.zone || null, source: k.snapshot.source, check: k.snapshot.check, norm: k.snapshot.norm || null, model_version: k.snapshot.model_version, deficit_t: now ? now.deficit_t : null, status: now ? now.status : null },
+      snapshot: { source: k.snapshot.source, check: k.snapshot.check, norm: k.snapshot.norm || null, model_version: k.snapshot.model_version, deficit_t: now ? now.deficit_t : null, status: now ? now.status : null },
       observations: obsOf(k), herds: herdCheck(k), restored: k.restored || null,
       // что этот документ не делает — показывать всегда
       limits: ["not_a_contract", "no_land_rights", "herds_declared", "model_estimate"],
