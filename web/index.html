@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="img/jaiylym-avatar.png">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%231e4634'/%3E%3Cpath d='M16 26V13.5' stroke='%23a8dcae' stroke-width='2.4' stroke-linecap='round'/%3E%3Cpath d='M16 21.5c-1.2-4.2-4.2-6.3-7.6-6.6.1 3.7 2.9 6.6 7.6 6.6z' fill='%23a8dcae'/%3E%3Cpath d='M16 18c1.2-4.2 4.2-6.3 7.6-6.6-.1 3.7-2.9 6.6-7.6 6.6z' fill='%236fbf7d'/%3E%3Cpath d='M6.5 26h19' stroke='%23e8b45a' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='24.5' cy='7.5' r='2.3' fill='%23e8b45a'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="vendor/leaflet-1.9.4/leaflet.css">
-<link rel="stylesheet" href="css/app.css?v=47">
+<link rel="stylesheet" href="css/app.css?v=48">
 </head>
 <body>
 <a class="skip" href="#main" data-i18n="nav.map">Карта</a>
@@ -68,7 +68,6 @@
     <a href="#/ai" data-route="ai"><svg class="ic"><use href="#i-spark"/></svg><span data-i18n="nav.ai">ИИ-помощник</span></a>
     <a href="#/kelisim" data-route="kelisim"><svg class="ic"><use href="#i-hands"/></svg><span data-i18n="nav.kelisim">Келісім</span></a>
     <a href="#/scenarios" data-route="scenarios"><svg class="ic"><use href="#i-layers"/></svg><span data-i18n="nav.scenarios">Сценарии</span></a>
-    <a href="#/coord" data-route="coord" class="coord-only" hidden><svg class="ic"><use href="#i-users"/></svg><span data-i18n="nav.coord">Координатор</span></a>
     <a href="#/about" data-route="about"><svg class="ic"><use href="#i-info"/></svg><span data-i18n="nav.about">Что это</span></a>
   </nav>
   <div class="topactions">
@@ -188,7 +187,6 @@
           <button type="button" class="btn btn-primary btn-sm" id="saveScBtn"><svg class="ic"><use href="#i-save"/></svg><span data-i18n="act.save"></span></button>
           <button type="button" class="btn btn-ghost btn-sm" id="kelBtn"><svg class="ic"><use href="#i-hands"/></svg><span data-i18n="act.kelisim"></span></button>
           <button type="button" class="btn btn-ghost btn-sm" id="pdfBtn"><svg class="ic"><use href="#i-file"/></svg><span data-i18n="act.pdf"></span></button>
-          <button type="button" class="btn btn-ghost btn-sm coord-only" id="publishBtn" hidden><svg class="ic"><use href="#i-users"/></svg><span data-i18n="act.publish"></span></button>
           <a class="btn btn-ghost btn-sm" id="tgVillage" target="_blank" rel="noopener"><svg class="ic"><use href="#i-send"/></svg><span data-i18n="tg.openVillage"></span></a>
         </div>
         <div class="tabs" role="tablist" aria-label="Разделы анализа">
@@ -231,11 +229,6 @@
     <div class="page"><h1 data-i18n="pr.title">Профиль</h1><div id="prPage"></div></div>
   </section>
 
-  <!-- КООРДИНАТОР -->
-  <section class="view view-page" data-view="coord" hidden>
-    <div class="page"><h1 data-i18n="co.title">Координатор</h1><div id="coPage"></div></div>
-  </section>
-
   <!-- ИИ-ПОМОЩНИК -->
   <section class="view view-page" data-view="ai" hidden>
     <div class="page page-chat"><div id="aiPage"></div></div>
@@ -244,11 +237,6 @@
   <!-- ЧТО ЭТО (о продукте, словарь, данные) -->
   <section class="view view-page" data-view="about" hidden>
     <div class="page"><div id="aboutPage"></div><div id="dataPage"></div></div>
-  </section>
-
-  <!-- ИССЛЕДОВАНИЕ: интервью и пилотные показатели -->
-  <section class="view view-page" data-view="research" hidden>
-    <div class="page"><h1 data-i18n="rs.title">Интервью и пилотные показатели</h1><div id="rsPage"></div></div>
   </section>
 
   <!-- НАСТРОЙКИ -->
@@ -270,7 +258,6 @@
 <dialog class="sheet" id="moreDlg" aria-label="Меню">
   <a href="#/scenarios"><svg class="ic"><use href="#i-layers"/></svg><span data-i18n="nav.scenarios">Сценарии</span></a>
   <a href="#/profile"><svg class="ic"><use href="#i-user"/></svg><span data-i18n="nav.profile">Профиль</span></a>
-  <a href="#/coord" class="coord-only" hidden><svg class="ic"><use href="#i-users"/></svg><span data-i18n="nav.coord">Координатор</span></a>
   <a href="#/about"><svg class="ic"><use href="#i-info"/></svg><span data-i18n="nav.about">Что это</span></a>
   <a href="#/settings"><svg class="ic"><use href="#i-gear"/></svg><span data-i18n="nav.settings">Настройки</span></a>
   <a href="https://t.me/JAIYLYM_bot" target="_blank" rel="noopener"><svg class="ic"><use href="#i-send"/></svg><span data-i18n="tg.open">Telegram-бот</span></a>
@@ -287,23 +274,23 @@
 <div id="report" class="report" aria-hidden="true"></div>
 
 <script src="vendor/leaflet-1.9.4/leaflet.js"></script>
-<script src="model.js?v=47"></script>
-<script src="engine.js?v=47"></script>
-<script src="nograze.js?v=47"></script>
-<script src="norms.js?v=47"></script>
-<script src="zone.js?v=47"></script>
-<script src="pipeline.js?v=47"></script>
-<script src="trend.js?v=47"></script>
-<script src="kelisim.js?v=47"></script>
-<script src="data/beskol.js?v=47"></script>
-<script src="data/plots.js?v=47"></script>
-<script src="data/herds.js?v=47"></script>
-<script src="js/i18n.js?v=47"></script>
-<script src="js/client.js?v=47"></script>
-<script src="js/report.js?v=47"></script>
-<script src="js/aitext.js?v=47"></script>
+<script src="model.js?v=48"></script>
+<script src="engine.js?v=48"></script>
+<script src="nograze.js?v=48"></script>
+<script src="norms.js?v=48"></script>
+<script src="zone.js?v=48"></script>
+<script src="pipeline.js?v=48"></script>
+<script src="trend.js?v=48"></script>
+<script src="kelisim.js?v=48"></script>
+<script src="data/beskol.js?v=48"></script>
+<script src="data/plots.js?v=48"></script>
+<script src="data/herds.js?v=48"></script>
+<script src="js/i18n.js?v=48"></script>
+<script src="js/client.js?v=48"></script>
+<script src="js/report.js?v=48"></script>
+<script src="js/aitext.js?v=48"></script>
 <script src="vendor/qrcode-1.4.4/qrcode.js" defer></script>
-<script src="js/kelisim-ui.js?v=47"></script>
-<script src="js/app.js?v=47"></script>
+<script src="js/kelisim-ui.js?v=48"></script>
+<script src="js/app.js?v=48"></script>
 </body>
 </html>

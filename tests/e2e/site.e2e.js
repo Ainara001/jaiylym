@@ -137,8 +137,7 @@ async function newcomer(page, label) {
   // лишнее скрыто: анкета водопоя, координатор, исследование, совет про укос, акимат на главной
   assert.equal(await page.$(".wcand details"), null, label + ": анкеты водопоя нет");
   assert.equal(JSON.stringify(await App(() => window.JaiylymApp.aiContext()["где_проверять_воду"])).includes("проверено_людьми"), false);
-  assert.equal(await page.$('.mainnav [href="#/research"], #moreDlg [href="#/research"]'), null);
-  assert.equal(await page.$$eval(".coord-only", x => x.every(e => e.hidden)), true);
+  assert.equal(await page.$('[data-view="research"], [data-view="coord"], #calibForm'), null);
   assert.equal(/укос/.test(await page.evaluate(() => { window.JaiylymApp.renderPane("brief"); return document.querySelector('.pane[data-pane="brief"] .todo').textContent; })), false);
   assert.equal(/акимат/i.test(await page.textContent('[data-view="home"]')), false);
   if (process.env.KEL_SHOTS) await page.screenshot({ path: path.join(process.env.KEL_SHOTS, "water.png"), fullPage: true });
@@ -278,11 +277,7 @@ async function journey(page, label) {
   // казахский язык и страница исследования
   await page.click('.langsw [data-lang="kk"]');
   assert.match(await page.textContent(".tabs"), /Егер былай болса/);
-  await page.goto(base + "#/research");
-  // переход по хэшу отрисовывается асинхронно — ждём страницу, а не читаем её сразу (иначе гонка, особенно в WebKit)
-  await page.waitForFunction(() => /Жазылған сұхбаттар/.test((document.querySelector("#rsPage") || {}).textContent || ""), null, { timeout: 10000 });
-  assert.match(await page.textContent("#rsPage"), /Жазылған сұхбаттар: 0/);
-  for (const route of ["research", "map?lat=43.02&lon=79.22&name=Кеген", "settings", "about", "home"]) {
+  for (const route of ["map?lat=43.02&lon=79.22&name=Кеген", "settings", "about", "home"]) {
     await page.goto(base + "#/" + route);
     await page.waitForTimeout(300);
     const wide = await page.evaluate(() => {
@@ -294,7 +289,7 @@ async function journey(page, label) {
     assert.equal(wide, null, `${label}: #/${route} шире экрана: ${wide}`);
   }
   // телефон: поля не мельче 16px (иначе iPhone увеличивает страницу при вводе), кнопки и поля не меньше 40px по высоте
-  if (/телефон/.test(label)) for (const route of ["map?lat=43.02&lon=79.22&name=Кеген", "ai", "settings", "research", "scenarios"]) {
+  if (/телефон/.test(label)) for (const route of ["map?lat=43.02&lon=79.22&name=Кеген", "ai", "settings", "scenarios"]) {
     await page.goto(base + "#/" + route);
     await page.waitForTimeout(300);
     const bad = await page.evaluate(() => {
