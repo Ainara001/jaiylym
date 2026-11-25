@@ -19,7 +19,6 @@ const J = require("./web/engine.js");
 const M = require("./web/model.js");
 const PL = require("./web/pipeline.js");
 const NG = require("./web/nograze.js");
-const Z = require("./web/zone.js");
 const NM = require("./web/norms.js");
 const TR = require("./web/trend.js");
 const { loadExamples, loadHerds } = require("./data");
@@ -55,7 +54,7 @@ function attachExamples() {
   // только если человек сам выбрал демо-стадо: план настоящего хозяйства не делит корм с выдуманными.
   for (const D of EXAMPLES) {
     const k = vkey(D.village.lat, D.village.lon);
-    state.villages[k] = Object.assign({ herds: [] }, state.villages[k] || {}, { example: true, data: D, demo: (D.herds || loadHerds()).map(h => Object.assign({}, h, { demo: true })) });
+    state.villages[k] = Object.assign({ herds: [] }, state.villages[k] || {}, { example: true, data: D, demo: loadHerds().map(h => Object.assign({}, h, { demo: true })) });
   }
 }
 // ---------- API сайта (вход, профили, сценарии) — см. api.js ----------
@@ -143,7 +142,7 @@ function pointInPoly([x, y], ring) {
 // ---------- расчёты ----------
 function compute(v, herd) {
   // кормовая площадь без жилья, ферм и промзон (OpenStreetMap), буфер по умолчанию; ёмкость — не больше нормы МСХ для области
-  const herds = herdsInPlan(v, herd), plots = NM.attach(Z.apply(NG.apply(v.data.plots, v.data.nograze), Z.defaultFor(v.data.village)), normSel(v));   // где известна площадь по документам — только она
+  const herds = herdsInPlan(v, herd), plots = NM.attach(NG.apply(v.data.plots, v.data.nograze), normSel(v));
   return { herds, plots, byId: Object.fromEntries(plots.map(p => [p.id, p])), cur: J.current(plots, herds), pl: J.solve(plots, herds) };
 }
 
@@ -275,7 +274,7 @@ function textPlan(v, herd) {
     : "При текущих ограничениях полностью распределить стада не удалось" + (pl.unmet[herd.id] ? " — вашему стаду не хватает корма." : ".") +
       (share != null ? ` Корм поделён справедливо: ваше стадо обеспечено на ${share}%; ни одно хозяйство не обеспечено меньше, если этого можно избежать.` : "");
   return `${head}\n\nМаршрут на сезон — ${herd.name}${herd.demo ? " (демо-стадо)" : ""} (${fmt(J.herdAU(herd))} усл. голов):\n\n${lines.join("\n")}\n\n` +
-    `Правило: ни один участок не загружен больше 100% расчётной ёмкости. Ближние участки — сначала дойному скоту. ` +
+    `Правило: ни один участок не загружен больше 100% расчётной ёмкости. Ближние участки — дойному скоту и на отдых. ` +
     `Ёмкость — оценка модели (не проверена укосом), вода у села и водоёмы на карте не проверены на месте.`;
 }
 
