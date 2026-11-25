@@ -1,6 +1,6 @@
 /*
  * Проверка продакшна JAIYLYM (запускается в GitHub Actions: .github/workflows/live-check.yml).
- * Ничего не меняет: только читает и задаёт ИИ шесть вопросов (это расходует 6 запросов дневного лимита).
+ * Ничего не меняет: только читает и задаёт ИИ семь вопросов (это расходует 7 запросов дневного лимита).
  * Выход с ошибкой — если сайт или сервер не отвечают, или ИИ не ответил.
  */
 const { Jaiylym: J, loadPlots, loadHerds } = require("../data");
@@ -146,6 +146,21 @@ async function ask(body, label) {
       const e = await (await req("POST", "/" + c.id + "/preview", c.links[0].key, { proposal: { type: "avoid", plot, reason: "far" } })).json();
       ok(e.effect && e.effect.verdict, `Келісім: последствия возражения — ${e.effect && e.effect.verdict} (${Date.now() - t0} мс)`);
       ok((await req("GET", "/" + c.id, "x".repeat(24))).status === 403, "Келісім: чужая ссылка закрыта (403)");
+      // общая карта и чат: кружок участника (Д-СВ, 5 км), чат, кто в сети, оценка места настоящим ИИ
+      const V0 = D.village, kx = 111.32 * Math.cos(V0.lat * Math.PI / 180), pt = { lat: +(V0.lat + 5 * Math.cos(Math.PI / 4) / 110.57).toFixed(5), lon: +(V0.lon + 5 * Math.sin(Math.PI / 4) / kx).toFixed(5) };
+      const pr = await req("POST", "/" + c.id + "/pin", c.links[0].key, Object.assign({ op: "set", r: 500 }, pt));
+      if (pr.status === 404) note("Келісім: карта и чат ещё не на сервере (старая сборка)");
+      else {
+        const pj = await pr.json(), pin = pj.live && pj.live.pins[0];
+        ok(pin && pin.facts.plot === "Д-СВ" && !!pin.verdict, `Келісім: место на карте — ${pin && pin.facts.plot}, вывод «${pin && pin.verdict}», плюсов ${pin && pin.pros.length}, минусов ${pin && pin.cons.length}`);
+        ok((await req("POST", "/" + c.id + "/chat", c.links[1].key, { text: "Проверка чата" })).ok, "Келісім: сообщение в чат");
+        const lv = await (await req("GET", "/" + c.id + "/live?since=0", c.organizer_key)).json();
+        ok(lv.chat.some(m => m.text === "Проверка чата") && lv.online.includes("org"), `Келісім: чат и «в сети» видны организатору (в сети: ${lv.online.join(", ")})`);
+        const as = await (await req("POST", "/" + c.id + "/assess", c.links[0].key, { lang: "ru" })).json();
+        console.log("\n--- ИИ: оценка места на карте Келісім ---\n" + ((as.ai && as.ai.text) || "нет ответа ИИ: " + (as.error || "?")) + "\n");
+        if (as.ai) { ok(true, "Келісім: ИИ оценил место"); if (!/Совет:/.test(as.ai.text)) note("оценка места без строки «Совет:» — проверьте ответ выше"); }
+        else note("Келісім: ИИ не оценил место (" + (as.error || "?") + ") — на сайте показана оценка по расчёту");
+      }
       ok((await req("DELETE", "/" + c.id, c.organizer_key)).ok, "Келісім: проверочная запись удалена");
     }
   } catch (e) { ok(false, "Келісім: " + e.message); }
