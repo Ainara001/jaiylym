@@ -55,8 +55,12 @@ async function check(page, label) {
 
 /** Выбрать вариант в форме, которая перерисовывается при выборе: нажатие и ожидание отмеченного переключателя в новой форме. */
 async function pick(page, sel) {
-  await page.click(sel, { force: true });
-  await page.waitForFunction(s => { const x = document.querySelector(s); return x && x.checked; }, sel, { timeout: 10000 });
+  // нажатие по координатам могло попасть мимо, пока форма перерисовывается: нажимаем сам переключатель, до трёх попыток
+  for (let i = 0; i < 3; i++) {
+    await page.waitForSelector(sel, { state: "attached" });
+    await page.$eval(sel, x => { if (!x.checked) x.click(); });
+    try { await page.waitForFunction(s => { const x = document.querySelector(s); return x && x.checked; }, sel, { timeout: 4000 }); return; } catch (e) { if (i === 2) throw e; }
+  }
 }
 
 async function flow(b, name) {
