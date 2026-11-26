@@ -56,7 +56,11 @@ const label = p => p.textContent("#accountShort");
 const toast = p => p.evaluate(() => (document.querySelector("#toast").hidden ? "" : document.querySelector("#toast").innerText));
 
 async function account(b) {
-  const W = await world(b), c = await W.ctx(), p = await W.page(c), count = (re, from) => W.hits.slice(from).filter(x => re.test(x)).length;
+  const W = await world(b);
+  try { await accountIn(W); } finally { W.close(); }          // сервер закрывается и при падении — иначе процесс тестов висит до тайм-аута CI
+}
+async function accountIn(W) {
+  const c = await W.ctx(), p = await W.page(c), count = (re, from) => W.hits.slice(from).filter(x => re.test(x)).length;
   await p.goto(W.base + HOME); await ready(p);
   // регистрация: двойной тап и Enter — один аккаунт
   W.delay = 300;
@@ -104,8 +108,10 @@ async function account(b) {
   await p.waitForFunction(() => document.querySelector("#accountShort").textContent === "Войти");
   await p.evaluate(w => window.Client.loginPw("aigul", w), PW);
   await p.evaluate(() => fetch(window.Client.API + "/auth/logout", { method: "POST", headers: { authorization: "Bearer " + JSON.parse(localStorage.getItem("jaiylym:session")) } }));
+  // всплывающее сообщение исчезает через несколько секунд: запоминаем всё, что в нём было (в WebKit проверка иногда опаздывала)
+  await p.evaluate(() => { const t = document.querySelector("#toast"); window.__toasts = []; new MutationObserver(() => window.__toasts.push(t.innerText)).observe(t, { childList: true, subtree: true, characterData: true, attributes: true }); });
   await p.evaluate(() => window.Client.listScenarios().catch(() => {}));
-  await p.waitForFunction(() => /Сессия закончилась/.test(document.querySelector("#toast").innerText));
+  await p.waitForFunction(() => window.__toasts.some(x => /Сессия закончилась/.test(x)));
   assert.equal(await label(p), "Войти");
   // длинное имя не раздвигает страницу
   await p.evaluate(w => window.Client.register("Ж".repeat(200), "longname", w), PW); await p.reload(); await p.waitForFunction(() => window.Client.user); await go(p, "#/profile"); await p.waitForSelector("#farmForm");
@@ -113,7 +119,7 @@ async function account(b) {
     await go(p, h); await sleep(250);
     assert.ok(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "страница раздвинулась: " + h);
   }
-  assert.deepEqual(W.errors, []); W.close();
+  assert.deepEqual(W.errors, []);
 }
 
 async function habits(b) {
