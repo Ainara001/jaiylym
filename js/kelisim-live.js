@@ -160,7 +160,7 @@
       box.innerHTML = ids.map(hid => { const s = stateOf(hid), p = pinOf(hid);
         return `<div class="kperson kp-${s.k}${hid === me() ? " kp-me" : ""}" title="${esc(nameOf(hid))}: ${esc(s.txt)}">${av(hid, true)}<span class="kdot" aria-hidden="true"></span>
           <b>${esc(nameOf(hid))}${hid === me() ? ` <small>(${tt("you")})</small>` : ""}</b><small>${esc(s.txt)}</small>
-          ${hid === "org" ? "" : `<small class="kp-pin">${p ? (p.confirmed ? `✓ ${tt("pinOk")}` : tt("pinYes")) : tt("pinNo")}</small>`}</div>`; }).join("");
+          ${hid === "org" && !p ? "" : `<small class="kp-pin">${p ? (p.confirmed ? `✓ ${tt("pinOk")}` : tt("pinYes")) : tt("pinNo")}</small>`}</div>`; }).join("");
       const on = $("#lvOn", root); if (on) on.innerHTML = `<span class="kdot kdot-on" aria-hidden="true"></span> ${tt("onlineN", { n })}`;
     }
 
@@ -204,7 +204,6 @@
     function renderTools() {
       const box = $("#lvTools", root); if (!box || !V()) return;
       const v = V();
-      if (v.role === "org") { box.innerHTML = `<p class="fine">${tt("orgTools")}</p>`; return; }
       if (v.status === "closed") { box.innerHTML = `<p class="fine">${tt("closed")}</p>`; return; }
       const has = !!pinOf(me());
       box.innerHTML = placing
@@ -218,7 +217,6 @@
     }
     function renderMine() {
       const box = $("#lvMine", root); if (!box || !V()) return;
-      if (V().role === "org") { box.innerHTML = ""; return; }
       const p = pinOf(me());
       const key = JSON.stringify(p && [p.lat, p.lon, p.r, p.confirmed, p.verdict, p.pros, p.cons, p.ai && p.ai.text, p.ai_stale, p.ai_fail, votes(p)]);
       if (key === mineKey) return; mineKey = key;
@@ -240,7 +238,7 @@
     async function sureDlg(p) {
       const v = V(), plot = p.facts.plot;
       const inPlan = v.plan && v.plan.routes && (v.plan.routes[me()] || []).some(s => s.plot === plot);
-      const wish = v.status === "review" && v.plan && plot && !inPlan && !v.expired;
+      const wish = v.role !== "org" && v.status === "review" && v.plan && plot && !inPlan && !v.expired;
       const d = document.createElement("dialog");
       d.className = "modal kel-dlg"; d.setAttribute("aria-label", tt("sureT"));
       const body = () => `<form method="dialog" class="modal-x"><button aria-label="${t("common.close")}">✕</button></form><h2>${tt("sureT")}</h2>
