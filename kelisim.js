@@ -567,14 +567,14 @@ function createKelisim({ kv, known, secret, ai, now = () => Date.now() }) {
         if (+b.v) target.votes[me] = +b.v; else delete target.votes[me];
         return;
       }
-      if (w.role !== "household") throw err(403, "место отмечает участник по своей ссылке");
       if (k.status === "closed") throw err(409, "согласование закрыто", { why: "closed" });
-      const mine = L.pins[w.id], h = find(k, w.id);
-      if (op === "remove") { if (!mine) return; delete L.pins[w.id]; say(L, { kind: "unpin", hid: w.id }, t); return; }
+      // организатор тоже может пасти свой скот: его место — «org», как у участника
+      const me = w.role === "org" ? "org" : w.id, mine = L.pins[me], h = w.role === "org" ? null : find(k, w.id);
+      if (op === "remove") { if (!mine) return; delete L.pins[me]; say(L, { kind: "unpin", hid: me }, t); return; }
       if (op === "confirm") {
         if (!mine) throw bad("сначала отметьте место на карте");
         mine.confirmed = new Date(t).toISOString();
-        say(L, { kind: "confirm", hid: w.id, plot: K.pinPlace(k.village, mine.lat, mine.lon).plot }, t);
+        say(L, { kind: "confirm", hid: me, plot: K.pinPlace(k.village, mine.lat, mine.lon).plot }, t);
         return;
       }
       if (op !== "set") throw bad("неизвестное действие");
@@ -585,9 +585,9 @@ function createKelisim({ kv, known, secret, ai, now = () => Date.now() }) {
       if (place.dist_km > 12) throw bad("точка слишком далеко от села (больше 12 км)", "far_pin");
       if (Object.keys(L.pins).length >= MAX.households && !mine) throw bad("мест слишком много");
       const moved = !mine || mine.lat !== lat || mine.lon !== lon;
-      L.pins[w.id] = { hid: w.id, lat: +lat.toFixed(5), lon: +lon.toFixed(5), r, at: new Date(t).toISOString(), confirmed: null, votes: moved ? {} : (mine.votes || {}), ai: moved ? null : mine.ai };
-      say(L, { kind: "pin", hid: w.id, plot: place.plot }, t);
-      h.joined = h.joined || new Date(t).toISOString();
+      L.pins[me] = { hid: me, lat: +lat.toFixed(5), lon: +lon.toFixed(5), r, at: new Date(t).toISOString(), confirmed: null, votes: moved ? {} : (mine.votes || {}), ai: moved ? null : mine.ai };
+      say(L, { kind: "pin", hid: me, plot: place.plot }, t);
+      if (h) h.joined = h.joined || new Date(t).toISOString();
     }),
     chat: (id, key, b) => liveAct(id, key, async (k, w, L, t) => {
       const me = w.role === "org" ? "org" : w.id, last = L.chat.filter(m => m.by === me).slice(-1)[0];
@@ -601,7 +601,7 @@ function createKelisim({ kv, known, secret, ai, now = () => Date.now() }) {
     /** Оценка места ИИ: факты расчёта → короткий вывод и совет («уверены?»). Без ключа или при сбое — ai: null, на сайте шаблон. */
     assess: async (id, key, b) => {
       const k = await load(id), w = who(k, key), L0 = await liveLoad(id), t = now();
-      const hid = w.role === "household" ? w.id : String((b && b.target) || "");
+      const hid = w.role === "household" ? w.id : String((b && b.target) || "org");
       const pin = L0.pins[hid];
       if (!pin) throw err(404, "у участника нет места на карте");
       const r = K.pinFacts(k, hid, pin, Object.values(L0.pins)), basis = basisOf(r);

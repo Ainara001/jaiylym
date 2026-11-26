@@ -1068,3 +1068,40 @@ main .kans .btn { min-height: 54px; font-size: 16px; padding-inline: 10px; }
 /* легенда карты — вверху слева, чтобы её сразу видели (+/− справа, режимы по центру) */
 .legend, .legend.collapsed { top: 10px; bottom: auto !important; }
 @media (max-width: 860px) { .legend, .legend.collapsed { top: 58px; } }   /* на телефоне — под переключателем «У села / План / Трава» */
+
+/* левая панель: кнопки в одну строку, граница тянется */
+@media (min-width: 861px) {
+  .workspace { grid-template-columns: var(--panel-w, 440px) minmax(0, 1fr); }
+  .panel { position: relative; }
+  .splitter { position: absolute; top: 0; bottom: 0; right: -5px; width: 10px; cursor: col-resize; z-index: 600; touch-action: none; }
+  .splitter::after { content: ""; position: absolute; top: 50%; left: 3px; width: 4px; height: 44px; margin-top: -22px; border-radius: 4px; background: var(--line); }
+  .splitter:hover::after, .splitter:focus-visible::after, body.resizing .splitter::after { background: var(--primary-2); }
+  body.resizing { cursor: col-resize; user-select: none; }
+  body.resizing #map { pointer-events: none; }
+  .actions { flex-wrap: nowrap; overflow-x: auto; gap: 6px; padding: 10px 12px 4px; scrollbar-width: none; }
+  .actions .btn { flex: none; min-height: 36px; padding: 6px 11px; font-size: 13.5px; }
+}
+.splitter { display: none; }
+@media (min-width: 861px) { .splitter { display: block; } }
+/* блок ИИ на «Главном»: просто кнопка, рамка — только когда есть ответ */
+.aibox { background: none; border: 0; padding: 0; margin: 10px 0 4px; }
+.aibox .aitext { background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin-top: 8px; }
+
+.popbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.popbtns .btn { width: 100%; justify-content: center; }
+
+/* ИИ-чат: окно по высоте экрана, без пустого места */
+.chat { height: calc(100vh - var(--top-h, 64px) - 120px); min-height: 460px; }
+.chat-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.chat-head h1 { font-size: 22px; margin: 0; display: flex; gap: 8px; align-items: center; }
+.chat-head-t { min-width: 0; }
+.chat-log { flex: 1; max-height: none; min-height: 0; }
+.chat-empty { margin: auto 20px 8px; text-align: center; color: var(--muted); }
+.chips-q.row { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 8px; }
+.chips-q.row button { flex: none; white-space: nowrap; }
+.chips-q:not(.row) { justify-content: center; padding-bottom: 16px; }
+.chat-note { margin: 8px 4px 0; }
+@media (max-width: 860px) { .chat { height: calc(100svh - var(--top-h, 56px) - var(--bottom-h, 64px) - 70px); min-height: 380px; } }
+.chat.empty { height: auto; min-height: 0; }
+.chat.empty .chat-log { flex: none; padding: 6px 20px 0; }
+.chat.empty .chat-empty { margin: 18px 20px 10px; }
