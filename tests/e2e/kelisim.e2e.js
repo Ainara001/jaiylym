@@ -38,7 +38,8 @@ async function open(b, errors, opts, label) {
   const ctx = await b.newContext(Object.assign({ serviceWorkers: "block", acceptDownloads: true }, opts));
   await ctx.addInitScript(a => { window.JAIYLYM_API_URL = a; }, base);
   const page = await ctx.newPage();
-  page.on("pageerror", e => errors.push(label + ": " + e.message));
+  // WebKit сообщает об опросе карты и чата, прерванном переходом на другую страницу, как об ошибке «access control checks» — это не ошибка сайта
+  page.on("pageerror", e => { if (!/\/live\?since=\d+ due to access control checks/.test(e.message)) errors.push(label + ": " + e.message); });
   await page.route(u => !u.href.startsWith(base), r => r.abort());
   return page;
 }
