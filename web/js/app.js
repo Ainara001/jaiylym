@@ -290,6 +290,27 @@
     };
   }
 
+  // граница между панелью и картой: тянется мышью или стрелками, ширина запоминается (на ноутбуке и ПК)
+  document.addEventListener("click", e => { const b = e.target.closest && e.target.closest("[data-popsave]"); if (b) { const s = $("#saveScBtn"); if (s) s.click(); } });
+  function initSplitter() {
+    const sp = $("#splitter"), ws = $(".workspace"); if (!sp || !ws) return;
+    const clamp = w => Math.round(Math.max(320, Math.min(w, innerWidth * 0.65)));
+    const set = w => { ws.style.setProperty("--panel-w", clamp(w) + "px"); if (S.map) S.map.invalidateSize(); };
+    const saved = C.ls.get("jaiylym:panelw", 0); if (saved) set(saved);
+    sp.addEventListener("pointerdown", e => {
+      e.preventDefault(); sp.setPointerCapture(e.pointerId); document.body.classList.add("resizing");
+      const left = ws.getBoundingClientRect().left;
+      const move = ev => set(ev.clientX - left);
+      const up = () => { sp.removeEventListener("pointermove", move); sp.removeEventListener("pointerup", up); document.body.classList.remove("resizing");
+        C.ls.set("jaiylym:panelw", parseInt(getComputedStyle(ws).getPropertyValue("--panel-w"), 10) || 0); };
+      sp.addEventListener("pointermove", move); sp.addEventListener("pointerup", up);
+    });
+    sp.addEventListener("keydown", e => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      const cur = $(".panel").getBoundingClientRect().width; set(cur + (e.key === "ArrowRight" ? 40 : -40));
+      C.ls.set("jaiylym:panelw", clamp(cur + (e.key === "ArrowRight" ? 40 : -40)));
+    });
+  }
   function drawVillage() {
     { const tr = $("#toResult"); if (tr) tr.hidden = !S.D; }
     placeLabels(false);
@@ -1062,7 +1083,8 @@
         <label class="field">${t("rest.spring")}<input type="number" inputmode="numeric" min="0" max="${S.P.season_days}" step="1" data-rest="${esc(p.id)}" data-side="spring" value="${((S.rest || {})[p.id] || {}).spring || 0}"></label>
         <label class="field">${t("rest.autumn")}<input type="number" inputmode="numeric" min="0" max="${S.P.season_days}" step="1" data-rest="${esc(p.id)}" data-side="autumn" value="${((S.rest || {})[p.id] || {}).autumn || 0}"></label>
         <small class="fine">${t("rest.note", { d: S.P.season_days, s: seasonStart() })}</small></fieldset>
-      <a class="btn btn-tg btn-sm" style="width:100%;margin-top:10px;color:#fff" href="${botLink(p.id)}" target="_blank" rel="noopener">${ic("send")} ${t("pop.subscribe")}</a>
+      <div class="popbtns"><button type="button" class="btn btn-primary btn-sm" data-popsave>${ic("save")} ${t("pop.save")}</button>
+        <a class="btn btn-tg btn-sm" style="color:#fff" href="${botLink(p.id)}" target="_blank" rel="noopener">${ic("send")} ${t("pop.subscribeShort")}</a></div>
       ${S.botSubs[p.id] ? `<p class="fine" style="margin:6px 0 0">${t("pop.subsCount", { n: S.botSubs[p.id] })}</p>` : ""}</div>`;
   }
   function bindPlotHtml(root) {
@@ -2439,16 +2461,17 @@
     const hist = chat.hist;
     const ctxLine = S.D ? t("ai.ctx", { v: `${esc(S.D.village.name)} · ${S.plots.length} ${t("ai.plots")} · ${S.herds.length} ${t("sc.herds")}` }) +
       (S.chatAuto ? ` <a href="#/map">${S.chatAuto === "demo" ? t("ai.ctxDemo", { v: esc(S.D.village.name) }) : t("ai.ctxLast")}</a>` : "") : t("ai.loadingCtx");
-    el.innerHTML = `<div class="chat"><div class="chat-head"><h1>${ic("spark")} ${t("ai.title")}</h1><p class="fine" style="margin:0">${t("ai.lead")}</p>
-        <span class="chat-ctx">${ic("pin")} ${ctxLine}</span></div>
+    el.innerHTML = `<div class="chat${hist.length || chat.busy ? "" : " empty"}"><div class="chat-head"><div class="chat-head-t"><h1>${ic("spark")} ${t("ai.title")}</h1><span class="chat-ctx">${ic("pin")} ${ctxLine}</span></div>
+        ${hist.length ? `<button type="button" class="btn btn-ghost btn-sm" id="chatClear">${ic("trash")} ${t("ai.clear")}</button>` : ""}</div>
       <div class="chat-log" id="chatLog" aria-live="polite">${hist.map(m => `<div class="msg ${m.role}">${m.role === "ai" ? (m.err ? esc(m.text) : aiText(m.text) + (m.mark || "") + aiSources(m.sources) + aiSuggest(m.suggest)) : esc(m.text)}</div>`).join("")}${chat.busy ? `<div class="msg ai" id="aiTyping">${t("ai.thinking")}</div>` : ""}</div>
-      <div class="chips-q">${["ai.q1", "ai.q5", "ai.q6", "ai.q7", "ai.q8", "ai.q2", "ai.q3", "ai.q4"].map(k => `<button type="button" data-q="${esc(t(k))}">${t(k)}</button>`).join("")}</div>
+      ${hist.length ? "" : `<p class="chat-empty">${t("ai.empty")}</p>`}<div class="chips-q${hist.length ? " row" : ""}">${["ai.q1", "ai.q5", "ai.q6", "ai.q7", "ai.q8", "ai.q2", "ai.q3", "ai.q4"].map(k => `<button type="button" data-q="${esc(t(k))}">${t(k)}</button>`).join("")}</div>
       <form class="chat-form" id="chatForm"><textarea id="chatIn" rows="1" maxlength="1200" placeholder="${t("ai.ph")}" aria-label="${t("ai.ph")}"></textarea>
         <button class="btn btn-primary">${ic("send")} <span>${t("ai.send")}</span></button></form></div>
-      <p class="fine" style="margin-top:10px">${t("ai.disclaimer")} ${t("ai.note")} ${hist.length ? `<button class="linkbtn" id="chatClear">${t("ai.clear")}</button>` : ""}</p>`;
+      <p class="fine chat-note">${t("ai.disclaimerShort")}</p>`;
     const log = $("#chatLog"), inp = $("#chatIn");
     log.scrollTop = log.scrollHeight;
     const send = async text => {
+      { const ch = $(".chat"); if (ch) ch.classList.remove("empty"); }       // первая реплика — окно чата на всю высоту
       text = text.trim(); if (!text) return;
       if (chat.busy) { toast(t("ai.waitPrev")); return; }          // двойной тап и несколько подсказок подряд — один вопрос
       const c = chat, save = () => { try { if (chat === c) sessionStorage.setItem("jaiylym:chat", JSON.stringify(hist.filter(m => !m.err).map(({ suggest, mark, ...m }) => m).slice(-30))); } catch (_) {} };
@@ -2582,6 +2605,7 @@
     });
     $("#drawBtn").onclick = () => (S.draw ? endDraw() : startZone());
     // телефон: итог и план — под картой; кнопка на карте прокручивает к ним
+    initSplitter();
     $("#toResult").onclick = () => { const pnl = $(".panel"); if (pnl) pnl.scrollIntoView({ behavior: "smooth", block: "start" }); };
     $("#drawUndo").onclick = undoDraw;
     $("#drawCancel").onclick = endDraw;

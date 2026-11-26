@@ -60,9 +60,11 @@ test("места на общей карте: участок по точке, п�
   assert.equal(r.d.live.pins.find(p => p.hid === "h3").verdict, "bad");
   assert.equal((await pin(k, k.keys.h3, Object.assign({ op: "set", r: 250 }, at(14, 10)))).status, 400);
   assert.equal((await pin(k, k.keys.h3, Object.assign({ op: "set", r: 777 }, at(4, 10)))).status, 400, "радиус только 250/500/1000");
-  // организатор места не ставит, но видит
-  assert.equal((await pin(k, k.org, Object.assign({ op: "set", r: 500 }, at(4, 90)))).status, 403);
-  assert.equal((await live(k, k.org)).d.pins.length, 3);
+  // организатор тоже может пасти свой скот: ставит своё место «org»
+  const op = await pin(k, k.org, Object.assign({ op: "set", r: 500 }, at(4, 90)));
+  assert.equal(op.status, 200, JSON.stringify(op.d));
+  assert.equal(op.d.live.pins.find(p => p.hid === "org").facts.plot, "Д-В");
+  assert.equal((await live(k, k.keys.h1)).d.pins.length, 4, "место организатора видят все");
   // карта и чат не меняют rev плана — организатору не приходится «обновлять страницу»
   assert.equal((await call("GET", "/" + k.id, k.org)).d.rev, rev0);
   // первое действие на карте — участник «зашёл»
