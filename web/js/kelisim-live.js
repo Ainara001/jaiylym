@@ -297,6 +297,8 @@
       };
     }
 
+    // уход со страницы — опрос карты и чата больше не нужен (и не оставляет прерванный запрос)
+    window.addEventListener("pagehide", () => stop(false));
     return { mount, stop, colorOf, get data() { return data; } };
   };
 })();
