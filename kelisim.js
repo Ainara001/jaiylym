@@ -23,6 +23,8 @@ const MAX = { households: 60, proposals: 600, perHousehold: 20, log: 600, versio
 const PLOT_RE = /^[БД]-(С|СВ|В|ЮВ|Ю|ЮЗ|З|СЗ)$/;
 const DIST = { near: 1.8, far: 5.5 };
 const sha = s => crypto.createHash("sha256").update(String(s)).digest("hex");
+// место на карте по коду участника: только свои ключи записи — «__proto__» или «constructor» из запроса не дают объект-прототип
+const pinAt = (pins, hid) => (typeof hid === "string" && Object.prototype.hasOwnProperty.call(pins, hid) ? pins[hid] : undefined);
 const rnd = n => crypto.randomBytes(n).toString("base64url");
 const err = (code, message, extra) => Object.assign(new Error(message), { code }, extra ? { extra } : {});
 const bad = (m, why) => err(400, m, why && { why });
@@ -559,7 +561,7 @@ function createKelisim({ kv, known, secret, ai, now = () => Date.now() }) {
     pin: (id, key, b) => liveAct(id, key, async (k, w, L, t) => {
       const op = b && b.op;
       if (op === "vote") {
-        const target = L.pins[b.target];
+        const target = pinAt(L.pins, b && b.target);
         if (!target) throw err(404, "такого места нет");
         const me = w.role === "org" ? "org" : w.id;
         if (me === target.hid) throw bad("за своё место голосовать нельзя");
@@ -594,7 +596,7 @@ function createKelisim({ kv, known, secret, ai, now = () => Date.now() }) {
       if (last && t - Date.parse(last.at) < 1500) throw err(429, "не так быстро");
       const msg = text(b && b.text, MAX.text, "сообщение");
       if (!msg) throw bad("пустое сообщение");
-      const about = b && b.about && L.pins[b.about] ? b.about : undefined;
+      const about = b && pinAt(L.pins, b.about) ? b.about : undefined;
       L.chat.push({ seq: ++L.seq, by: me, text: msg, about, at: new Date(t).toISOString() });
       if (L.chat.length > CHAT_MAX) L.chat.splice(0, L.chat.length - CHAT_MAX);
     }),
@@ -602,16 +604,16 @@ function createKelisim({ kv, known, secret, ai, now = () => Date.now() }) {
     assess: async (id, key, b) => {
       const k = await load(id), w = who(k, key), L0 = await liveLoad(id), t = now();
       const hid = w.role === "household" ? w.id : String((b && b.target) || "org");
-      const pin = L0.pins[hid];
+      const pin = pinAt(L0.pins, hid);
       if (!pin) throw err(404, "у участника нет места на карте");
       const r = K.pinFacts(k, hid, pin, Object.values(L0.pins)), basis = basisOf(r);
       if (pin.ai && pin.ai.basis === basis && pin.ai.lang === lang(b)) return { ai: pin.ai, facts: r };
       if (pin.ai_at && t - Date.parse(pin.ai_at) < 15e3) throw err(429, "оценка уже готовится, подождите");
-      await liveChange(id, X => { if (X.pins[hid]) X.pins[hid].ai_at = new Date(t).toISOString(); });
+      await liveChange(id, X => { if (pinAt(X.pins, hid)) X.pins[hid].ai_at = new Date(t).toISOString(); });
       const res = ai ? await ai({ system: AI_PIN[lang(b)], input: pinInput(k, hid, pin, r), maxTokens: 400 }).catch(() => ({ ok: false })) : { ok: false };
       if (!res.ok) return { ai: null, facts: r, error: res.error || "no_ai" };
       const out = { text: clip(res.text), verdict: r.verdict, basis, lang: lang(b), at: new Date(now()).toISOString() };
-      await liveChange(id, X => { if (X.pins[hid] && X.pins[hid].lat === pin.lat && X.pins[hid].lon === pin.lon) X.pins[hid].ai = out; });
+      await liveChange(id, X => { if (pinAt(X.pins, hid) && X.pins[hid].lat === pin.lat && X.pins[hid].lon === pin.lon) X.pins[hid].ai = out; });
       return { ai: out, facts: r };
     },
     /** Общая сводка ИИ по всем местам: где перегруз и споры, кому стоит пересмотреть место. Не чаще раза в минуту. */
