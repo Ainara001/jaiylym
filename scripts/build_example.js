@@ -3,7 +3,6 @@
 // Запуск: node scripts/build_example.js beskol
 const fs = require("fs");
 const path = require("path");
-const zlib = require("zlib");
 const PL = require("../web/pipeline.js");
 const NG = require("../web/nograze.js");
 
@@ -16,35 +15,8 @@ const VILLAGES = {
   beskol: { name: "Бесколь", region: "Северо-Казахстанская область", lat: 54.77515, lon: 69.09779, global: "JAIYLYM_BESKOL" },
 };
 
-// ---------- PNG с палитрой (как ndviPng в app.js, но 8 бит на пиксель) ----------
-const STOPS = [[0.05, [140, 81, 10]], [0.2, [216, 181, 106]], [0.35, [159, 208, 104]], [0.55, [47, 154, 75]]];
-function ramp(v) {
-  if (v <= STOPS[0][0]) return STOPS[0][1];
-  for (let k = 1; k < STOPS.length; k++) if (v <= STOPS[k][0]) {
-    const [a, ca] = STOPS[k - 1], [b, cb] = STOPS[k], q = (v - a) / (b - a);
-    return ca.map((x, j) => Math.round(x + (cb[j] - x) * q));
-  }
-  return STOPS[STOPS.length - 1][1];
-}
-const CRC = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
-const crc = b => { let c = 0xffffffff; for (const x of b) c = CRC[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
-function chunk(type, data) {
-  const t = Buffer.concat([Buffer.from(type, "latin1"), data]), o = Buffer.alloc(8 + data.length + 4);
-  o.writeUInt32BE(data.length, 0); t.copy(o, 4); o.writeUInt32BE(crc(t), 8 + data.length);
-  return o;
-}
-function ndviPng(grid) {
-  const n = grid.size, LV = 101, lo = 0.05, hi = 0.55;                // цвет 0 — прозрачный, дальше 101 ступень NDVI
-  const pal = Buffer.alloc((LV + 1) * 3), tr = Buffer.alloc(LV + 1, 190); tr[0] = 0;
-  for (let i = 0; i < LV; i++) Buffer.from(ramp(lo + (hi - lo) * i / (LV - 1))).copy(pal, (i + 1) * 3);
-  const raw = Buffer.alloc(n * (n + 1));
-  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
-    const v = grid.ndvi[y * n + x];
-    if (grid.pasture[y * n + x] && !Number.isNaN(v)) raw[y * (n + 1) + 1 + x] = 1 + Math.round(Math.min(1, Math.max(0, (v - lo) / (hi - lo))) * (LV - 1));
-  }
-  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(n, 0); ihdr.writeUInt32BE(n, 4); ihdr[8] = 8; ihdr[9] = 3;
-  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("PLTE", pal), chunk("tRNS", tr), chunk("IDAT", zlib.deflateSync(raw, { level: 9 })), chunk("IEND", Buffer.alloc(0))]);
-}
+const { ndviPng: pngBuf } = require("../villagecache.js");
+const ndviPng = grid => pngBuf(grid);
 
 (async () => {
   const id = process.argv[2], V = VILLAGES[id];
