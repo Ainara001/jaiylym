@@ -228,7 +228,7 @@ const str = (x, max = 80) => plain(x).replace(/[\u0000-\u001f\u007f<>\u200b\u200
 const coordOk = (lat, lon) => Number.isFinite(+lat) && Number.isFinite(+lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
 const PLOT_RE = /^[БД]-(С|СВ|В|ЮВ|Ю|ЮЗ|З|СЗ)$/;
 
-function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, onDeleted, allowedOrigins, kelisimSecret }) {
+function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, onDeleted, allowedOrigins, kelisimSecret, villageCache }) {
   // состояние берём при каждом обращении: бот может заменить объект целиком при загрузке
   const st = () => { const s = getState(); s.users = s.users || {}; s.villagePlans = s.villagePlans || {}; return s; };
   // логин — поле самого пользователя: отдельный список логинов раньше не сохранялся, и после перезапуска войти было нельзя
@@ -468,9 +468,9 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, onDelet
     const url = new URL(req.url, "http://x");
     const p = url.pathname;
     if (!p.startsWith("/auth/") && !p.startsWith("/api/me") && !p.startsWith("/api/scenarios") &&
-        !p.startsWith("/api/history") && !p.startsWith("/api/coord") && !p.startsWith("/api/kelisim") && p !== "/api/village" && p !== "/api/ai" && p !== "/api/ai/status") return false;
+        !p.startsWith("/api/history") && !p.startsWith("/api/coord") && !p.startsWith("/api/kelisim") && p !== "/api/village" && p !== "/api/village/cache" && p !== "/api/ai" && p !== "/api/ai/status") return false;
     cors(req, res);
-    if ((p === "/api/village" || p === "/api/ai/status") && !res.getHeader("Access-Control-Allow-Origin")) res.setHeader("Access-Control-Allow-Origin", "*");
+    if ((p === "/api/village" || p === "/api/village/cache" || p === "/api/ai/status") && !res.getHeader("Access-Control-Allow-Origin")) res.setHeader("Access-Control-Allow-Origin", "*");
     if (req.method === "OPTIONS") { res.writeHead(204).end(); return true; }
     if (p.startsWith("/api/kelisim")) return kelisimRoute(req, res, p);
     try {
@@ -620,6 +620,14 @@ function createApi({ getState, save, kv, vkey, botUsername, onFarmSaved, onDelet
       }
 
       // --- публично: стада села из Telegram (чужие — без имён) и число подписок на участки ---
+      // --- публично: село, уже посчитанное сервером для кого-то раньше (или запуск расчёта для следующих) ---
+      if (p === "/api/village/cache" && req.method === "GET") {
+        if (!villageCache) return json(res, 404, { error: "нет такого адреса" }), true;
+        if (limited(req, "vcache", 30, 60e3)) return json(res, 429, { error: "слишком часто" }), true;
+        const r = await villageCache.get(url.searchParams.get("lat"), url.searchParams.get("lon"));
+        if (r.status === "outside") return json(res, 400, { error: "точка вне Казахстана" }), true;
+        return json(res, r.status === "ok" ? 200 : 202, r), true;
+      }
       if (p === "/api/village" && req.method === "GET") {
         const me = await auth(req);
         const vk = vkey(url.searchParams.get("lat"), url.searchParams.get("lon"));

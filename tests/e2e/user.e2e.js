@@ -20,9 +20,9 @@ const XSS = `"><img src=x onerror="window.__xss=1"> '><svg onload="window.__xss=
 const PW = "long-password-1";
 
 /** Свой сервер на каждый тест: состояние, счётчик запросов, задержка и «мусорный» режим. */
-async function world(b) {
+async function world(b, villageCache) {
   const W = { hits: [], delay: 0, junk: "", ai: 0, errors: [], state: { users: {}, villages: Object.fromEntries(loadExamples().map(D => [vkey(D.village.lat, D.village.lon), { data: D, herds: [{ id: "tg5", name: XSS, sheep: 5, home: "Б-С" }] }])) } };
-  const api = createApi({ getState: () => W.state, save() {}, kv: memoryKv(), vkey, botUsername: "x", onFarmSaved() {}, onDeleted() {}, allowedOrigins: [], kelisimSecret: "s" });
+  const api = createApi({ getState: () => W.state, save() {}, kv: memoryKv(), vkey, botUsername: "x", onFarmSaved() {}, onDeleted() {}, allowedOrigins: [], kelisimSecret: "s", villageCache });
   let n = 0;
   const srv = http.createServer(async (q, r) => {
     const u = decodeURIComponent(new URL(q.url, "http://x").pathname);
@@ -197,7 +197,31 @@ async function injections(b) {
   } finally { G.ask = was; W.close(); }
 }
 
-for (const name of BROWSERS) for (const [title, fn] of [["аккаунт, выход, двойные нажатия, две вкладки", account], ["привычки: чат, сбои сервера, странный ввод, запрет хранилища", habits], ["внедрения: поля, ссылки, ответы чужих серверов", injections]])
+/** Село, которое сервер уже посчитал для кого-то: открывается сразу, без спутниковых сервисов (внешняя сеть закрыта). */
+async function cached(b) {
+  const { createVillageCache } = require("../../villagecache.js");
+  const D = JSON.parse(JSON.stringify(loadExamples()[0])), png = "data:image/png;base64," + fs.readFileSync(path.join(WEB, "data", "beskol.png")).toString("base64");
+  const PT = { lat: 51.12345, lon: 71.43021 };
+  D.village = Object.assign({}, D.village, PT, { name: "" }); delete D.village.official;
+  let built = 0;
+  const vc = createVillageCache({ kv: memoryKv(), vkey, fresh: () => true, build: async () => { built++; return { data: D, png }; } });
+  await vc.get(PT.lat, PT.lon); while (vc.pending) await sleep(10);
+  const W = await world(b, vc), p = await W.page(await W.ctx()), outside = [];
+  p.on("request", r => { if (!r.url().startsWith(W.base)) outside.push(r.url()); });
+  try {
+    const t0 = Date.now();
+    await p.goto(W.base + `#/map?lat=${PT.lat}&lon=${PT.lon}&name=` + encodeURIComponent("Новое село"));
+    await p.waitForFunction(() => window.JaiylymApp && window.JaiylymApp.S.pl && window.JaiylymApp.S.D.village.name === "Новое село", null, { timeout: 15000 });
+    assert.ok(Date.now() - t0 < 10000, "из кэша — быстро: " + (Date.now() - t0) + " мс");
+    assert.equal(built, 1);
+    assert.deepEqual(outside.filter(u => /planetarycomputer|overpass|nominatim/.test(u)), [], "снимки и OSM не запрашивались");
+    assert.ok(await p.evaluate(() => !!window.JaiylymApp.S.mask), "картинка травы с сервера разобрана");
+    assert.ok(W.hits.some(h => h === "GET /api/village/cache"));
+    assert.deepEqual(W.errors, []);
+  } finally { W.close(); }
+}
+
+for (const name of BROWSERS) for (const [title, fn] of [["село из общего кэша сервера", cached], ["аккаунт, выход, двойные нажатия, две вкладки", account], ["привычки: чат, сбои сервера, странный ввод, запрет хранилища", habits], ["внедрения: поля, ссылки, ответы чужих серверов", injections]])
   test(`${name}: обычный человек — ${title}`, { skip: !pw && "playwright не установлен", timeout: 150000 }, async () => {
     const b = await pw[name].launch();
     try { await fn(b); } finally { await b.close(); }

@@ -124,6 +124,8 @@
   // ---------- координатор ----------
 
   // ---------- данные бота по селу (публично; свои стада помечены, чужие — без имён) ----------
+  // село, уже посчитанное сервером: ответ сразу или ничего (сервер спит или считает) — тогда сайт считает сам
+  const villageCache = (lat, lon) => req("GET", `/api/village/cache?lat=${(+lat).toFixed(5)}&lon=${(+lon).toFixed(5)}`, null, { timeout: 6000, auth: false });
   const villageData = (lat, lon) => req("GET", `/api/village?lat=${lat}&lon=${lon}`, null, { timeout: 90000 });
 
   // ---------- ИИ-помощник (Gemini через сервер; ключ хранится только на сервере) ----------
@@ -137,6 +139,6 @@
     get user() { return user; }, get loggedIn() { return !!token; },
     startLogin, pollLogin, register, loginPw, logout, me, saveFarm, deleteAccount, addPasture, deletePasture,
     listScenarios, saveScenario, deleteScenario, listHistory, addHistory,
-    villageData, ai, kel,
+    villageData, villageCache, ai, kel,
   };
 })();

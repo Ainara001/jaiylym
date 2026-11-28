@@ -76,6 +76,8 @@ const siteApi = require("./api").createApi({
   onFarmSaved: (uid, farm, oldVk) => syncFarmHerd(uid, farm, oldVk),
   onDeleted: uid => forgetPerson(uid),
   kelisimSecret: process.env.KELISIM_SECRET || process.env.TELEGRAM_TOKEN,     // подпись выгрузки согласования
+  villageCache: TEST ? null : require("./villagecache.js").createVillageCache({ kv: store.kv, vkey: (lat, lon) => vkey(lat, lon),
+    build: require("./villagecache.js").pipelineBuild(PL), fresh: d => d.land_rule === PL.LAND_RULE && d.source && d.source.year === PL.summerYear() }),
 });
 
 /** Аккаунт удалён: стадо этого человека во всех сёлах, его чат с ботом, подписки и напоминания. */
