@@ -68,3 +68,22 @@ test("длинный ввод не подвешивает разбор", () => {
   const run = { телефон: () => K.text("7 7".repeat(n / 3), 1e6, "x"), поиск: () => A.needsWeb("сколько ".repeat(n / 8)), метки: () => A.fixWebLabels("[ ".repeat(n / 2)), числа: () => F.verifyNumbers("1 ".repeat(n / 2), {}, ""), ответ: () => AT.toHtml("1 111 ".repeat(n / 6)), область: () => N.regionOf("область ".repeat(n / 8)) };
   for (const [k, f] of Object.entries(run)) { const s = Date.now(); f(); assert.ok(Date.now() - s < 3000, `${k}: ${Date.now() - s} мс`); }
 });
+
+test("общая карта Келісім: «__proto__» вместо участника — отказ, а не порча объектов сервера", () => quiet(async ({ log }) => {
+  const W = await world(), snap = { village: W.D.village, plots: NG.apply(W.D.plots, W.D.nograze), params: {}, norm: { region: N.regionOf(W.D.village.region) }, source: { year: 2026, dates: [] } };
+  const k = (await W.call("POST", "/api/kelisim", { title: "T", snapshot: snap, households: [{ name: "А", herd: { sheep: 50 } }, { name: "Б", herd: { sheep: 50 } }] })).d;
+  for (const key of [k.organizer_key, k.links[0].key]) {
+    const h = { authorization: "Kelisim " + key };
+    await W.call("POST", `/api/kelisim/${k.id}/pin`, { op: "set", lat: W.D.village.lat + 0.01, lon: W.D.village.lon, r: 500 }, h);
+    for (const x of ["__proto__", "constructor", "toString", "hasOwnProperty"]) for (const [act, b] of [["pin", { op: "vote", target: x, v: 1 }], ["assess", { target: x }], ["chat", { text: "ок", about: x }]]) {
+      const r = await W.call("POST", `/api/kelisim/${k.id}/${act}`, b, h);
+      assert.ok(r.s < 500, `${act} ${x} → ${r.s}`);
+      if (act === "pin") assert.equal(r.s, 404, "голос за несуществующее место");
+      if (act === "chat") assert.equal(r.d.live.chat.slice(-1)[0].about, undefined);
+      await new Promise(res => setTimeout(res, act === "chat" ? 1600 : 0));
+    }
+  }
+  assert.equal(({}).ai, undefined); assert.equal(({}).ai_at, undefined);
+  assert.deepEqual(log.filter(x => /TypeError/.test(x)), []);
+  W.close();
+}));
