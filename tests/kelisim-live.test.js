@@ -169,3 +169,20 @@ test("место → участок: кольца 0,5–3 и 3–8 км, вос�
   assert.equal(p(0.3, 0).ring, "village");
   assert.equal(p(9, 0).ring, "outside");
 });
+
+test("оценки ИИ: не больше 60 на согласование в сутки — один участник не выбирает общий лимит", async () => {
+  const k = await make();
+  const orig = AI.ask, key = process.env.DEEPSEEK_API_KEY;
+  let n = 0;
+  process.env.DEEPSEEK_API_KEY = "test";
+  AI.ask = async () => { n++; return { ok: true, text: "Ок.", model: "t" }; };
+  try {
+    for (let i = 0; i < 62; i++) {
+      await pin(k, k.keys.h1, Object.assign({ op: "set", r: 500 }, at(2 + (i % 40) * 0.1, 45)));
+      const r = await call("POST", `/${k.id}/assess`, k.keys.h1, { lang: i % 2 ? "kk" : "ru" });
+      assert.equal(r.status, 200);
+      if (i >= 60) assert.deepEqual([r.d.ai, r.d.error], [null, "quota"]);
+    }
+    assert.equal(n, 60);
+  } finally { AI.ask = orig; if (key == null) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = key; }
+});

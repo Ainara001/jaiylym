@@ -236,7 +236,7 @@ function view(k, who, now) {
  */
 
 // ---------- общая карта и чат ----------
-const ONLINE_MS = 25e3, CHAT_MAX = 300;
+const ONLINE_MS = 25e3, CHAT_MAX = 300, AI_PER_DAY = 60;      // оценок ИИ на одно согласование в сутки: один человек не выбирает общий дневной лимит
 const presence = new Map();                         // id согласования → { участник: время последнего запроса }
 const clip = s => String(s || "").replace(/\*\*|__|`+/g, "").replace(/^#+\s*/gm, "").trim().slice(0, 1500);
 const lang = b => (b && b.lang === "kk" ? "kk" : "ru");
@@ -251,6 +251,13 @@ function liveView(k, L, t, since) {
       ai_stale: !!(p.ai && p.ai.basis !== basisOf(r)) }))(K.pinFacts(k, p.hid, p, pins)))),
     chat: L.chat.filter(m => m.seq > since).slice(-200), summary: L.summary,
   };
+}
+/** Взять одну оценку ИИ из суточной квоты согласования (запись живого слоя). */
+function aiQuota(L, t) {
+  const day = new Date(t).toISOString().slice(0, 10);
+  if (!L.ai_day || L.ai_day.d !== day) L.ai_day = { d: day, n: 0 };
+  if (L.ai_day.n >= AI_PER_DAY) return false;
+  L.ai_day.n++; return true;
 }
 /** Отпечаток фактов: оценка ИИ устарела, если изменились вывод, плюсы или минусы. */
 const basisOf = r => crypto.createHash("sha1").update(JSON.stringify([r.verdict, r.pros.map(x => x.k), r.cons.map(x => x.k), r.facts.plot])).digest("hex").slice(0, 12);
@@ -609,7 +616,9 @@ function createKelisim({ kv, known, secret, ai, now = () => Date.now() }) {
       const r = K.pinFacts(k, hid, pin, Object.values(L0.pins)), basis = basisOf(r);
       if (pin.ai && pin.ai.basis === basis && pin.ai.lang === lang(b)) return { ai: pin.ai, facts: r };
       if (pin.ai_at && t - Date.parse(pin.ai_at) < 15e3) throw err(429, "оценка уже готовится, подождите");
-      await liveChange(id, X => { if (pinAt(X.pins, hid)) X.pins[hid].ai_at = new Date(t).toISOString(); });
+      let room = true;
+      await liveChange(id, X => { room = aiQuota(X, t); if (room && pinAt(X.pins, hid)) X.pins[hid].ai_at = new Date(t).toISOString(); });
+      if (!room) return { ai: null, facts: r, error: "quota" };
       const res = ai ? await ai({ system: AI_PIN[lang(b)], input: pinInput(k, hid, pin, r), maxTokens: 400 }).catch(() => ({ ok: false })) : { ok: false };
       if (!res.ok) return { ai: null, facts: r, error: res.error || "no_ai" };
       const out = { text: clip(res.text), verdict: r.verdict, basis, lang: lang(b), at: new Date(now()).toISOString() };
@@ -622,6 +631,9 @@ function createKelisim({ kv, known, secret, ai, now = () => Date.now() }) {
       const L0 = await liveLoad(id), t = now(), pins = Object.values(L0.pins);
       if (!pins.length) throw bad("на карте ещё нет мест");
       if (L0.summary && L0.summary.lang === lang(b) && t - Date.parse(L0.summary.at) < 60e3) return { summary: L0.summary };
+      let room = true;
+      await liveChange(id, X => { room = aiQuota(X, t); });
+      if (!room) return { summary: null, error: "quota" };
       const rows = pins.map(p => ({ p, r: K.pinFacts(k, p.hid, p, pins) }));
       const input = "МЕСТА (JSON):\n" + JSON.stringify(rows.map(({ p, r }) => factsJson(k, p.hid, p, r))) +
         `\n\nУЧАСТНИКОВ ВСЕГО: ${K.active(k).length}, ОТМЕТИЛИ МЕСТО: ${pins.length}, ПОДТВЕРДИЛИ: ${pins.filter(p => p.confirmed).length}`;
