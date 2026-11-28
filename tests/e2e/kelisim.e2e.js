@@ -132,7 +132,7 @@ async function flow(b, name) {
   await d1.reload();
   await d1.waitForSelector("#kelAgree");
   assert.match(await d1.innerText(".kroute"), /\d\d\.\d\d – \d\d\.\d\d/);
-  assert.match(await d1.innerText(".khead"), /сезон 20\d\d \(01\.05–/);
+  assert.match(await d1.innerText(".khead"), /сезон 20\d\d \(25\.04–22\.10/);      // Бесколь: сезон из плана района
   assert.match(await d1.innerText("#kelPage"), /Общее стадо, хозяев: 12, отвечает пастух[\s\S]*Трава взята по снимкам 2026 года/);
   assert.match(await d1.innerText(".kfeed"), /Не хватает примерно [\d ,]+ т сена/);
   await check(d1, "двор план");

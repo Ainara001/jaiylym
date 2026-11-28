@@ -30,7 +30,10 @@
 
   // ---------- параметры модели: стандартные → калибровка (если есть) → свои (настройки) ----------
   let paramErr = null;
+  // сезон из плана района (если он есть у села) — по умолчанию; своё значение в настройках важнее
+  let villageSeason = null;
   function resolveParams(user, cal) {
+    user = Object.assign({}, villageSeason, user);
     try { return M.resolve({ user, calibrated: cal }); }
     catch (e) { paramErr = e.message; try { return M.resolve({ calibrated: cal }); } catch (_) { return M.resolve(); } }
   }
@@ -224,6 +227,7 @@
   const viewMap = () => $(".view-map");
   /** Убрать с экрана прежнее село, чтобы пока считается новое, на карте и в панели не было чужих данных. */
   function clearVillage() {
+    if (villageSeason) { villageSeason = null; S.P = resolveParams(S.userP); }
     S.D = null; S.png = null; S.mask = null; S.plots = []; S.herds = []; S.layers = {}; S.vBounds = null; S.cur = null; S.pl = null; S.aiBrief = null; S.chatAuto = null;
     if (S.map) {
       endDraw(); S.map.closePopup(); S.group.clearLayers(); S.pastGroup.clearLayers();
@@ -657,6 +661,8 @@
     status("");
     S.building = null; S.start = null;
     viewMap().classList.remove("no-village");
+    const vs = data.village.official && data.village.official.season;
+    villageSeason = vs && vs.days ? { season_days: vs.days, season_start: vs.from } : null; S.P = resolveParams(S.userP);
     S.D = data; S.png = png; S.mask = mask; S.fromCache = !ex && !!C.ls.get(key, null) && !S.justBuilt; S.justBuilt = false;
     S.t0 = Date.now();
     S.baseWater = Object.fromEntries(data.plots.map(p => [p.id, M.waterUsable(p)]));
@@ -716,7 +722,8 @@
   /** Сезон из плана района отличается от принятого в расчёте — сказать и дать посчитать по нему. */
   function seasonNote(of) {
     const x = of && of.season;
-    if (!x || S.P.season_days === x.days) return "";
+    if (!x) return "";
+    if (S.P.season_days === x.days) return `<p class="fine">${t("zn.seasonPlan", { a: x.from.split("-").reverse().join("."), b: x.to.split("-").reverse().join("."), d: x.days })}</p>`;
     return `<p class="fine">${t("zn.season", { a: x.from.split("-").reverse().join("."), b: x.to.split("-").reverse().join("."), d: x.days, n: S.P.season_days })} <button type="button" class="linkbtn" data-zn="season">${t("zn.seasonGo", { d: x.days })}</button></p>`;
   }
   const zoneHa = () => S.plots.filter(p => !p.forbidden).reduce((s, p) => s + p.pasture_ha, 0);
@@ -739,7 +746,7 @@
   }
   function bindZone(el) {
     $$("[data-zn]", el).forEach(b => b.onclick = () => ({ draw: startZone, closed: closedDlg, ha: haDlg, all: () => { S.forbidden = new Set(); setZone({ mode: "all" }); },
-      season: () => { const x = S.D.village.official.season; S.userP = Object.assign({}, S.userP, { season_days: x.days, season_start: x.from }); S.P = resolveParams(S.userP); saveParams(); rebuildPlots(); render(); toast(t("zn.seasonDone", { d: x.days })); } })[b.dataset.zn]());
+      season: () => { const x = S.D.village.official.season; S.userP = Object.assign({}, S.userP); delete S.userP.season_days; delete S.userP.season_start; S.P = resolveParams(S.userP); saveParams(); rebuildPlots(); render(); toast(t("zn.seasonDone", { d: x.days })); } })[b.dataset.zn]());
   }
   function startZone() {
     if (S.route !== "map") { go("map", villageHash(S.D.village, S.herds.some(h => h.demo)).split("?")[1]); setTimeout(startZone, 400); return; }
