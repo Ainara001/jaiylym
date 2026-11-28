@@ -626,10 +626,19 @@
     }
     if (!data) {
       if (!navigator.onLine) { status(t("err.offline"), { err: true }); if (!S.D) showStart(t("err.offline")); return; }
-      try {
+      {
         S.building = key;
         showBuilding(name, lat, lon);
         if (!opts.keepRoute) history.replaceState(null, "", villageHash({ name, lat, lon }));
+        // сначала — не посчитал ли сервер это село для кого-то раньше: тогда открывается сразу и без спутниковых сервисов
+        const sv = await C.villageCache(lat, lon).catch(() => null);
+        if (S.loadingKey !== key) return;
+        if (sv && sv.status === "ok" && sv.data && Array.isArray(sv.data.plots) && sv.data.land_rule === PL.LAND_RULE && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(sv.png || "")) {
+          data = sv.data; png = sv.png; data.village.name = name || data.village.name; S.justBuilt = true;
+          C.ls.set(key, Object.assign({}, data, { png }));
+        }
+      }
+      if (!data) try {
         const [res, region] = await Promise.all([PL.buildVillage({ name, lat, lon, ngWaitMs: 4000, onProgress: m => {
           const k = /снимк.*Sentinel/.test(m) ? "st.scenes" : /Загружаю/.test(m) ? "st.loading" : "st.computing";
           status(t(k), { busy: true });
